@@ -3,6 +3,7 @@ import { MakerSquirrel } from "@electron-forge/maker-squirrel"
 import { MakerZIP } from "@electron-forge/maker-zip"
 import { MakerDeb } from "@electron-forge/maker-deb"
 import { VitePlugin } from "@electron-forge/plugin-vite"
+import path from "path"
 
 const config: ForgeConfig = {
   packagerConfig: {
@@ -12,6 +13,7 @@ const config: ForgeConfig = {
     icon: "./logos/icon",
     appBundleId: "com.demio.app",
     appCategoryType: "public.app-category.video",
+    extraResource: [path.resolve("node_modules/agent-browser/bin")],
   },
   rebuildConfig: {},
   makers: [

@@ -4,6 +4,7 @@ import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
+import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -53,6 +54,9 @@ app.on("ready", () => {
   // Register the single-channel IPC handler before any windows exist
   registerHandlers()
 
+  // Clean up stale agent-browser sessions from previous crashes
+  ensureDaemon()
+
   createWindow()
 
   // Register event broadcasters after windows exist so they can
@@ -67,6 +71,8 @@ app.on("window-all-closed", () => {
 })
 
 app.on("before-quit", () => {
+  // Close all agent-browser sessions and stop the daemon
+  stopDaemon()
   // Flush any pending debounced writes to disk before exit
   flushSharedStorage()
 })

@@ -2,6 +2,7 @@ import { BrowserWindow } from "electron"
 import { DEMIO_EVENT_CHANNEL } from "../constants"
 import type { NamespaceEvents } from "../constants"
 import { uiEvents } from "./ui"
+import { agentBrowserEvents } from "./agent-browser"
 
 /**
  * All event namespaces.
@@ -13,6 +14,7 @@ import { uiEvents } from "./ui"
  */
 export const allEvents = {
   ui: uiEvents,
+  agentBrowser: agentBrowserEvents,
 } satisfies Record<string, NamespaceEvents>
 
 /** Type-level export for the renderer type wrapper. */

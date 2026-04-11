@@ -4,6 +4,7 @@ import type { NamespaceHandlers } from "../constants"
 import { uiHandlers } from "./ui"
 import { clipboardHandlers } from "./clipboard"
 import { sharedStorageHandlers } from "../shared-storage"
+import { agentBrowserHandlers } from "./agent-browser"
 
 /**
  * All handler namespaces.
@@ -17,6 +18,7 @@ export const allHandlers = {
   ui: uiHandlers,
   clipboard: clipboardHandlers,
   sharedStorage: sharedStorageHandlers,
+  agentBrowser: agentBrowserHandlers,
 } satisfies Record<string, NamespaceHandlers>
 
 /** Type-level export for the renderer type wrapper. */

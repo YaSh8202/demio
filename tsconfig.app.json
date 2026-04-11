@@ -34,6 +34,7 @@
     "electron/handlers",
     "electron/events",
     "electron/constants.ts",
-    "electron/shared-storage.ts"
+    "electron/shared-storage.ts",
+    "electron/lib"
   ]
 }
