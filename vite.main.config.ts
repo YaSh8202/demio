@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vite"
 
 // https://www.electronforge.io/config/plugins/vite#native-node-modules
 export default defineConfig({
@@ -7,4 +7,4 @@ export default defineConfig({
       external: ["electron"],
     },
   },
-});
+})

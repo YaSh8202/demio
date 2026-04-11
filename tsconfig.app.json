@@ -27,5 +27,13 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "forge.env.d.ts"]
+  "include": [
+    "src",
+    "forge.env.d.ts",
+    "electron/exposed.ts",
+    "electron/handlers",
+    "electron/events",
+    "electron/constants.ts",
+    "electron/shared-storage.ts"
+  ]
 }
