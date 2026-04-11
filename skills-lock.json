@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "skills": {
+    "SVG Logo Designer": {
+      "source": "rknall/claude-skills",
+      "sourceType": "github",
+      "computedHash": "c591208a052cc9f7deb77be1183e4627daf54dbf575ea2653f519f29fe3bd4c8"
+    },
+    "electron-forge": {
+      "source": "hairyf/skills",
+      "sourceType": "github",
+      "computedHash": "3374a4d6bb73403841b437cc546efa1baa952034c0a8f2666fa260d52e97e166"
+    }
+  }
+}

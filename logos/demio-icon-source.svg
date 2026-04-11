@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4338CA" />
+      <stop offset="1" stop-color="#7C3AED" />
+    </linearGradient>
+    <linearGradient id="glass" x1="0" y1="0" x2="200" y2="200" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.25" />
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0.05" />
+    </linearGradient>
+    <linearGradient id="play" x1="76" y1="51" x2="152" y2="149" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF" />
+      <stop offset="1" stop-color="#C7D2FE" />
+    </linearGradient>
+    <linearGradient id="spark" x1="156" y1="48" x2="188" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F59E0B" />
+      <stop offset="1" stop-color="#FBBF24" />
+    </linearGradient>
+    <clipPath id="clip">
+      <rect x="4" y="4" width="192" height="192" rx="42" ry="42" />
+    </clipPath>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="4" y="4" width="192" height="192" rx="42" ry="42" fill="url(#bg)" />
+
+  <!-- Clipped content -->
+  <g clip-path="url(#clip)">
+    <!-- Glassmorphism highlight -->
+    <ellipse cx="64" cy="38" rx="90" ry="55" fill="url(#glass)" />
+
+    <!-- Dot grid -->
+    <g opacity="0.07" fill="#FFFFFF">
+      <circle cx="24" cy="24" r="1.5" /><circle cx="44" cy="24" r="1.5" /><circle cx="64" cy="24" r="1.5" /><circle cx="84" cy="24" r="1.5" /><circle cx="104" cy="24" r="1.5" /><circle cx="124" cy="24" r="1.5" /><circle cx="144" cy="24" r="1.5" /><circle cx="164" cy="24" r="1.5" /><circle cx="184" cy="24" r="1.5" />
+      <circle cx="24" cy="44" r="1.5" /><circle cx="44" cy="44" r="1.5" /><circle cx="64" cy="44" r="1.5" /><circle cx="84" cy="44" r="1.5" /><circle cx="104" cy="44" r="1.5" /><circle cx="124" cy="44" r="1.5" /><circle cx="144" cy="44" r="1.5" /><circle cx="164" cy="44" r="1.5" /><circle cx="184" cy="44" r="1.5" />
+      <circle cx="24" cy="64" r="1.5" /><circle cx="44" cy="64" r="1.5" /><circle cx="64" cy="64" r="1.5" /><circle cx="84" cy="64" r="1.5" /><circle cx="104" cy="64" r="1.5" /><circle cx="124" cy="64" r="1.5" /><circle cx="144" cy="64" r="1.5" /><circle cx="164" cy="64" r="1.5" /><circle cx="184" cy="64" r="1.5" />
+      <circle cx="24" cy="84" r="1.5" /><circle cx="44" cy="84" r="1.5" /><circle cx="64" cy="84" r="1.5" /><circle cx="84" cy="84" r="1.5" /><circle cx="104" cy="84" r="1.5" /><circle cx="124" cy="84" r="1.5" /><circle cx="144" cy="84" r="1.5" /><circle cx="164" cy="84" r="1.5" /><circle cx="184" cy="84" r="1.5" />
+      <circle cx="24" cy="104" r="1.5" /><circle cx="44" cy="104" r="1.5" /><circle cx="64" cy="104" r="1.5" /><circle cx="84" cy="104" r="1.5" /><circle cx="104" cy="104" r="1.5" /><circle cx="124" cy="104" r="1.5" /><circle cx="144" cy="104" r="1.5" /><circle cx="164" cy="104" r="1.5" /><circle cx="184" cy="104" r="1.5" />
+      <circle cx="24" cy="124" r="1.5" /><circle cx="44" cy="124" r="1.5" /><circle cx="64" cy="124" r="1.5" /><circle cx="84" cy="124" r="1.5" /><circle cx="104" cy="124" r="1.5" /><circle cx="124" cy="124" r="1.5" /><circle cx="144" cy="124" r="1.5" /><circle cx="164" cy="124" r="1.5" /><circle cx="184" cy="124" r="1.5" />
+      <circle cx="24" cy="144" r="1.5" /><circle cx="44" cy="144" r="1.5" /><circle cx="64" cy="144" r="1.5" /><circle cx="84" cy="144" r="1.5" /><circle cx="104" cy="144" r="1.5" /><circle cx="124" cy="144" r="1.5" /><circle cx="144" cy="144" r="1.5" /><circle cx="164" cy="144" r="1.5" /><circle cx="184" cy="144" r="1.5" />
+      <circle cx="24" cy="164" r="1.5" /><circle cx="44" cy="164" r="1.5" /><circle cx="64" cy="164" r="1.5" /><circle cx="84" cy="164" r="1.5" /><circle cx="104" cy="164" r="1.5" /><circle cx="124" cy="164" r="1.5" /><circle cx="144" cy="164" r="1.5" /><circle cx="164" cy="164" r="1.5" /><circle cx="184" cy="164" r="1.5" />
+      <circle cx="24" cy="184" r="1.5" /><circle cx="44" cy="184" r="1.5" /><circle cx="64" cy="184" r="1.5" /><circle cx="84" cy="184" r="1.5" /><circle cx="104" cy="184" r="1.5" /><circle cx="124" cy="184" r="1.5" /><circle cx="144" cy="184" r="1.5" /><circle cx="164" cy="184" r="1.5" /><circle cx="184" cy="184" r="1.5" />
+    </g>
+
+    <!-- Play button (no filter — just the shape with gradient) -->
+    <!-- Soft glow behind play — baked as a blurred ellipse -->
+    <ellipse cx="112" cy="100" rx="48" ry="52" fill="#A78BFA" opacity="0.15" />
+    <path d="M76,58 C76,53 79,51 83,53.5 L148,91 C152,93.5 152,106.5 148,109 L83,146.5 C79,149 76,147 76,142 Z" fill="url(#play)" />
+  </g>
+
+  <!-- Subtle border -->
+  <rect x="4" y="4" width="192" height="192" rx="42" ry="42" fill="none" stroke="#FFFFFF" stroke-width="1" opacity="0.15" />
+
+  <!-- AI Spark — main 4-point star -->
+  <path d="M172,16 L176.5,27.5 L188,32 L176.5,36.5 L172,48 L167.5,36.5 L156,32 L167.5,27.5 Z" fill="url(#spark)" />
+  <!-- Secondary sparkle dots -->
+  <circle cx="187" cy="16" r="3.5" fill="#FDE68A" opacity="0.75" />
+  <circle cx="189" cy="42" r="2" fill="#FBBF24" opacity="0.5" />
+  <circle cx="180" cy="12" r="1.5" fill="#FEF3C7" opacity="0.6" />
+</svg>

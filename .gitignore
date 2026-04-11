@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+
+# Electron Forge
+.vite
+out
+.agents
+.claude
