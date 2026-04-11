@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
+import { Link } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { ChromeInstall } from "@/components/onboarding/ChromeInstall"
 import {
@@ -265,6 +266,16 @@ export function App() {
 
             <div className="font-mono text-xs text-muted-foreground">
               (Press <kbd>d</kbd> to toggle dark mode)
+            </div>
+
+            {/* Navigation */}
+            <div className="space-y-2">
+              <h2 className="font-medium">Pages</h2>
+              <Link to="/stream">
+                <Button size="sm" variant="outline">
+                  Live Browser Stream &rarr;
+                </Button>
+              </Link>
             </div>
           </div>
         </div>

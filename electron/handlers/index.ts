@@ -5,6 +5,7 @@ import { uiHandlers } from "./ui"
 import { clipboardHandlers } from "./clipboard"
 import { sharedStorageHandlers } from "../shared-storage"
 import { agentBrowserHandlers } from "./agent-browser"
+import { streamHandlers } from "./stream"
 
 /**
  * All handler namespaces.
@@ -19,6 +20,7 @@ export const allHandlers = {
   clipboard: clipboardHandlers,
   sharedStorage: sharedStorageHandlers,
   agentBrowser: agentBrowserHandlers,
+  stream: streamHandlers,
 } satisfies Record<string, NamespaceHandlers>
 
 /** Type-level export for the renderer type wrapper. */

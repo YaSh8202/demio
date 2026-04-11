@@ -5,6 +5,7 @@ import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
+import { enableStream, disableStream } from "./lib/agent-browser/stream"
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -57,6 +58,15 @@ app.on("ready", () => {
   // Clean up stale agent-browser sessions from previous crashes
   ensureDaemon()
 
+  // Enable the WebSocket stream server for live browser preview
+  enableStream().then((info) => {
+    if (info) {
+      console.log(`[main] Stream ready at ${info.wsUrl}`)
+    } else {
+      console.warn("[main] Failed to enable stream on startup")
+    }
+  })
+
   createWindow()
 
   // Register event broadcasters after windows exist so they can
@@ -71,6 +81,8 @@ app.on("window-all-closed", () => {
 })
 
 app.on("before-quit", () => {
+  // Disable the stream server before closing sessions
+  disableStream()
   // Close all agent-browser sessions and stop the daemon
   stopDaemon()
   // Flush any pending debounced writes to disk before exit
