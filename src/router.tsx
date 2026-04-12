@@ -2,6 +2,7 @@ import { createHashRouter } from "react-router-dom"
 import { RootLayout } from "@/layouts/root-layout"
 import { DashboardPage } from "@/pages"
 import { StreamPage } from "@/pages/stream"
+import { ThreadPage } from "@/pages/projects/thread"
 
 /**
  * Application router — all route definitions live here.
@@ -19,6 +20,10 @@ export const router = createHashRouter([
     children: [
       { index: true, Component: DashboardPage },
       { path: "stream", Component: StreamPage },
+      {
+        path: "projects/:projectId/threads/:threadId",
+        Component: ThreadPage,
+      },
     ],
   },
 ])

@@ -1,4 +1,5 @@
-import { useState } from "react"
+import { useState, useEffect, useCallback } from "react"
+import { useNavigate } from "react-router-dom"
 import { Button } from "@/components/ui/button"
 import { ProjectSidebar } from "@/components/dashboard/project-sidebar"
 import { Suggestions, Suggestion } from "@/components/ai-elements/suggestion"
@@ -28,35 +29,78 @@ import {
   ModelSelectorLogo,
   ModelSelectorName,
 } from "@/components/ai-elements/model-selector"
-import type { Project } from "@/lib/mock-data/projects"
-import { INITIAL_PROJECTS } from "@/lib/mock-data/projects"
+import type { StoredProject } from "../../electron/store/types"
+import { apis, events } from "@/types/electron-api"
 import { MODELS, getModelName } from "@/lib/constants/models"
 import { SUGGESTIONS } from "@/lib/constants/suggestions"
 
 // ── DashboardPage ────────────────────────────────────────────────────────────
 
 export function DashboardPage() {
-  const [projects, setProjects] = useState<Project[]>(INITIAL_PROJECTS)
+  const navigate = useNavigate()
+  const [projects, setProjects] = useState<StoredProject[]>([])
   const [search, setSearch] = useState("")
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [newProjectName, setNewProjectName] = useState("")
   const [selectedModel, setSelectedModel] = useState(MODELS[0].models[0].id)
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false)
 
-  const handleSubmit = (message: PromptInputMessage) => {
-    const name = message.text.trim()
-    if (!name) return
+  // Load projects from store on mount
+  useEffect(() => {
+    apis?.store.listProjects().then(setProjects)
+  }, [])
 
-    const project: Project = {
-      id: crypto.randomUUID(),
-      name,
-      createdAt: new Date(),
-    }
+  // Subscribe to project changes (multi-window sync)
+  useEffect(() => {
+    const unsub = events?.store.onProjectsChanged(
+      (updatedProjects: StoredProject[]) => {
+        setProjects(updatedProjects)
+      }
+    )
+    return () => unsub?.()
+  }, [])
 
-    setProjects((prev) => [project, ...prev])
-    setSelectedId(project.id)
-    setNewProjectName("")
-  }
+  const handleSubmit = useCallback(
+    async (message: PromptInputMessage) => {
+      const name = message.text.trim()
+      if (!name || !apis) return
+
+      const { project, thread } = await apis.store.createProject(
+        name,
+        selectedModel
+      )
+
+      setNewProjectName("")
+      navigate(`/projects/${project.id}/threads/${thread.id}`)
+    },
+    [selectedModel, navigate]
+  )
+
+  const handleSelect = useCallback(
+    async (projectId: string) => {
+      setSelectedId(projectId)
+
+      if (!apis) return
+
+      // Get the project to find its last active thread
+      const result = await apis.store.getProject(projectId)
+      if (!result) return
+
+      const { project } = result
+
+      if (project.lastThreadId) {
+        navigate(`/projects/${projectId}/threads/${project.lastThreadId}`)
+      } else {
+        // No thread yet — create one and navigate
+        const thread = await apis.store.createThread(projectId)
+        await apis.store.updateProject(projectId, {
+          lastThreadId: thread.id,
+        })
+        navigate(`/projects/${projectId}/threads/${thread.id}`)
+      }
+    },
+    [navigate]
+  )
 
   const handleSuggestionClick = (suggestion: string) => {
     setNewProjectName(suggestion)
@@ -82,7 +126,7 @@ export function DashboardPage() {
           search={search}
           onSearchChange={setSearch}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={handleSelect}
         />
 
         {/* Right main area */}

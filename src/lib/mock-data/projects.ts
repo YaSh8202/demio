@@ -1,23 +1,14 @@
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Project Helpers ──────────────────────────────────────────────────────────
+//
+// Date formatting and grouping utilities for projects.
+// Works with StoredProject (ISO 8601 string dates from the store).
 
-export interface Project {
-  id: string
-  name: string
-  createdAt: Date
-}
+import type { StoredProject } from "../../../electron/store/types"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const now = new Date()
-
-export function daysAgo(n: number): Date {
-  const d = new Date(now)
-  d.setDate(d.getDate() - n)
-  return d
-}
-
-export function formatDate(date: Date): string {
-  return date.toLocaleDateString("en-US", {
+export function formatDate(isoDate: string): string {
+  return new Date(isoDate).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -25,19 +16,22 @@ export function formatDate(date: Date): string {
 }
 
 export function groupProjects(
-  projects: Project[]
-): { label: string; items: Project[] }[] {
-  const groups: { label: string; items: Project[] }[] = []
-  const thirtyDaysAgo = daysAgo(30)
+  projects: StoredProject[]
+): { label: string; items: StoredProject[] }[] {
+  const now = new Date()
+  const groups: { label: string; items: StoredProject[] }[] = []
+  const thirtyDaysAgo = new Date(now)
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30)
   const startOfYear = new Date(now.getFullYear(), 0, 1)
 
-  const recent: Project[] = []
-  const thisYear: Project[] = []
-  const older: Project[] = []
+  const recent: StoredProject[] = []
+  const thisYear: StoredProject[] = []
+  const older: StoredProject[] = []
 
   for (const p of projects) {
-    if (p.createdAt >= thirtyDaysAgo) recent.push(p)
-    else if (p.createdAt >= startOfYear) thisYear.push(p)
+    const d = new Date(p.createdAt)
+    if (d >= thirtyDaysAgo) recent.push(p)
+    else if (d >= startOfYear) thisYear.push(p)
     else older.push(p)
   }
 
@@ -47,16 +41,3 @@ export function groupProjects(
 
   return groups
 }
-
-// ── Mock Data ────────────────────────────────────────────────────────────────
-
-export const INITIAL_PROJECTS: Project[] = [
-  { id: "1", name: "Marketing Site Redesign", createdAt: daysAgo(2) },
-  { id: "2", name: "Mobile App Prototype", createdAt: daysAgo(5) },
-  { id: "3", name: "Dashboard Analytics", createdAt: daysAgo(12) },
-  { id: "4", name: "E-commerce Store", createdAt: daysAgo(45) },
-  { id: "5", name: "Portfolio Website", createdAt: daysAgo(60) },
-  { id: "6", name: "Social Media App", createdAt: daysAgo(90) },
-  { id: "7", name: "Recipe Finder", createdAt: daysAgo(120) },
-  { id: "8", name: "Fitness Tracker", createdAt: daysAgo(150) },
-]

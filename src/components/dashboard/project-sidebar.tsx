@@ -3,7 +3,7 @@ import { Search, FileText } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { cn } from "@/lib/utils"
-import type { Project } from "@/lib/mock-data/projects"
+import type { StoredProject } from "../../../electron/store/types"
 import { formatDate, groupProjects } from "@/lib/mock-data/projects"
 
 // ── ProjectItem ──────────────────────────────────────────────────────────────
@@ -13,7 +13,7 @@ function ProjectItem({
   isSelected,
   onClick,
 }: {
-  project: Project
+  project: StoredProject
   isSelected: boolean
   onClick: () => void
 }) {
@@ -22,7 +22,7 @@ function ProjectItem({
       type="button"
       onClick={onClick}
       className={cn(
-        "flex w-full items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
+        "flex w-full min-w-0 items-center gap-3 rounded-lg px-2 py-2 text-left transition-colors",
         isSelected ? "bg-white/10" : "hover:bg-white/5"
       )}
     >
@@ -48,7 +48,7 @@ export function ProjectSidebar({
   selectedId,
   onSelect,
 }: {
-  projects: Project[]
+  projects: StoredProject[]
   search: string
   onSearchChange: (value: string) => void
   selectedId: string | null

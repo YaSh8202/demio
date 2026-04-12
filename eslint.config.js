@@ -6,7 +6,7 @@ import tseslint from "typescript-eslint"
 import { defineConfig, globalIgnores } from "eslint/config"
 
 export default defineConfig([
-  globalIgnores(["dist", ".vite"]),
+  globalIgnores(["dist", ".vite", "src/components/ai-elements/**/*", ".agents/**/*", ".claude/**/*"]),
   {
     files: ["**/*.{ts,tsx}"],
     extends: [
@@ -25,6 +25,7 @@ export default defineConfig([
         "error",
         { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
       ],
+      "react-refresh/only-export-components": "off",
     },
   },
 ])

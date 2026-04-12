@@ -4,6 +4,7 @@ import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
+import { initStore } from "./store"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 import { enableStream, disableStream } from "./lib/agent-browser/stream"
 
@@ -51,6 +52,9 @@ function createWindow() {
 app.on("ready", () => {
   // Load persisted shared storage from disk before anything else
   initSharedStorage()
+
+  // Initialize the file-based project store (~/.demio/)
+  initStore()
 
   // Register the single-channel IPC handler before any windows exist
   registerHandlers()

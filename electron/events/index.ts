@@ -3,6 +3,7 @@ import { DEMIO_EVENT_CHANNEL } from "../constants"
 import type { NamespaceEvents } from "../constants"
 import { uiEvents } from "./ui"
 import { agentBrowserEvents } from "./agent-browser"
+import { storeEvents } from "./store"
 
 /**
  * All event namespaces.
@@ -15,6 +16,7 @@ import { agentBrowserEvents } from "./agent-browser"
 export const allEvents = {
   ui: uiEvents,
   agentBrowser: agentBrowserEvents,
+  store: storeEvents,
 } satisfies Record<string, NamespaceEvents>
 
 /** Type-level export for the renderer type wrapper. */
