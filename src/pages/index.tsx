@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useNavigate } from "react-router-dom"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ProjectSidebar } from "@/components/dashboard/project-sidebar"
 import { Suggestions, Suggestion } from "@/components/ai-elements/suggestion"
@@ -30,7 +31,7 @@ import {
   ModelSelectorName,
 } from "@/components/ai-elements/model-selector"
 import type { StoredProject } from "../../electron/store/types"
-import { apis, events } from "@/types/electron-api"
+import { apis, events, appInfo } from "@/types/electron-api"
 import { MODELS, getModelName } from "@/lib/constants/models"
 import { SUGGESTIONS } from "@/lib/constants/suggestions"
 
@@ -111,15 +112,22 @@ export function DashboardPage() {
     setModelSelectorOpen(false)
   }
 
+  const isMac = appInfo?.platform === "darwin"
+
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-neutral-950">
-      {/* App header */}
-      <header className="flex shrink-0 items-center px-5 pt-4 pb-3">
+      {/* App header — draggable for frameless window */}
+      <header
+        className={cn(
+          "drag-region flex shrink-0 items-center px-5 pt-4 pb-3",
+          isMac && "traffic-light-pad"
+        )}
+      >
         <h2 className="text-lg font-bold tracking-tight text-white">Demio</h2>
       </header>
 
       {/* Content area */}
-      <div className="flex min-h-0 flex-1 gap-0 px-4 pb-4">
+      <div className="no-drag flex min-h-0 flex-1 gap-0 px-4 pb-4">
         {/* Left sidebar card */}
         <ProjectSidebar
           projects={projects}

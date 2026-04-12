@@ -15,6 +15,32 @@ export function formatDate(isoDate: string): string {
   })
 }
 
+/**
+ * Format an ISO date string into a compact relative time string.
+ * Examples: "2m", "3h", "4d", "2w", "1mo", "1y"
+ */
+export function formatRelativeTime(isoDate: string): string {
+  const now = Date.now()
+  const then = new Date(isoDate).getTime()
+  const diffMs = now - then
+
+  const seconds = Math.floor(diffMs / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  const weeks = Math.floor(days / 7)
+  const months = Math.floor(days / 30)
+  const years = Math.floor(days / 365)
+
+  if (years > 0) return `${years}y`
+  if (months > 0) return `${months}mo`
+  if (weeks > 0) return `${weeks}w`
+  if (days > 0) return `${days}d`
+  if (hours > 0) return `${hours}h`
+  if (minutes > 0) return `${minutes}m`
+  return "now"
+}
+
 export function groupProjects(
   projects: StoredProject[]
 ): { label: string; items: StoredProject[] }[] {

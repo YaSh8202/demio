@@ -28,6 +28,8 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
+    titleBarStyle: "hidden",
+    trafficLightPosition: { x: 12, y: 14 },
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

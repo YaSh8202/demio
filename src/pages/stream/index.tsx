@@ -7,14 +7,16 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { Link } from "react-router-dom"
+import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { LiveBrowserView } from "@/components/preview/LiveBrowserView"
-import { apis, isElectron } from "@/types/electron-api"
+import { apis, isElectron, appInfo } from "@/types/electron-api"
 
 export function StreamPage() {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
   const [browserResult, setBrowserResult] = useState("")
   const [browserLoading, setBrowserLoading] = useState(false)
+  const isMac = appInfo?.platform === "darwin"
 
   // Fetch stream URL on mount
   useEffect(() => {
@@ -72,11 +74,16 @@ export function StreamPage() {
 
   return (
     <div className="flex h-svh flex-col">
-      {/* Header */}
-      <div className="flex h-12 shrink-0 items-center gap-4 border-b px-4">
+      {/* Header — draggable for frameless window */}
+      <div
+        className={cn(
+          "drag-region flex h-12 shrink-0 items-center gap-4 border-b px-4",
+          isMac && "traffic-light-pad"
+        )}
+      >
         <Link
           to="/"
-          className="text-sm text-muted-foreground transition-colors hover:text-foreground"
+          className="no-drag text-sm text-muted-foreground transition-colors hover:text-foreground"
         >
           &larr; Back
         </Link>
@@ -84,7 +91,7 @@ export function StreamPage() {
       </div>
 
       {/* Main content */}
-      <div className="flex min-h-0 flex-1">
+      <div className="no-drag flex min-h-0 flex-1">
         {/* Left panel — controls */}
         <div className="flex w-72 shrink-0 flex-col gap-4 overflow-y-auto border-r p-4">
           <div className="space-y-2">

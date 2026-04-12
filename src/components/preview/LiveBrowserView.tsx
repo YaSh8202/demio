@@ -52,6 +52,8 @@ function StreamCanvas({ wsUrl }: { wsUrl: string }) {
 
   // Pending frame — written by onFrame callback, consumed by rAF loop
   const pendingFrameRef = useRef<HTMLImageElement | null>(null)
+  // Last drawn frame — kept so we can redraw after canvas resize clears content
+  const lastFrameRef = useRef<HTMLImageElement | null>(null)
 
   // ---------------------------------------------------------------------------
   // Canvas sizing — maintain viewport aspect ratio within container
@@ -90,6 +92,11 @@ function StreamCanvas({ wsUrl }: { wsUrl: string }) {
     const ctx = canvas.getContext("2d")
     if (ctx) {
       ctx.scale(dpr, dpr)
+      // Redraw last frame after resize (setting canvas.width clears it)
+      const lastFrame = lastFrameRef.current
+      if (lastFrame) {
+        ctx.drawImage(lastFrame, 0, 0, drawW, drawH)
+      }
     }
   }, [viewportWidth, viewportHeight])
 
@@ -123,6 +130,7 @@ function StreamCanvas({ wsUrl }: { wsUrl: string }) {
       const img = pendingFrameRef.current
       if (img) {
         pendingFrameRef.current = null
+        lastFrameRef.current = img
 
         const ctx = canvas.getContext("2d")
         if (ctx) {

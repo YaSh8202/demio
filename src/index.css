@@ -136,3 +136,17 @@
     @apply font-sans;
   }
 }
+
+/* Frameless window — drag region & traffic light spacing */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* macOS traffic light inset — clears the close/minimize/maximize dots */
+.traffic-light-pad {
+  padding-left: 80px;
+}
