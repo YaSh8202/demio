@@ -102,6 +102,60 @@ sharedStorage.set("key", value)
 const unsub = sharedStorage.watch("key", (val) => { ... })
 ```
 
+## Renderer Routing & Folder Structure
+
+`src/main.tsx` is purely bootstrap — it renders `<RouterProvider>` and nothing else.
+All route definitions live in `src/router.tsx` using `createHashRouter` (required for Electron `file://`).
+Shared providers (theme, tooltip) are in `src/layouts/root-layout.tsx` which wraps all routes via `<Outlet />`.
+
+### Folder conventions
+
+```
+src/
+├── main.tsx                    # Bootstrap only — createRoot + RouterProvider
+├── router.tsx                  # All route definitions (createHashRouter)
+├── index.css
+├── layouts/                    # Layout shells that wrap routes via <Outlet />
+│   └── root-layout.tsx
+├── pages/                      # One folder per route, mirrors URL tree
+│   ├── index.tsx               # "/"      — DashboardPage
+│   └── stream/
+│       └── index.tsx           # "/stream" — StreamPage
+├── components/
+│   ├── dashboard/              # Feature-scoped components (used by pages/index.tsx)
+│   ├── ai-elements/            # AI/chat compound components
+│   ├── preview/                # Browser preview components
+│   ├── onboarding/             # First-launch wizards
+│   └── ui/                     # shadcn/ui primitives
+├── lib/
+│   ├── utils.ts                # cn() helper
+│   ├── constants/              # App-wide constants (models, suggestions, etc.)
+│   ├── mock-data/              # Temporary mock data (replace with real data later)
+│   └── agent-browser/          # Browser streaming utilities
+├── types/
+│   └── electron-api.ts         # Typed Electron IPC bridge
+└── assets/
+```
+
+### Adding a new route / page
+
+1. Create a page component at `src/pages/<path>/index.tsx` (e.g. `src/pages/settings/index.tsx`)
+2. Add a route entry in `src/router.tsx`:
+   ```ts
+   import { SettingsPage } from "@/pages/settings"
+   // inside children array:
+   { path: "settings", Component: SettingsPage },
+   ```
+3. Done. Feature-specific sub-components go in `src/components/<feature>/`.
+
+### Component placement rules
+
+- **`components/ui/`** — shadcn primitives only. Add via `npx shadcn@latest add <name>`.
+- **`components/<feature>/`** — feature-scoped components (e.g. `components/dashboard/project-sidebar.tsx`). Co-locate with the page that uses them.
+- **`components/ai-elements/`** — shared AI/chat components used across multiple pages.
+- **`lib/constants/`** — app-wide constants. One file per domain (models, suggestions, etc.).
+- **`lib/mock-data/`** — temporary mock data with types. Replace with real APIs later.
+
 ## Key Files
 
 - `electron/constants.ts` — channel names, `ExposedMeta`, `NamespaceHandlers`, `NamespaceEvents` types
@@ -110,6 +164,8 @@ const unsub = sharedStorage.watch("key", (val) => { ... })
 - `electron/events/index.ts` — `allEvents` aggregate + `registerEvents()` (broadcast to all windows)
 - `electron/preload.ts` — parses metadata from `process.argv`, auto-generates wrappers, exposes via `contextBridge`
 - `src/types/electron-api.ts` — typed exports (`apis`, `events`, `sharedStorage`, `appInfo`) + `Window` augmentation
+- `src/router.tsx` — all client-side route definitions
+- `src/layouts/root-layout.tsx` — root layout with shared providers
 
 ## Gotchas
 
