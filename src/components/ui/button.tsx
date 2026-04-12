@@ -64,4 +64,4 @@ function Button({
   )
 }
 
-export { Button, buttonVariants } // eslint-disable-line react-refresh/only-export-components -- shadcn convention: buttonVariants is co-exported with Button
+export { Button, buttonVariants }
