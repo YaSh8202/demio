@@ -5,6 +5,7 @@ import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
 import { initStore } from "./store"
+import { initProviderKeys } from "./store/provider-keys"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 import { enableStream, disableStream } from "./lib/agent-browser/stream"
 
@@ -57,6 +58,9 @@ app.on("ready", () => {
 
   // Initialize the file-based project store (~/.demio/)
   initStore()
+
+  // Initialize encrypted provider key storage
+  initProviderKeys()
 
   // Register the single-channel IPC handler before any windows exist
   registerHandlers()
