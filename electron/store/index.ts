@@ -4,6 +4,7 @@
 // Coordinates projects, threads, and messages modules.
 // This is the single import point for the IPC handler layer.
 
+import log from "../lib/logger"
 import {
   ensureStoreRoot,
   initProjects,
@@ -46,7 +47,7 @@ import type {
 export function initStore(): void {
   ensureStoreRoot()
   initProjects()
-  console.log("[store] Initialized")
+  log.log("[store] Initialized")
 }
 
 // ── Re-exports (simple pass-through) ─────────────────────────────────────────

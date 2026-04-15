@@ -4,6 +4,7 @@
 // response.body bytes over IPC to the renderer.
 
 import { streamText, convertToModelMessages, stepCountIs } from "ai"
+import log from "../lib/logger"
 import type { UIMessage as AISdkUIMessage } from "ai"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
@@ -39,7 +40,7 @@ export async function runAgent({
     stopWhen: stepCountIs(10),
     abortSignal: signal,
     onError: ({ error }) => {
-      console.error("[agent] streamText error:", error)
+      log.error("[agent] streamText error:", error)
     },
   })
 

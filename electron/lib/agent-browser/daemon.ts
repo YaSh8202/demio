@@ -6,6 +6,7 @@
  * and teardown on app quit.
  */
 
+import log from "../logger"
 import { execAgentBrowser } from "./exec"
 
 /** Track whether we've already cleaned up stale sessions on this launch. */
@@ -28,16 +29,16 @@ export async function ensureDaemon(): Promise<void> {
     // Kill any stale sessions from a previous crash
     const result = await execAgentBrowser(["close --all"], { timeout: 10_000 })
     if (result.ok) {
-      console.log("[agent-browser] Cleaned up stale sessions")
+      log.log("[agent-browser] Cleaned up stale sessions")
     } else {
       // This is expected on first launch (no daemon running)
-      console.log(
+      log.log(
         "[agent-browser] No stale sessions to clean (or daemon not running)"
       )
     }
   } catch (err) {
     // Binary might not be installed yet — that's fine at startup
-    console.warn("[agent-browser] ensureDaemon failed:", err)
+    log.warn("[agent-browser] ensureDaemon failed:", err)
   }
 }
 
@@ -50,9 +51,9 @@ export async function ensureDaemon(): Promise<void> {
 export async function stopDaemon(): Promise<void> {
   try {
     await execAgentBrowser(["close --all"], { timeout: 10_000 })
-    console.log("[agent-browser] Daemon stopped, all sessions closed")
+    log.log("[agent-browser] Daemon stopped, all sessions closed")
   } catch (err) {
-    console.warn("[agent-browser] stopDaemon failed:", err)
+    log.warn("[agent-browser] stopDaemon failed:", err)
   }
 }
 

@@ -1,4 +1,5 @@
 import { ipcMain } from "electron"
+import log from "../lib/logger"
 import { DEMIO_API_CHANNEL } from "../constants"
 import type { NamespaceHandlers } from "../constants"
 import { uiHandlers } from "./ui"
@@ -45,7 +46,7 @@ export function registerHandlers() {
     const [namespace, method] = channel.split(":")
 
     if (!namespace || !method) {
-      console.error(`[IPC] Invalid channel: ${channel}`)
+      log.error(`[IPC] Invalid channel: ${channel}`)
       return null
     }
 
@@ -54,7 +55,7 @@ export function registerHandlers() {
       namespace
     ]?.[method]
     if (!handler) {
-      console.error(`[IPC] Handler not found: ${channel}`)
+      log.error(`[IPC] Handler not found: ${channel}`)
       return null
     }
 
@@ -63,12 +64,10 @@ export function registerHandlers() {
 
     try {
       const result = await handler(event, ...handlerArgs)
-      if (process.env.NODE_ENV === "development") {
-        console.log(`[IPC] ${channel} — ${Date.now() - start}ms`)
-      }
+      log.debug(`[IPC] ${channel} — ${Date.now() - start}ms`)
       return result
     } catch (error) {
-      console.error(`[IPC] Error in ${channel}:`, error)
+      log.error(`[IPC] Error in ${channel}:`, error)
       throw error
     }
   })
@@ -97,7 +96,7 @@ export function registerHandlers() {
       // Sync handlers must return synchronously
       event.returnValue = handler(event, ...handlerArgs)
     } catch (error) {
-      console.error(`[IPC:sync] Error in ${channel}:`, error)
+      log.error(`[IPC:sync] Error in ${channel}:`, error)
       event.returnValue = null
     }
   })

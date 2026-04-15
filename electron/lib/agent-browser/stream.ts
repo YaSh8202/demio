@@ -8,6 +8,7 @@
  * Renderer processes connect to the WebSocket URL to receive frames.
  */
 
+import log from "../logger"
 import { execAgentBrowser } from "./exec"
 
 // ---------------------------------------------------------------------------
@@ -95,7 +96,7 @@ export async function enableStream(
 
     const parsed = parseJsonOutput(result.output) as StreamEnableResult | null
     if (!parsed) {
-      console.warn("[stream] Failed to parse enable output:", result.output)
+      log.warn("[stream] Failed to parse enable output:", result.output)
       continue
     }
 
@@ -105,7 +106,7 @@ export async function enableStream(
         wsUrl: buildWsUrl(parsed.data.port),
       }
       currentStreamInfo = info
-      console.log(`[stream] Enabled on ${info.wsUrl}`)
+      log.log(`[stream] Enabled on ${info.wsUrl}`)
       return info
     }
 
@@ -114,21 +115,21 @@ export async function enableStream(
       parsed.error &&
       parsed.error.toLowerCase().includes("already enabled")
     ) {
-      console.log("[stream] Already enabled, fetching current status")
+      log.log("[stream] Already enabled, fetching current status")
       return getStreamStatus()
     }
 
     // Port conflict — try next port
     if (parsed.error && parsed.error.toLowerCase().includes("port")) {
-      console.log(`[stream] Port ${port} conflict, trying next`)
+      log.log(`[stream] Port ${port} conflict, trying next`)
       continue
     }
 
     // Other error — log and try next
-    console.warn(`[stream] Enable failed on port ${port}:`, parsed.error)
+    log.warn(`[stream] Enable failed on port ${port}:`, parsed.error)
   }
 
-  console.error(`[stream] Failed to enable after ${maxRetries} port attempts`)
+  log.error(`[stream] Failed to enable after ${maxRetries} port attempts`)
   return null
 }
 
@@ -143,12 +144,12 @@ export async function disableStream(): Promise<void> {
 
     const parsed = parseJsonOutput(result.output) as StreamDisableResult | null
     if (parsed?.success) {
-      console.log("[stream] Disabled")
+      log.log("[stream] Disabled")
     } else {
-      console.warn("[stream] Disable response:", result.output)
+      log.warn("[stream] Disable response:", result.output)
     }
   } catch (err) {
-    console.warn("[stream] disableStream failed:", err)
+    log.warn("[stream] disableStream failed:", err)
   }
 
   currentStreamInfo = null
@@ -178,7 +179,7 @@ export async function getStreamStatus(): Promise<StreamInfo | null> {
       return info
     }
   } catch (err) {
-    console.warn("[stream] getStreamStatus failed:", err)
+    log.warn("[stream] getStreamStatus failed:", err)
   }
 
   return null

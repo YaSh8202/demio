@@ -7,6 +7,7 @@
 
 import { BrowserWindow } from "electron"
 import { randomUUID } from "node:crypto"
+import log from "../lib/logger"
 import { DEMIO_EVENT_CHANNEL } from "../constants"
 import type { NamespaceHandlers } from "../constants"
 import {
@@ -96,7 +97,7 @@ export const agentHandlers = {
         broadcast("agent:onEnd", runId)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
-        console.error("[agent] run failed:", error)
+        log.error("[agent] run failed:", error)
         broadcast("agent:onError", runId, msg)
       }
     }

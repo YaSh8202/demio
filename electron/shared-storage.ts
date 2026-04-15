@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { app, BrowserWindow } from "electron"
+import log from "./lib/logger"
 import type { NamespaceHandlers } from "./constants"
 import { DEMIO_EVENT_CHANNEL } from "./constants"
 
@@ -44,7 +45,7 @@ export function initSharedStorage() {
         err.code === "ENOENT"
       )
     ) {
-      console.error("[shared-storage] Failed to load:", err)
+      log.error("[shared-storage] Failed to load:", err)
     }
   }
 }
@@ -74,7 +75,7 @@ async function writeToDisk(retries = 0): Promise<void> {
       await new Promise((r) => setTimeout(r, delay))
       return writeToDisk(retries + 1)
     }
-    console.error("[shared-storage] Failed to persist after retries:", err)
+    log.error("[shared-storage] Failed to persist after retries:", err)
   }
 }
 
@@ -112,7 +113,7 @@ export function flushSharedStorage() {
   try {
     fs.writeFileSync(filepath, JSON.stringify(data, null, 2), "utf-8")
   } catch (err) {
-    console.error("[shared-storage] Failed to flush on quit:", err)
+    log.error("[shared-storage] Failed to flush on quit:", err)
   }
 }
 

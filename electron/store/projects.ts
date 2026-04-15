@@ -6,6 +6,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { randomUUID } from "node:crypto"
+import log from "../lib/logger"
 import type { StoredProject, ProjectIndex, ProjectMeta } from "./types"
 import {
   projectIndexPath,
@@ -190,7 +191,7 @@ export function deleteProject(projectId: string): boolean {
   try {
     fs.rmSync(dir, { recursive: true, force: true })
   } catch {
-    console.error(`[store] Failed to remove project dir: ${dir}`)
+    log.error(`[store] Failed to remove project dir: ${dir}`)
   }
 
   return true

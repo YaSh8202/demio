@@ -1,5 +1,6 @@
 import { app, BrowserWindow } from "electron"
 import path from "path"
+import log from "./lib/logger"
 import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
@@ -71,9 +72,9 @@ app.on("ready", () => {
   // Enable the WebSocket stream server for live browser preview
   enableStream().then((info) => {
     if (info) {
-      console.log(`[main] Stream ready at ${info.wsUrl}`)
+      log.log(`[main] Stream ready at ${info.wsUrl}`)
     } else {
-      console.warn("[main] Failed to enable stream on startup")
+      log.warn("[main] Failed to enable stream on startup")
     }
   })
 

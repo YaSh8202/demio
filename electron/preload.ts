@@ -14,6 +14,14 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron"
+import log from "electron-log/node"
+// Wire up the IPC bridge so renderer logs are forwarded to the main log file
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const initElectronLog = require("electron-log/preload") as (opts: {
+  contextBridge: Electron.ContextBridge
+  ipcRenderer: Electron.IpcRenderer
+}) => void
+initElectronLog({ contextBridge, ipcRenderer })
 
 // Channel names — must match constants.ts
 // We inline these instead of importing to keep the preload bundle small
@@ -43,13 +51,13 @@ interface AppInfo {
 function parseMeta(): ExposedMeta {
   const arg = process.argv.find((a) => a.startsWith("--main-exposed-meta="))
   if (!arg) {
-    console.warn("[preload] No --main-exposed-meta found in argv")
+    log.warn("[preload] No --main-exposed-meta found in argv")
     return { handlers: [], events: [] }
   }
   try {
     return JSON.parse(arg.slice("--main-exposed-meta=".length))
   } catch (e) {
-    console.error("[preload] Failed to parse exposed meta:", e)
+    log.error("[preload] Failed to parse exposed meta:", e)
     return { handlers: [], events: [] }
   }
 }

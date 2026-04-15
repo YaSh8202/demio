@@ -1,5 +1,6 @@
 "use client"
 
+import log from "@/lib/logger"
 import { Button } from "@/components/ui/button"
 import {
   Select,
@@ -238,7 +239,7 @@ export const highlightCode = (
     })
     // oxlint-disable-next-line eslint-plugin-promise(prefer-await-to-then), eslint-plugin-promise(prefer-await-to-callbacks)
     .catch((error) => {
-      console.error("Failed to highlight code:", error)
+      log.error("Failed to highlight code:", error)
       subscribers.delete(tokensCacheKey)
     })
 

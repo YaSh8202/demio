@@ -10,6 +10,7 @@ import { safeStorage } from "electron"
 import fs from "node:fs"
 import path from "node:path"
 import { nanoid } from "nanoid"
+import log from "../lib/logger"
 import { storeRoot, atomicWriteSync } from "./paths"
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ export function initProviderKeys(): void {
   encryptionAvailable = safeStorage.isEncryptionAvailable()
 
   if (!encryptionAvailable) {
-    console.warn(
+    log.warn(
       "[provider-keys] safeStorage encryption not available. Keys will be stored in plaintext."
     )
   }
@@ -62,12 +63,12 @@ export function initProviderKeys(): void {
       const raw = fs.readFileSync(fp, "utf-8")
       cache = JSON.parse(raw) as ProviderKeysFile
     } catch {
-      console.error("[provider-keys] Failed to read keys file, starting fresh")
+      log.error("[provider-keys] Failed to read keys file, starting fresh")
       cache = { version: 1, keys: [] }
     }
   }
 
-  console.log(
+  log.log(
     `[provider-keys] Initialized with ${cache.keys.length} key(s), encryption: ${encryptionAvailable}`
   )
 }
@@ -161,7 +162,7 @@ export function getDecryptedKey(provider: string): string | null {
   try {
     return decryptKey(stored.encryptedKey)
   } catch (error) {
-    console.error(`[provider-keys] Failed to decrypt key for ${provider}:`, error)
+    log.error(`[provider-keys] Failed to decrypt key for ${provider}:`, error)
     return null
   }
 }
@@ -185,7 +186,7 @@ export async function validateProviderKey(
         return false
     }
   } catch (error) {
-    console.error(`[provider-keys] Validation failed for ${provider}:`, error)
+    log.error(`[provider-keys] Validation failed for ${provider}:`, error)
     return false
   }
 }

@@ -7,6 +7,7 @@
 // Updates rewrite the full file (infrequent — only for status/metadata patches).
 
 import fs from "node:fs"
+import log from "../lib/logger"
 import type { UIMessage, GetMessagesOptions } from "./types"
 import {
   threadMessagesPath,
@@ -45,7 +46,7 @@ export function getMessages(
     try {
       messages.push(JSON.parse(line) as UIMessage)
     } catch {
-      console.error(`[store] Corrupt JSONL line in ${filePath}, skipping`)
+      log.error(`[store] Corrupt JSONL line in ${filePath}, skipping`)
     }
   }
 
