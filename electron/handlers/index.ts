@@ -7,6 +7,8 @@ import { sharedStorageHandlers } from "../shared-storage"
 import { agentBrowserHandlers } from "./agent-browser"
 import { streamHandlers } from "./stream"
 import { storeHandlers } from "./store"
+import { agentHandlers } from "./agent"
+import { providerKeysHandlers } from "./provider-keys"
 
 /**
  * All handler namespaces.
@@ -23,6 +25,8 @@ export const allHandlers = {
   agentBrowser: agentBrowserHandlers,
   stream: streamHandlers,
   store: storeHandlers,
+  agent: agentHandlers,
+  providerKeys: providerKeysHandlers,
 } satisfies Record<string, NamespaceHandlers>
 
 /** Type-level export for the renderer type wrapper. */

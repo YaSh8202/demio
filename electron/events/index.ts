@@ -4,6 +4,8 @@ import type { NamespaceEvents } from "../constants"
 import { uiEvents } from "./ui"
 import { agentBrowserEvents } from "./agent-browser"
 import { storeEvents } from "./store"
+import { agentEvents } from "./agent"
+import { providerKeysEvents } from "./provider-keys"
 
 /**
  * All event namespaces.
@@ -17,6 +19,8 @@ export const allEvents = {
   ui: uiEvents,
   agentBrowser: agentBrowserEvents,
   store: storeEvents,
+  agent: agentEvents,
+  providerKeys: providerKeysEvents,
 } satisfies Record<string, NamespaceEvents>
 
 /** Type-level export for the renderer type wrapper. */

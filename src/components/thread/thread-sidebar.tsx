@@ -32,7 +32,7 @@ import {
 import { formatRelativeTime } from "@/lib/mock-data/projects"
 import { cn } from "@/lib/utils"
 import { appInfo } from "@/types/electron-api"
-import type { StoredThread } from "../../../../electron/store/types"
+import type { StoredThread } from "@electron/store/types"
 import { useMemo, useState } from "react"
 
 const isMac = appInfo?.platform === "darwin"

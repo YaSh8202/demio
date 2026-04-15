@@ -23,8 +23,11 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@electron/store/types": ["./electron/store/types"],
+      "@electron/agent/types": ["./electron/agent/types"]
     }
   },
   "include": [
@@ -35,6 +38,8 @@
     "electron/events",
     "electron/constants.ts",
     "electron/shared-storage.ts",
-    "electron/lib"
+    "electron/lib",
+    "electron/store",
+    "electron/agent"
   ]
 }

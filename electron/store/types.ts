@@ -63,13 +63,14 @@ export type TokenCosts = {
   cacheWritesUSD?: number
 }
 
-export enum MessageStatus {
-  PENDING = "pending",
-  IN_PROGRESS = "in_progress",
-  COMPLETE = "complete",
-  CANCELLED = "cancelled",
-  ERROR = "error",
-}
+export const MessageStatus = {
+  PENDING: "pending",
+  IN_PROGRESS: "in_progress",
+  COMPLETE: "complete",
+  CANCELLED: "cancelled",
+  ERROR: "error",
+} as const
+export type MessageStatus = (typeof MessageStatus)[keyof typeof MessageStatus]
 
 export interface MessageMetadata {
   modelId: string | null
