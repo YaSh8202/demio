@@ -40,11 +40,19 @@ export interface StoredThread {
   createdAt: string // ISO 8601
   updatedAt: string // ISO 8601
   messageCount: number
+  /** Parsed product domain (e.g. "cal.com"). Set by the auto-titler. */
+  domain?: string | null
 }
 
+/** Per-thread meta persisted at threads/<tid>/meta.json. */
+export interface ThreadMeta extends StoredThread {
+  version: 1
+}
+
+/** Ordered list of thread IDs in threads/index.json. */
 export interface ThreadIndex {
   version: 1
-  threads: StoredThread[]
+  threadIds: string[]
 }
 
 // ── Messages (AI SDK compatible) ─────────────────────────────────────────────

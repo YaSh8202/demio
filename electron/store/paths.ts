@@ -2,6 +2,18 @@
 //
 // All store paths are derived from ~/.demio/ (hardcoded).
 // Directory creation is lazy — ensureDir() is called before writes.
+//
+// Layout:
+//   ~/.demio/
+//   ├── projects.json                         # project index
+//   └── projects/<projectId>/
+//       ├── meta.json                         # project meta (selectedModel)
+//       └── threads/
+//           ├── index.json                    # { version, threadIds: [] }
+//           └── <threadId>/
+//               ├── meta.json                 # thread meta (title, timestamps, domain, …)
+//               ├── messages.json             # UIMessage[]
+//               └── workspace/                # agent working directory
 
 import os from "node:os"
 import path from "node:path"
@@ -32,17 +44,35 @@ export function threadIndexPath(projectId: string): string {
   return path.join(projectDir(projectId), "threads", "index.json")
 }
 
-/** Thread directory: ~/.demio/projects/<id>/threads/ */
+/** Threads parent directory: ~/.demio/projects/<id>/threads/ */
 export function threadsDir(projectId: string): string {
   return path.join(projectDir(projectId), "threads")
 }
 
-/** Thread messages file: ~/.demio/projects/<id>/threads/<threadId>.jsonl */
+/** Thread directory: ~/.demio/projects/<id>/threads/<tid>/ */
+export function threadDir(projectId: string, threadId: string): string {
+  return path.join(threadsDir(projectId), threadId)
+}
+
+/** Thread meta: ~/.demio/projects/<id>/threads/<tid>/meta.json */
+export function threadMetaPath(projectId: string, threadId: string): string {
+  return path.join(threadDir(projectId, threadId), "meta.json")
+}
+
+/** Thread messages: ~/.demio/projects/<id>/threads/<tid>/messages.json */
 export function threadMessagesPath(
   projectId: string,
   threadId: string
 ): string {
-  return path.join(threadsDir(projectId), `${threadId}.jsonl`)
+  return path.join(threadDir(projectId, threadId), "messages.json")
+}
+
+/** Thread workspace: ~/.demio/projects/<id>/threads/<tid>/workspace/ */
+export function threadWorkspaceDir(
+  projectId: string,
+  threadId: string
+): string {
+  return path.join(threadDir(projectId, threadId), "workspace")
 }
 
 // ── Utilities ────────────────────────────────────────────────────────────────

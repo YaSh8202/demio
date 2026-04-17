@@ -1,59 +1,104 @@
 // ── Thread Store ─────────────────────────────────────────────────────────────
 //
-// Manages per-project thread indices (threads/index.json).
-// Thread indices are cached in memory per-project after first load.
+// Each thread has its own directory `threads/<tid>/` containing:
+//   - meta.json       (ThreadMeta)
+//   - messages.json   (UIMessage[])
+//   - workspace/      (agent working directory)
+//
+// `threads/index.json` keeps only an ordered list of thread IDs, so per-thread
+// title / timestamp updates don't rewrite a shared file.
 
 import fs from "node:fs"
-import path from "node:path"
 import { randomUUID } from "node:crypto"
-import type { StoredThread, ThreadIndex } from "./types"
+import type { StoredThread, ThreadIndex, ThreadMeta } from "./types"
 import {
   threadIndexPath,
+  threadDir,
   threadsDir,
+  threadMetaPath,
   threadMessagesPath,
+  threadWorkspaceDir,
   ensureDir,
   atomicWriteSync,
 } from "./paths"
 
-// ── In-memory cache (per project) ────────────────────────────────────────────
+// ── In-memory caches ─────────────────────────────────────────────────────────
 
-const cache = new Map<string, ThreadIndex>()
+/** threads/index.json per project. */
+const indexCache = new Map<string, ThreadIndex>()
+/** threads/<tid>/meta.json. Keyed by `${projectId}:${threadId}`. */
+const metaCache = new Map<string, ThreadMeta>()
 
-function emptyIndex(): ThreadIndex {
-  return { version: 1, threads: [] }
+function metaKey(projectId: string, threadId: string): string {
+  return `${projectId}:${threadId}`
 }
 
-// ── Read / Write ─────────────────────────────────────────────────────────────
+function emptyIndex(): ThreadIndex {
+  return { version: 1, threadIds: [] }
+}
+
+// ── Index read / write ──────────────────────────────────────────────────────
 
 function readIndex(projectId: string): ThreadIndex {
-  const cached = cache.get(projectId)
+  const cached = indexCache.get(projectId)
   if (cached) return cached
 
   const filePath = threadIndexPath(projectId)
   try {
     const raw = fs.readFileSync(filePath, "utf-8")
     const index = JSON.parse(raw) as ThreadIndex
-    cache.set(projectId, index)
+    indexCache.set(projectId, index)
     return index
   } catch {
     const index = emptyIndex()
-    cache.set(projectId, index)
+    indexCache.set(projectId, index)
     return index
   }
 }
 
 function writeIndex(projectId: string, index: ThreadIndex): void {
-  cache.set(projectId, index)
-  const filePath = threadIndexPath(projectId)
-  ensureDir(path.dirname(filePath))
-  atomicWriteSync(filePath, JSON.stringify(index, null, 2))
+  indexCache.set(projectId, index)
+  ensureDir(threadsDir(projectId))
+  atomicWriteSync(threadIndexPath(projectId), JSON.stringify(index, null, 2))
+}
+
+// ── Meta read / write ───────────────────────────────────────────────────────
+
+function readMeta(projectId: string, threadId: string): ThreadMeta | null {
+  const key = metaKey(projectId, threadId)
+  const cached = metaCache.get(key)
+  if (cached) return cached
+
+  try {
+    const raw = fs.readFileSync(threadMetaPath(projectId, threadId), "utf-8")
+    const meta = JSON.parse(raw) as ThreadMeta
+    metaCache.set(key, meta)
+    return meta
+  } catch {
+    return null
+  }
+}
+
+function writeMeta(projectId: string, meta: ThreadMeta): void {
+  metaCache.set(metaKey(projectId, meta.id), meta)
+  ensureDir(threadDir(projectId, meta.id))
+  atomicWriteSync(
+    threadMetaPath(projectId, meta.id),
+    JSON.stringify(meta, null, 2)
+  )
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
-/** List all threads for a project. */
+/** List all threads for a project (reads per-thread meta.json). */
 export function listThreads(projectId: string): StoredThread[] {
-  return readIndex(projectId).threads
+  const index = readIndex(projectId)
+  const threads: StoredThread[] = []
+  for (const id of index.threadIds) {
+    const meta = readMeta(projectId, id)
+    if (meta) threads.push(metaToThread(meta))
+  }
+  return threads
 }
 
 /** Get a single thread by ID. */
@@ -61,106 +106,112 @@ export function getThread(
   projectId: string,
   threadId: string
 ): StoredThread | null {
-  const index = readIndex(projectId)
-  return index.threads.find((t) => t.id === threadId) ?? null
+  const meta = readMeta(projectId, threadId)
+  return meta ? metaToThread(meta) : null
+}
+
+function metaToThread(meta: ThreadMeta): StoredThread {
+  const { version: _v, ...rest } = meta
+  return rest
 }
 
 /**
  * Create a new thread.
- * Creates an empty .jsonl file for messages.
- * Returns the new thread.
+ * Creates the thread directory, workspace/, meta.json, and empty messages.json.
  */
 export function createThread(projectId: string, title?: string): StoredThread {
   const now = new Date().toISOString()
   const id = randomUUID()
 
-  const thread: StoredThread = {
+  const meta: ThreadMeta = {
+    version: 1,
     id,
     title: title ?? "Chat",
     createdAt: now,
     updatedAt: now,
     messageCount: 0,
+    domain: null,
   }
 
-  // Ensure threads directory exists
-  ensureDir(threadsDir(projectId))
+  // Create thread dir + workspace subdirs
+  ensureDir(threadDir(projectId, id))
+  ensureDir(threadWorkspaceDir(projectId, id))
+  ensureDir(`${threadWorkspaceDir(projectId, id)}/discovery`)
+  ensureDir(`${threadWorkspaceDir(projectId, id)}/scenes`)
+  ensureDir(`${threadWorkspaceDir(projectId, id)}/output`)
 
-  // Create empty .jsonl file
-  fs.writeFileSync(threadMessagesPath(projectId, id), "", "utf-8")
+  // Write meta + empty messages
+  writeMeta(projectId, meta)
+  atomicWriteSync(threadMessagesPath(projectId, id), "[]")
 
-  // Add to index
+  // Prepend to index
   const index = readIndex(projectId)
-  index.threads.unshift(thread)
+  index.threadIds.unshift(id)
   writeIndex(projectId, index)
 
-  return thread
+  return metaToThread(meta)
 }
 
-/**
- * Update a thread's fields (title).
- * Returns the updated thread, or null if not found.
- */
+/** Update a thread's fields (title, domain). Returns updated thread or null. */
 export function updateThread(
   projectId: string,
   threadId: string,
-  updates: Partial<Pick<StoredThread, "title">>
+  updates: Partial<Pick<StoredThread, "title" | "domain">>
 ): StoredThread | null {
-  const index = readIndex(projectId)
-  const thread = index.threads.find((t) => t.id === threadId)
-  if (!thread) return null
+  const meta = readMeta(projectId, threadId)
+  if (!meta) return null
 
-  if (updates.title !== undefined) thread.title = updates.title
-  thread.updatedAt = new Date().toISOString()
+  if (updates.title !== undefined) meta.title = updates.title
+  if (updates.domain !== undefined) meta.domain = updates.domain
+  meta.updatedAt = new Date().toISOString()
 
-  writeIndex(projectId, index)
-  return thread
+  writeMeta(projectId, meta)
+  return metaToThread(meta)
 }
 
-/**
- * Increment the message count for a thread and update its timestamp.
- * Called internally when a message is appended.
- */
+/** Increment messageCount and bump updatedAt. */
 export function incrementMessageCount(
   projectId: string,
   threadId: string
 ): void {
-  const index = readIndex(projectId)
-  const thread = index.threads.find((t) => t.id === threadId)
-  if (!thread) return
+  const meta = readMeta(projectId, threadId)
+  if (!meta) return
 
-  thread.messageCount += 1
-  thread.updatedAt = new Date().toISOString()
-  writeIndex(projectId, index)
+  meta.messageCount += 1
+  meta.updatedAt = new Date().toISOString()
+  writeMeta(projectId, meta)
 }
 
-/**
- * Delete a thread and its message file.
- * Returns true if deleted, false if not found.
- */
+/** Delete a thread and its entire directory. */
 export function deleteThread(projectId: string, threadId: string): boolean {
   const index = readIndex(projectId)
-  const idx = index.threads.findIndex((t) => t.id === threadId)
+  const idx = index.threadIds.indexOf(threadId)
   if (idx === -1) return false
 
-  index.threads.splice(idx, 1)
+  index.threadIds.splice(idx, 1)
   writeIndex(projectId, index)
 
-  // Remove the .jsonl file
+  metaCache.delete(metaKey(projectId, threadId))
+
   try {
-    fs.unlinkSync(threadMessagesPath(projectId, threadId))
+    fs.rmSync(threadDir(projectId, threadId), { recursive: true, force: true })
   } catch {
-    // File may not exist — that's fine
+    // dir may not exist
   }
 
   return true
 }
 
-/** Evict a project's thread index from cache. */
+/** Evict a project's thread caches. */
 export function evictThreadCache(projectId: string): void {
-  cache.delete(projectId)
+  indexCache.delete(projectId)
+  for (const key of metaCache.keys()) {
+    if (key.startsWith(`${projectId}:`)) metaCache.delete(key)
+  }
 }
 
-/** Clear all cached thread indices. */
+/** Clear all cached thread data. */
 export function resetThreadCache(): void {
-  cache.clear()
+  indexCache.clear()
+  metaCache.clear()
 }

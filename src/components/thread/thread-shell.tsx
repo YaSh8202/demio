@@ -11,6 +11,7 @@
 // comes from ActiveThreadProvider via the useActiveThread hook.
 
 import { useCallback, useEffect, useRef, useState } from "react"
+import { useLocation, useNavigate } from "react-router-dom"
 import { Sidebar, SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import {
   ResizablePanelGroup,
@@ -253,6 +254,20 @@ export function ThreadShell() {
     },
     [sendMessage]
   )
+
+  // If we arrived here with a pending prompt from the dashboard, auto-send
+  // it once the thread is loaded. Clear route state so refresh doesn't resend.
+  const location = useLocation()
+  const navigate = useNavigate()
+  const pendingPrompt = (location.state as { pendingPrompt?: string } | null)
+    ?.pendingPrompt
+  const pendingSentRef = useRef(false)
+  useEffect(() => {
+    if (!pendingPrompt || !isLoaded || pendingSentRef.current) return
+    pendingSentRef.current = true
+    navigate(location.pathname, { replace: true, state: null })
+    void sendMessage(pendingPrompt)
+  }, [pendingPrompt, isLoaded, sendMessage, navigate, location.pathname])
 
   const handleNewThread = useCallback(async () => {
     await createThread()

@@ -1,16 +1,21 @@
 // ── Agent Orchestrator ───────────────────────────────────────────────────────
 //
-// Runs streamText and returns the ai-sdk UIMessage SSE Response. Caller pipes
-// response.body bytes over IPC to the renderer.
+// Builds a ToolLoopAgent per run with:
+//   - a single `terminal` tool whose cwd is the thread workspace
+//   - a system prompt carrying workspace + project/thread context
+//   - stepCountIs(50) to cover the full discovery → script → record → compose loop
+//
+// Returns an ai-sdk UIMessage SSE Response. The handler pipes response.body
+// over IPC to the renderer.
 
-import { streamText, convertToModelMessages, stepCountIs } from "ai"
-import log from "../lib/logger"
+import { ToolLoopAgent, stepCountIs, convertToModelMessages } from "ai"
 import type { UIMessage as AISdkUIMessage } from "ai"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
-import { runBrowser } from "./tools/run-browser"
+import { createTerminalTool } from "./tools/terminal"
 import { clearSession } from "./sessions"
-import { appendMessage } from "../store"
+import { ensureWorkspace } from "./workspace"
+import { appendMessage, getThread, getProject } from "../store"
 import type { MessageMetadata } from "../store/types"
 import { MessageStatus } from "../store/types"
 
@@ -29,19 +34,28 @@ export async function runAgent({
   modelId,
   signal,
 }: RunAgentOptions): Promise<Response> {
-  const model = getModel(modelId)
-  const modelMessages = await convertToModelMessages(messages)
+  const workspace = ensureWorkspace(projectId, threadId)
+  const project = getProject(projectId)
+  const thread = getThread(projectId, threadId)
 
-  const result = streamText({
+  const model = getModel(modelId)
+  const terminal = createTerminalTool({ cwd: workspace, signal })
+
+  const agent = new ToolLoopAgent({
     model,
-    system: systemPrompt(),
-    messages: modelMessages,
-    tools: { runBrowser },
-    stopWhen: stepCountIs(10),
+    instructions: systemPrompt({
+      workspace,
+      projectTitle: project?.project.name,
+      threadTitle: thread?.title,
+      domain: thread?.domain ?? null,
+    }),
+    tools: { terminal },
+    stopWhen: stepCountIs(50),
+  })
+
+  const result = await agent.stream({
+    messages: await convertToModelMessages(messages),
     abortSignal: signal,
-    onError: ({ error }) => {
-      log.error("[agent] streamText error:", error)
-    },
   })
 
   signal.addEventListener("abort", () => clearSession(projectId, threadId), {

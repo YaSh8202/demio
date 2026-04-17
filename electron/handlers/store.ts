@@ -24,6 +24,8 @@ import {
   appendMessage,
   updateMessage,
 } from "../store"
+import { generateProjectTitles } from "../agent/title-generator"
+import log from "../lib/logger"
 import type {
   StoredProject,
   StoredThread,
@@ -125,7 +127,7 @@ export const storeHandlers = {
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
     threadId: string,
-    updates: Partial<Pick<StoredThread, "title">>
+    updates: Partial<Pick<StoredThread, "title" | "domain">>
   ) => {
     const result = updateThread(projectId, threadId, updates)
     broadcastThreadsChanged(projectId)
@@ -164,6 +166,29 @@ export const storeHandlers = {
     // Also broadcast thread change since messageCount incremented
     broadcastThreadsChanged(projectId)
     return result
+  },
+
+  autoTitleFromPrompt: async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    threadId: string,
+    text: string,
+    modelId: string
+  ) => {
+    try {
+      const { domain, projectTitle, threadTitle } = await generateProjectTitles(
+        text,
+        modelId
+      )
+      updateProject(projectId, { name: projectTitle })
+      updateThread(projectId, threadId, { title: threadTitle, domain })
+      broadcastProjectsChanged()
+      broadcastThreadsChanged(projectId)
+      return { domain, projectTitle, threadTitle }
+    } catch (err) {
+      log.error("[store] autoTitleFromPrompt failed:", err)
+      return null
+    }
   },
 
   updateMessage: (

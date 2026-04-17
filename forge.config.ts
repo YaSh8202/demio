@@ -13,7 +13,10 @@ const config: ForgeConfig = {
     icon: "./logos/icon",
     appBundleId: "com.demio.app",
     appCategoryType: "public.app-category.video",
-    extraResource: [path.resolve("node_modules/agent-browser/bin")],
+    extraResource: [
+      path.resolve("node_modules/agent-browser/bin"),
+      path.resolve("node_modules/ffmpeg-static/ffmpeg"),
+    ],
   },
   rebuildConfig: {},
   makers: [

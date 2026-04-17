@@ -50,16 +50,26 @@ export function DashboardPage() {
 
   const handleSubmit = useCallback(
     async (message: PromptInputMessage) => {
-      const name = message.text.trim()
-      if (!name || !apis) return
+      const text = message.text.trim()
+      if (!text || !apis) return
 
       const { project, thread } = await apis.store.createProject(
-        name,
+        "Untitled project",
+        selectedModel
+      )
+
+      // Parallel, non-blocking: rename project + thread from prompt.
+      void apis.store.autoTitleFromPrompt(
+        project.id,
+        thread.id,
+        text,
         selectedModel
       )
 
       setNewProjectName("")
-      navigate(`/projects/${project.id}/threads/${thread.id}`)
+      navigate(`/projects/${project.id}/threads/${thread.id}`, {
+        state: { pendingPrompt: text },
+      })
     },
     [selectedModel, navigate]
   )
