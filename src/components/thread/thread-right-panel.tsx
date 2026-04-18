@@ -9,11 +9,13 @@ import type { RightPanelTab } from "./thread-header"
 interface ThreadRightPanelProps {
   activeTab: RightPanelTab
   onTabChange: (tab: RightPanelTab) => void
+  videoPath: string | null
 }
 
 export function ThreadRightPanel({
   activeTab,
   onTabChange,
+  videoPath,
 }: ThreadRightPanelProps) {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
 
@@ -64,14 +66,26 @@ export function ThreadRightPanel({
       </TabsContent>
 
       <TabsContent value="video" className="flex-1 overflow-hidden">
-        <div className="flex size-full items-center justify-center">
-          <div className="text-center">
-            <Video className="mx-auto mb-2 size-8 text-muted-foreground/50" />
-            <p className="text-sm text-muted-foreground">
-              Video preview coming soon
-            </p>
+        {videoPath ? (
+          <div className="flex size-full items-center justify-center bg-black p-2">
+            <video
+              key={videoPath}
+              src={`demio-file://${videoPath}`}
+              controls
+              autoPlay
+              className="max-h-full max-w-full rounded-md"
+            />
           </div>
-        </div>
+        ) : (
+          <div className="flex size-full items-center justify-center">
+            <div className="text-center">
+              <Video className="mx-auto mb-2 size-8 text-muted-foreground/50" />
+              <p className="text-sm text-muted-foreground">
+                No video to preview
+              </p>
+            </div>
+          </div>
+        )}
       </TabsContent>
     </Tabs>
   )

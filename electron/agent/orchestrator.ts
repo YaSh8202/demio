@@ -8,11 +8,17 @@
 // Returns an ai-sdk UIMessage SSE Response. The handler pipes response.body
 // over IPC to the renderer.
 
-import { ToolLoopAgent, stepCountIs, convertToModelMessages } from "ai"
+import {
+  ToolLoopAgent,
+  stepCountIs,
+  hasToolCall,
+  convertToModelMessages,
+} from "ai"
 import type { UIMessage as AISdkUIMessage } from "ai"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
 import { createTerminalTool } from "./tools/terminal"
+import { createPresentFilesTool } from "./tools/present-files"
 import { clearSession } from "./sessions"
 import { ensureWorkspace } from "./workspace"
 import { appendMessage, getThread, getProject } from "../store"
@@ -40,6 +46,7 @@ export async function runAgent({
 
   const model = getModel(modelId)
   const terminal = createTerminalTool({ cwd: workspace, signal })
+  const present_files = createPresentFilesTool({ cwd: workspace })
 
   const agent = new ToolLoopAgent({
     model,
@@ -49,8 +56,8 @@ export async function runAgent({
       threadTitle: thread?.title,
       domain: thread?.domain ?? null,
     }),
-    tools: { terminal },
-    stopWhen: stepCountIs(50),
+    tools: { terminal, present_files },
+    stopWhen: [stepCountIs(50), hasToolCall("present_files")],
   })
 
   const result = await agent.stream({

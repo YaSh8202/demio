@@ -38,9 +38,9 @@ Write \`./script.md\` structured as a numbered list of scenes. Each scene has:
 - **Steps**: ordered shell-friendly list of agent-browser actions (open / click / fill / wait / scroll)
 - **On-screen note**: optional short caption
 
-After writing the file, POST THE FULL SCRIPT CONTENT IN CHAT (so the user can read it without opening the file) and explicitly ask: "Reply **approved** to start recording, or tell me what to change." Then STOP generating.
+After writing the file, post a brief summary of the script and ask: "Reply **approved** to start recording, or tell me what to change." Then call \`present_files\` with \`files: ["script.md"]\` to show the full script. Your turn ends after this call.
 
-Do not proceed to recording on your own. Wait for the user's next message. If they request changes, edit \`script.md\` and re-post + re-ask. Only when they approve, continue to phase 4.
+Do not proceed to recording on your own. Wait for the user's next message. If they request changes, edit \`script.md\` and re-present it with \`present_files\`. Only when they approve, continue to phase 4.
 
 ## 4. Recording
 For each scene in the approved \`script.md\`:
@@ -64,13 +64,13 @@ ffmpeg -y -f concat -safe 0 -i scenes/list.txt \\
 
 Adjust re-encode flags if source resolutions differ. If ffmpeg fails, surface the error to the user and retry with sensible defaults.
 
-Post the final path (\`output/demo.mp4\`) in chat and briefly summarise the video (total length, scene count).
+Briefly summarise the video (total length, scene count) in a text message, then call \`present_files\` with \`files: ["output/demo.mp4"]\` to open the video player.
 
 ## 6. Iterate
 When the user requests changes ("redo scene 2", "make the intro slower"):
 - Touch only the affected scenes: re-record those \`.webm\` files.
 - Re-run the concat + ffmpeg step.
-- Post the updated output path.
+- Call \`present_files\` with the updated video to open the player.
 
 Never regenerate the entire video for a single-scene change.
 
@@ -82,6 +82,16 @@ Never regenerate the entire video for a single-scene change.
 - Voiceover is OUT OF SCOPE for this version — skip it.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: you have up to 50 steps per turn. Script approval ends a turn; iteration starts a fresh one.
+
+# present_files tool
+
+You have a second tool: \`present_files\`. Use it to present completed files to the user in the chat UI:
+- Call \`present_files\` with \`files: ["script.md"]\` to display the script for user review/approval (phase 3).
+- Call \`present_files\` with \`files: ["output/demo.mp4"]\` after composition to show the final video (phase 5).
+- You can present multiple files at once: \`files: ["script.md", "output/demo.mp4"]\`.
+- Video files automatically open in the video player panel. Text files are shown inline in chat.
+- **Your turn ends after calling \`present_files\`.** Write your summary or commentary as a text message BEFORE calling the tool.
+- Do NOT use \`cat\` in terminal to show file contents to the user — use \`present_files\` instead.
 `
 
 /**

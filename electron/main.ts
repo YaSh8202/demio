@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from "electron"
+import { app, BrowserWindow, net, protocol } from "electron"
 import path from "path"
+import { pathToFileURL } from "url"
 import log from "./lib/logger"
 import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"
@@ -53,7 +54,23 @@ function createWindow() {
   return mainWindow
 }
 
+// Register custom protocol scheme before app is ready
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "demio-file",
+    privileges: { stream: true, supportFetchAPI: true },
+  },
+])
+
 app.on("ready", () => {
+  // Register demio-file:// protocol for serving local files (videos, etc.)
+  protocol.handle("demio-file", (req) => {
+    const filePath = decodeURIComponent(
+      new URL(req.url).pathname
+    )
+    return net.fetch(pathToFileURL(filePath).href)
+  })
+
   // Load persisted shared storage from disk before anything else
   initSharedStorage()
 
