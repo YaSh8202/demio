@@ -75,6 +75,11 @@ export function threadWorkspaceDir(
   return path.join(threadDir(projectId, threadId), "workspace")
 }
 
+/** Isolated agent workspace: ~/.demio/workspaces/<threadId>/ */
+export function workspaceDir(threadId: string): string {
+  return path.join(storeRoot(), "workspaces", threadId)
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 /** Ensure a directory exists (recursive). No-op if it already does. */

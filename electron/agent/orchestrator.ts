@@ -19,11 +19,16 @@ import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
 import { createTerminalTool } from "./tools/terminal"
 import { createPresentFilesTool } from "./tools/present-files"
+import { createReadTool } from "./tools/read"
+import { createEditTool } from "./tools/edit"
 import { clearSession } from "./sessions"
 import { ensureWorkspace } from "./workspace"
 import { appendMessage, getThread, getProject } from "../store"
 import type { MessageMetadata } from "../store/types"
 import { MessageStatus } from "../store/types"
+import { type GoogleLanguageModelOptions } from "@ai-sdk/google"
+import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic"
+import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai"
 
 export interface RunAgentOptions {
   projectId: string
@@ -40,13 +45,15 @@ export async function runAgent({
   modelId,
   signal,
 }: RunAgentOptions): Promise<Response> {
-  const workspace = ensureWorkspace(projectId, threadId)
+  const workspace = ensureWorkspace(threadId)
   const project = getProject(projectId)
   const thread = getThread(projectId, threadId)
 
   const model = getModel(modelId)
   const terminal = createTerminalTool({ cwd: workspace, signal })
   const present_files = createPresentFilesTool({ cwd: workspace })
+  const read = createReadTool({ cwd: workspace })
+  const edit = createEditTool({ cwd: workspace })
 
   const agent = new ToolLoopAgent({
     model,
@@ -56,8 +63,26 @@ export async function runAgent({
       threadTitle: thread?.title,
       domain: thread?.domain ?? null,
     }),
-    tools: { terminal, present_files },
+    tools: { terminal, present_files, read, edit },
     stopWhen: [stepCountIs(50), hasToolCall("present_files")],
+    providerOptions: {
+      google: {
+        thinkingConfig: {
+          thinkingLevel: "high",
+          includeThoughts: true,
+        },
+      } satisfies GoogleLanguageModelOptions,
+      anthropic: {
+        effort: "high",
+        thinking: {
+          type: "enabled",
+        },
+      } satisfies AnthropicLanguageModelOptions,
+      openai: {
+        forceReasoning: true,
+        reasoningEffort: "high",
+      } satisfies OpenAILanguageModelChatOptions,
+    },
   })
 
   const result = await agent.stream({

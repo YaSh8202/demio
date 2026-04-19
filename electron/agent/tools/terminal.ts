@@ -133,9 +133,8 @@ Use this tool for THREE kinds of work:
    - \`agent-browser batch "cmd1" "cmd2"\` for chained actions
    - \`agent-browser close\` when done. See the system prompt for full usage.
 
-2. Shell file I/O:
-   - Read: \`cat script.md\`, \`ls -la discovery/\`
-   - Write: \`cat > script.md <<'EOF'\\n…contents…\\nEOF\`
+2. Shell utilities (NOT file read/write — use the \`read\`/\`edit\` tools for that):
+   - Directory ops: \`mkdir -p discovery/\`, \`ls -la\`
    - Move/delete: \`mv\`, \`rm\`
 
 3. Video composition via \`ffmpeg\` (on PATH):
