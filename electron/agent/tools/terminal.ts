@@ -173,6 +173,7 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
         exitCode: number
         durationMs: number
         truncated: boolean
+        agentBrowserErrors?: string[]
         aborted?: boolean
         timedOut?: boolean
       }>((resolve) => {
@@ -246,13 +247,21 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
           const outT = truncate(rawStdout)
           const errT = truncate(rawStderr)
 
+          // Detect agent-browser error lines (e.g. "✗ Unknown ref: e7") that
+          // exit with code 0 — treat them as failures so the LLM can react.
+          const agentBrowserErrors = rawStdout
+            .split("\n")
+            .filter((line) => line.trimStart().startsWith("✗ "))
+            .map((line) => line.trim())
+
           resolve({
-            ok: code === 0 && !aborted && !timedOut,
+            ok: code === 0 && !aborted && !timedOut && agentBrowserErrors.length === 0,
             stdout: outT.text,
             stderr: errT.text,
             exitCode: code ?? -1,
             durationMs: Date.now() - start,
             truncated: outT.truncated || errT.truncated,
+            ...(agentBrowserErrors.length > 0 && { agentBrowserErrors }),
             ...(aborted && { aborted: true }),
             ...(timedOut && { timedOut: true }),
           })

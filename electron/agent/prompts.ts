@@ -83,14 +83,44 @@ Post a brief summary and ask: "Reply **approved** to start recording, or tell me
 Do not proceed to recording without explicit approval. If the user requests changes, \`read\` the current script first, then \`edit\` it, then \`present_files\` again.
 
 ## 4. Recording
-For each scene in the approved \`script.md\` (use \`read\` to inspect it):
-1. \`agent-browser set viewport 1920 1080\`
-2. \`agent-browser open <scene URL>\`
-3. \`agent-browser record start $WORKSPACE/scenes/scene-<NN>.webm\`
-4. Execute the scene's steps with natural pacing.
-5. \`agent-browser record stop\`
 
-Prefer \`agent-browser batch "cmd1" "cmd2" …\` when commands don't depend on output. Always \`agent-browser close\` at the end of phase 4.
+For each scene in the approved \`script.md\` (use \`read\` to inspect it):
+
+**a. Write a scene shell script** — use \`edit\` to create \`$WORKSPACE/scenes/scene-<NN>.sh\`:
+
+\`\`\`bash
+#!/bin/bash
+set -euo pipefail
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+agent-browser set viewport 1920 1080
+agent-browser open <scene-url>
+agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" || fail "record start failed"
+
+echo "Step: <description>"
+agent-browser find text "Button Label" click || fail "could not find 'Button Label'"
+
+echo "Step: <description>"
+agent-browser find label "Field Name" fill "value" || fail "could not find 'Field Name' field"
+
+echo "Step: waiting for <thing>"
+agent-browser wait --text "Expected Text" || fail "'Expected Text' did not appear"
+
+agent-browser wait 1000
+agent-browser record stop || fail "record stop failed"
+\`\`\`
+
+Key rules for the script:
+- \`set -euo pipefail\` — any failing command aborts the script immediately
+- Use **semantic locators** (\`find text\`, \`find role\`, \`find label\`, \`find placeholder\`) — they search the current DOM and never go stale
+- Append \`|| fail "description"\` to every interaction line for a clear error message
+- \`echo "Step: …"\` before each interaction so the log shows exactly where a failure happened
+- Use \`@refs\` only if semantic locators are insufficient; if so, take \`snapshot -i\` inside the script (after \`record start\`) and use only those fresh refs
+
+**b. Run the script** via \`bash $WORKSPACE/scenes/scene-<NN>.sh\` in the terminal tool.
+- If \`ok: false\`, the log shows exactly which step failed — fix the locator or wait condition and re-run.
+
+**c. After all scenes**: \`agent-browser close\`
 
 ## 5. Composition
 Build a concat list and produce the final MP4:
@@ -125,6 +155,9 @@ Never regenerate the entire video for a single-scene change.
 - Voiceover is OUT OF SCOPE for this version — skip it.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
+- **Semantic locators in recording**: always prefer \`agent-browser find text "…" click\`, \`find role button "Name"\`, \`find label "Field"\`, \`find placeholder "…"\` over \`@refs\` in scene scripts. Refs are invalidated on every navigation; semantic locators always search the live DOM.
+- **Scene scripts only**: never record a scene as a one-liner \`&&\`-chain. Always write a \`.sh\` file with \`set -euo pipefail\` so failures abort immediately and are visible to you.
+- **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
 `
 
 /**
