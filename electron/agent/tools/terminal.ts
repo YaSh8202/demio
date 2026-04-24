@@ -123,6 +123,8 @@ const TOOL_DESCRIPTION = `Run a shell command inside the current thread's worksp
 
 Working directory ($WORKSPACE) is automatically set to the thread's workspace — always use workspace-relative paths. The workspace pre-contains: discovery/, scenes/, output/. Write files here freely (brief.md, script.md, etc.).
 
+Every call must include a \`description\`: a clear 5-10 word summary of what the command does. This text is shown in the chat UI as the terminal card title.
+
 Use this tool for THREE kinds of work:
 
 1. Browser automation via \`agent-browser\` (on PATH):
@@ -152,6 +154,11 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
     description: TOOL_DESCRIPTION,
     inputSchema: z.object({
       command: z.string().describe("Shell command to execute. Runs in `sh -c`."),
+      description: z
+        .string()
+        .describe(
+          "Clear, concise description of what this command does in 5-10 words. Examples:\nInput: ls\nOutput: Lists files in current directory\n\nInput: git status\nOutput: Shows working tree status\n\nInput: npm install\nOutput: Installs package dependencies\n\nInput: mkdir foo\nOutput: Creates directory 'foo'"
+        ),
       timeoutMs: z
         .number()
         .int()
@@ -162,7 +169,8 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
           "Timeout in ms (default 120000, max 600000). Increase for long recordings or ffmpeg renders."
         ),
     }),
-    execute: async ({ command, timeoutMs }) => {
+    execute: async (input) => {
+      const { command, timeoutMs } = input
       const start = Date.now()
       const timeout = timeoutMs ?? 120_000
 
@@ -283,4 +291,3 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
     },
   })
 }
-

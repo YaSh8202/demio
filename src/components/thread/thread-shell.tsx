@@ -29,7 +29,6 @@ import {
 import {
   Message,
   MessageContent,
-  MessageResponse,
   MessageToolbar,
   MessageActions,
   MessageAction,
@@ -43,18 +42,6 @@ import {
   PromptInputSubmit,
 } from "@/components/ai-elements/prompt-input"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
-import {
-  Reasoning,
-  ReasoningTrigger,
-  ReasoningContent,
-} from "@/components/ai-elements/reasoning"
-import {
-  Tool,
-  ToolHeader,
-  ToolContent,
-  ToolInput,
-  ToolOutput,
-} from "@/components/ai-elements/tool"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import {
   ThreadHeader,
@@ -62,10 +49,14 @@ import {
 } from "@/components/thread/thread-header"
 import { ThreadSidebar } from "@/components/thread/thread-sidebar"
 import { ThreadRightPanel } from "@/components/thread/thread-right-panel"
+import {
+  hasRenderableAssistantParts,
+  ThreadAssistantPartRenderer,
+} from "@/components/thread/tool-usage"
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
-import { CopyIcon, RefreshCwIcon, FileTextIcon, VideoIcon } from "lucide-react"
+import { CopyIcon, RefreshCwIcon } from "lucide-react"
 import type { UIMessage } from "@electron/store/types"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -76,99 +67,6 @@ function getMessageText(message: UIMessage): string {
     .map((p) => p.text)
     .join("")
 }
-
-// ── Present Files Output ─────────────────────────────────────────────────────
-
-interface PresentedFile {
-  path: string
-  kind: "video" | "text" | "error"
-  absPath?: string
-  sizeBytes?: number
-  content?: string
-  truncated?: boolean
-  error?: string
-}
-
-interface PresentFilesOutput {
-  files: PresentedFile[]
-  hasVideo: boolean
-}
-
-function PresentFilesContent({
-  output,
-  onVideoReady,
-}: {
-  output: PresentFilesOutput
-  onVideoReady?: (absPath: string) => void
-}) {
-  const videoTriggered = useRef(false)
-
-  useEffect(() => {
-    if (videoTriggered.current || !onVideoReady) return
-    const videoFile = output.files.find(
-      (f) => f.kind === "video" && f.absPath
-    )
-    if (videoFile?.absPath) {
-      videoTriggered.current = true
-      onVideoReady(videoFile.absPath)
-    }
-  }, [output, onVideoReady])
-
-  return (
-    <div className="flex flex-col gap-3">
-      {output.files.map((file) => {
-        if (file.kind === "video") {
-          const sizeMB = file.sizeBytes
-            ? (file.sizeBytes / 1_048_576).toFixed(1)
-            : "?"
-          return (
-            <div
-              key={file.path}
-              className="flex items-center gap-2 rounded-md border border-sidebar-border bg-muted/50 px-3 py-2"
-            >
-              <VideoIcon className="size-4 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                {file.path}
-              </span>
-              <span className="text-xs text-muted-foreground">
-                {sizeMB} MB
-              </span>
-            </div>
-          )
-        }
-
-        if (file.kind === "text") {
-          return (
-            <div key={file.path} className="flex flex-col gap-1">
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <FileTextIcon className="size-3" />
-                {file.path}
-                {file.truncated && (
-                  <span className="text-yellow-500">(truncated)</span>
-                )}
-              </div>
-              <pre className="max-h-96 overflow-auto rounded-md bg-muted/50 p-3 text-xs leading-relaxed">
-                {file.content}
-              </pre>
-            </div>
-          )
-        }
-
-        // Error
-        return (
-          <div
-            key={file.path}
-            className="text-sm text-destructive"
-          >
-            {file.path}: {file.error}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-// ── Message Renderer ────────────────────────────────────────────────────────
 
 function ThreadMessage({
   message,
@@ -183,98 +81,7 @@ function ThreadMessage({
     navigator.clipboard.writeText(getMessageText(message))
   }, [message])
 
-  const parts = message.parts.map((part, index) => {
-    const { type } = part
-    const key = `message-${message.id}-part-${index}`
-
-    if (type === "reasoning") {
-      const reasoningText = (part as { text?: string }).text
-      if (!reasoningText) return null
-
-      return (
-        <Reasoning isStreaming={isStreaming} key={key}>
-          <ReasoningTrigger />
-          <ReasoningContent>{reasoningText}</ReasoningContent>
-        </Reasoning>
-      )
-    }
-
-    if (type === "text") {
-      const text = (part as { text?: string }).text
-      if (!text) return null
-
-      return (
-        <MessageResponse isAnimating={isStreaming} key={key}>
-          {text}
-        </MessageResponse>
-      )
-    }
-
-    const t = type as string
-    if (t.startsWith("tool-") || t === "dynamic-tool") {
-      const raw = part as {
-        toolCallId: string
-        toolName?: string
-        state: string
-        input?: unknown
-        output?: unknown
-        errorText?: string
-      }
-      const toolName = raw.toolName ?? t.replace(/^tool-/, "")
-
-      // Custom rendering for present_files
-      if (
-        toolName === "present_files" &&
-        raw.state === "output-available" &&
-        raw.output
-      ) {
-        const pfOutput = raw.output as PresentFilesOutput
-        return (
-          <PresentFilesContent
-            key={raw.toolCallId}
-            output={pfOutput}
-            onVideoReady={onVideoReady}
-          />
-        )
-      }
-
-      return (
-        <Tool key={raw.toolCallId}>
-          <ToolHeader
-            type={`tool-${toolName}` as `tool-${string}`}
-            state={
-              raw.state as
-                | "input-available"
-                | "input-streaming"
-                | "output-available"
-                | "output-error"
-                | "output-denied"
-                | "approval-requested"
-                | "approval-responded"
-            }
-          />
-          <ToolContent>
-            {raw.input !== undefined && <ToolInput input={raw.input} />}
-            {(raw.output !== undefined || raw.errorText) && (
-              <ToolOutput output={raw.output} errorText={raw.errorText} />
-            )}
-          </ToolContent>
-        </Tool>
-      )
-    }
-
-    return null
-  })
-
-  const hasAnyContent = message.parts.some(
-    (part) =>
-      (part.type === "text" &&
-        (part as { text?: string }).text?.trim().length) ||
-      (part.type === "reasoning" &&
-        (part as { text?: string }).text?.trim().length) ||
-      (part.type as string).startsWith("tool-") ||
-      part.type === "dynamic-tool"
-  )
+  const hasAnyContent = hasRenderableAssistantParts(message.parts)
 
   const isThinking =
     message.role === "assistant" && isStreaming && !hasAnyContent
@@ -287,7 +94,12 @@ function ThreadMessage({
         ) : isThinking ? (
           <Shimmer>Thinking...</Shimmer>
         ) : (
-          parts
+          <ThreadAssistantPartRenderer
+            isStreaming={isStreaming}
+            messageId={message.id}
+            onVideoReady={onVideoReady}
+            parts={message.parts}
+          />
         )}
       </MessageContent>
       {message.role === "assistant" &&
@@ -336,7 +148,7 @@ export function ThreadShell() {
     if (zustandModel && zustandModel !== selectedModel) {
       setSelectedModel(zustandModel)
     }
-  }, [zustandModel])
+  }, [zustandModel, selectedModel, setSelectedModel])
 
   // Right panel state
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>(null)

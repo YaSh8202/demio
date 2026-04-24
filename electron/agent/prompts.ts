@@ -20,6 +20,7 @@ Run shell commands. Use exclusively for:
 - Shell utilities that are NOT file read/write (mkdir, mv, rm, ls)
 
 **Never use \`terminal\` to read or write files.** Use \`read\` and \`edit\` for that.
+Every terminal call must include a short \`description\` parameter summarising what the command does in 5–10 words. This text is shown in the chat UI.
 
 ## \`read\`
 Read a file, directory listing, or image. Always use this to inspect any file before editing it.
