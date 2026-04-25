@@ -70,11 +70,11 @@ function getMessageText(message: UIMessage): string {
 
 function ThreadMessage({
   message,
-  isStreaming,
+  isMessageStreaming,
   onVideoReady,
 }: {
   message: UIMessage
-  isStreaming: boolean
+  isMessageStreaming: boolean
   onVideoReady?: (absPath: string) => void
 }) {
   const handleCopy = useCallback(() => {
@@ -84,7 +84,7 @@ function ThreadMessage({
   const hasAnyContent = hasRenderableAssistantParts(message.parts)
 
   const isThinking =
-    message.role === "assistant" && isStreaming && !hasAnyContent
+    message.role === "assistant" && isMessageStreaming && !hasAnyContent
 
   return (
     <Message from={message.role}>
@@ -95,7 +95,7 @@ function ThreadMessage({
           <Shimmer>Thinking...</Shimmer>
         ) : (
           <ThreadAssistantPartRenderer
-            isStreaming={isStreaming}
+            isMessageStreaming={isMessageStreaming}
             messageId={message.id}
             onVideoReady={onVideoReady}
             parts={message.parts}
@@ -103,7 +103,7 @@ function ThreadMessage({
         )}
       </MessageContent>
       {message.role === "assistant" &&
-        !isStreaming &&
+        !isMessageStreaming &&
         getMessageText(message) && (
           <MessageToolbar>
             <MessageActions>
@@ -271,7 +271,7 @@ export function ThreadShell() {
                         <ThreadMessage
                           key={msg.id}
                           message={msg}
-                          isStreaming={
+                          isMessageStreaming={
                             (isStreaming || isSubmitted) &&
                             msg.role === "assistant" &&
                             index === messages.length - 1

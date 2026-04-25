@@ -27,7 +27,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import { cn } from "@/lib/utils"
-import type { DynamicToolUIPart, ToolUIPart } from "ai"
+import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart } from "ai"
 import type { UIMessage } from "@electron/store/types"
 import {
   CheckIcon,
@@ -38,6 +38,7 @@ import {
 } from "lucide-react"
 
 type ThreadMessagePart = UIMessage["parts"][number]
+type ThreadReasoningPart = ReasoningUIPart
 type ThreadToolPart = ToolUIPart | DynamicToolUIPart
 type ThreadToolState = ThreadToolPart["state"]
 
@@ -109,12 +110,12 @@ export function hasRenderableAssistantParts(
 export function ThreadAssistantPartRenderer({
   messageId,
   parts,
-  isStreaming,
+  isMessageStreaming,
   onVideoReady,
 }: {
   messageId: string
   parts: UIMessage["parts"]
-  isStreaming: boolean
+  isMessageStreaming: boolean
   onVideoReady?: (absPath: string) => void
 }) {
   const renderedParts: ReactNode[] = []
@@ -124,11 +125,15 @@ export function ThreadAssistantPartRenderer({
     const key = `message-${messageId}-part-${index}`
 
     if (part.type === "reasoning") {
-      const reasoningText = (part as { text?: string }).text
+      const reasoningPart = part as ThreadReasoningPart
+      const reasoningText = reasoningPart.text
       if (!reasoningText) continue
 
       renderedParts.push(
-        <Reasoning isStreaming={isStreaming} key={key}>
+        <Reasoning
+          isStreaming={isReasoningPartStreaming(reasoningPart)}
+          key={key}
+        >
           <ReasoningTrigger />
           <ReasoningContent>{reasoningText}</ReasoningContent>
         </Reasoning>
@@ -141,7 +146,7 @@ export function ThreadAssistantPartRenderer({
       if (!text) continue
 
       renderedParts.push(
-        <MessageResponse isAnimating={isStreaming} key={key}>
+        <MessageResponse isAnimating={isMessageStreaming} key={key}>
           {text}
         </MessageResponse>
       )
@@ -211,6 +216,10 @@ export function ThreadAssistantPartRenderer({
 function isThreadToolPart(part: ThreadMessagePart): part is ThreadToolPart {
   const type = part.type as string
   return type.startsWith("tool-") || type === "dynamic-tool"
+}
+
+function isReasoningPartStreaming(part: ThreadReasoningPart): boolean {
+  return part.state === "streaming"
 }
 
 function isClusterableToolPart(part: ThreadMessagePart): boolean {
@@ -372,10 +381,10 @@ function getTerminalPlaceholder(state: ThreadToolState): string {
   return "Command completed with no output."
 }
 
-function getReplacementSummary(count?: number): string | undefined {
-  if (typeof count !== "number") return undefined
-  return `${count} replacement${count === 1 ? "" : "s"}`
-}
+// function getReplacementSummary(count?: number): string | undefined {
+//   if (typeof count !== "number") return undefined
+//   return `${count} replacement${count === 1 ? "" : "s"}`
+// }
 
 function ToolClusterGroup({ parts }: { parts: ThreadToolPart[] }) {
   const hasErrors = parts.some((part) => !!part.errorText)
@@ -427,20 +436,20 @@ function EditToolRow({ part }: { part: ThreadToolPart }) {
   const input = asObject<EditToolInput>(part.input)
   const output = asObject<EditToolOutput>(part.output)
   const filePath = input?.filePath ?? output?.filePath
-  const summary = getReplacementSummary(output?.replacements)
-  const meta = summary
-    ? [summary]
-    : isPendingToolState(part.state)
-      ? ["Applying edit..."]
-      : []
+  // const summary = getReplacementSummary(output?.replacements)
+  // const meta = summary
+  //   ? [summary]
+  //   : isPendingToolState(part.state)
+  //     ? ["Applying edit..."]
+  //     : []
 
   return (
     <CompactToolSummary
       className={cn(part.errorText && "bg-destructive/5")}
-      directory={getPathDirname(filePath)}
+      // directory={getPathDirname(filePath)}
       error={part.errorText}
       label="Edit"
-      meta={meta}
+      // meta={meta}
       subtitle={getPathBasename(filePath) ?? "file"}
     />
   )
