@@ -9,19 +9,19 @@ export interface EditToolOptions {
 
 export function createEditTool({ cwd }: EditToolOptions) {
   return tool({
-    description: `Edit a file by replacing a specific string with a new string.
+    description: `Edit or create a file by replacing a specific string with a new string.
 
-The oldString must appear exactly in the file. If it appears multiple times and you only want to replace one, make oldString more specific by including surrounding context. Use replaceAll: true to replace every occurrence.
+To create a new file, use oldString: '' (empty string). To edit an existing file, oldString must appear exactly in the file. If it appears multiple times and you only want to replace one, make oldString more specific by including surrounding context. Use replaceAll: true to replace every occurrence.
 
-Paths can be workspace-relative or absolute.`,
+Paths can be workspace-relative or absolute. Parent directories are created automatically if needed.`,
 
     inputSchema: z.object({
       filePath: z
         .string()
-        .describe("Absolute or workspace-relative path to the file to edit"),
+        .describe("Absolute or workspace-relative path to the file to edit or create"),
       oldString: z
         .string()
-        .describe("The exact text to find in the file"),
+        .describe("The exact text to find in the file. Use empty string '' to create a new file."),
       newString: z
         .string()
         .describe("The text to replace oldString with (must differ from oldString)"),
@@ -36,15 +36,30 @@ Paths can be workspace-relative or absolute.`,
         ? filePath
         : path.join(cwd, filePath)
 
+      // Handle file creation when oldString is empty
+      if (oldString === "") {
+        const dir = path.dirname(absPath)
+        await fsPromises.mkdir(dir, { recursive: true })
+        await fsPromises.writeFile(absPath, newString, "utf-8")
+        return {
+          ok: true,
+          filePath: path.relative(cwd, absPath),
+          replacements: 0,
+          created: true,
+        }
+      }
+
+      // For edit operations, validate that oldString and newString differ
+      if (oldString === newString) {
+        throw new Error("oldString and newString must be different")
+      }
+
+      // Handle file editing when oldString is not empty
       let content: string
       try {
         content = await fsPromises.readFile(absPath, "utf-8")
       } catch {
         throw new Error(`File not found: ${absPath}`)
-      }
-
-      if (oldString === newString) {
-        throw new Error("oldString and newString must be different")
       }
 
       if (!content.includes(oldString)) {
