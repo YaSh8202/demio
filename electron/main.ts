@@ -10,6 +10,7 @@ import { initStore } from "./store"
 import { initProviderKeys } from "./store/provider-keys"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 import { enableStream, disableStream } from "./lib/agent-browser/stream"
+import { registerSecurityRestrictions } from "./security/restrictions"
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -82,6 +83,9 @@ app.on("ready", () => {
 
   // Register the single-channel IPC handler before any windows exist
   registerHandlers()
+
+  // Route external URLs to the system browser instead of new electron windows
+  registerSecurityRestrictions()
 
   // Clean up stale agent-browser sessions from previous crashes
   ensureDaemon()

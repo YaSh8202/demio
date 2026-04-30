@@ -1,5 +1,6 @@
-import { BrowserWindow, shell } from "electron"
+import { BrowserWindow } from "electron"
 import type { NamespaceHandlers } from "../constants"
+import { openExternalSafely } from "../security/open-external"
 
 /**
  * UI-related IPC handlers.
@@ -10,7 +11,7 @@ import type { NamespaceHandlers } from "../constants"
 export const uiHandlers = {
   /** Open a URL in the user's default browser. */
   openExternal: async (_event: Electron.IpcMainInvokeEvent, url: string) => {
-    await shell.openExternal(url)
+    await openExternalSafely(url)
   },
 
   /** Returns whether the sender's window is maximized. */
