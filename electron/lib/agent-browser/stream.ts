@@ -194,3 +194,25 @@ export async function getStreamStatus(): Promise<StreamInfo | null> {
 export function getStreamUrl(): string | null {
   return currentStreamInfo?.wsUrl ?? null
 }
+
+/**
+ * Drop the cached stream info so the next status/URL query talks to the daemon.
+ * Used when the renderer reports its WebSocket can no longer reach the server.
+ */
+export function invalidateStreamCache(): void {
+  currentStreamInfo = null
+}
+
+/**
+ * Force a fresh stream enable, bypassing the cache.
+ *
+ * Called when the renderer detects the WS server is gone (daemon was killed
+ * by `agent-browser close --all`, crashed, or otherwise died). `enableStream`
+ * spawns the daemon if needed and handles the "already enabled" path by
+ * falling back to a status query, so this works whether the daemon is dead
+ * or just lost its stream server.
+ */
+export async function refreshStream(): Promise<StreamInfo | null> {
+  invalidateStreamCache()
+  return enableStream()
+}

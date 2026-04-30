@@ -17,9 +17,19 @@ import { cn } from "@/lib/utils"
 interface LiveBrowserViewProps {
   wsUrl: string | null
   className?: string
+  /**
+   * Called when the current `wsUrl` is unreachable after several reconnects.
+   * Parent should fetch a fresh URL (e.g. `apis.stream.refresh()`) and
+   * update `wsUrl` — the keyed remount below will reconnect cleanly.
+   */
+  onStaleUrl?: () => void
 }
 
-export function LiveBrowserView({ wsUrl, className }: LiveBrowserViewProps) {
+export function LiveBrowserView({
+  wsUrl,
+  className,
+  onStaleUrl,
+}: LiveBrowserViewProps) {
   // When wsUrl is null, show idle placeholder.
   // When wsUrl is set, render the StreamCanvas keyed by the URL
   // so React naturally resets all state on URL change.
@@ -30,7 +40,11 @@ export function LiveBrowserView({ wsUrl, className }: LiveBrowserViewProps) {
         className
       )}
     >
-      {wsUrl ? <StreamCanvas key={wsUrl} wsUrl={wsUrl} /> : <Placeholder />}
+      {wsUrl ? (
+        <StreamCanvas key={wsUrl} wsUrl={wsUrl} onStaleUrl={onStaleUrl} />
+      ) : (
+        <Placeholder />
+      )}
     </div>
   )
 }
@@ -39,7 +53,13 @@ export function LiveBrowserView({ wsUrl, className }: LiveBrowserViewProps) {
 // StreamCanvas — handles the WebSocket connection and canvas rendering
 // ---------------------------------------------------------------------------
 
-function StreamCanvas({ wsUrl }: { wsUrl: string }) {
+function StreamCanvas({
+  wsUrl,
+  onStaleUrl,
+}: {
+  wsUrl: string
+  onStaleUrl?: () => void
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const streamRef = useRef<BrowserStream | null>(null)
@@ -54,6 +74,12 @@ function StreamCanvas({ wsUrl }: { wsUrl: string }) {
   const pendingFrameRef = useRef<HTMLImageElement | null>(null)
   // Last drawn frame — kept so we can redraw after canvas resize clears content
   const lastFrameRef = useRef<HTMLImageElement | null>(null)
+
+  // Stale-URL callback ref — kept current without re-running the connect effect
+  const onStaleUrlRef = useRef(onStaleUrl)
+  useEffect(() => {
+    onStaleUrlRef.current = onStaleUrl
+  }, [onStaleUrl])
 
   // ---------------------------------------------------------------------------
   // Canvas sizing — maintain viewport aspect ratio within container
@@ -176,12 +202,17 @@ function StreamCanvas({ wsUrl }: { wsUrl: string }) {
       setHasReceivedFrame(true)
     })
 
+    const unsubStale = stream.onStaleUrl(() => {
+      onStaleUrlRef.current?.()
+    })
+
     stream.connect(wsUrl)
 
     return () => {
       unsubStatus()
       unsubViewport()
       unsubFrame()
+      unsubStale()
       stream.disconnect()
       streamRef.current = null
     }

@@ -36,6 +36,15 @@ export function StreamPage() {
     })
   }, [])
 
+  // Re-enable the stream when the renderer's WebSocket gives up reconnecting
+  // (daemon was killed by `agent-browser close --all` or crashed).
+  const handleStaleUrl = useCallback(() => {
+    if (!apis) return
+    apis.stream.refresh().then((info) => {
+      setWsUrl(info?.wsUrl ?? null)
+    })
+  }, [])
+
   const runBrowserCommand = useCallback(async (commands: string[]) => {
     if (!apis) return
     setBrowserLoading(true)
@@ -196,7 +205,11 @@ export function StreamPage() {
 
         {/* Right panel — live preview */}
         <div className="min-w-0 flex-1 p-4">
-          <LiveBrowserView wsUrl={wsUrl} className="h-full w-full" />
+          <LiveBrowserView
+            wsUrl={wsUrl}
+            className="h-full w-full"
+            onStaleUrl={handleStaleUrl}
+          />
         </div>
       </div>
     </div>

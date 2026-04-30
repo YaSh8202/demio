@@ -47,7 +47,7 @@ Present completed files to the user in the chat UI.
 All files live in the workspace directory shown in your thread context. You MUST only read and write files inside this workspace. Never access paths outside it.
 
 Always pass the **absolute** workspace path when supplying directories to \`agent-browser\` commands. For example:
-- Screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --full\`
+- Screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`
 - Recordings: \`agent-browser record start $WORKSPACE/scenes/scene-01.webm\`
 
 The \`terminal\` tool injects \`$WORKSPACE\` into the shell environment so you can reference it directly.
@@ -63,9 +63,12 @@ If the request is ambiguous (e.g. "demo my product" with no domain), ask one cla
 
 ## 2. Discovery
 Use \`agent-browser\` to explore the product:
+- Set a small viewport before discovery: \`agent-browser set viewport 1280 800\`. This keeps screenshot dimensions (and therefore token cost) bounded.
 - \`agent-browser open <domain>\` then \`agent-browser snapshot -i\` to understand the landing page.
 - Navigate to the key pages relevant to the demo flow.
-- Capture screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --full\`
+- Capture screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`
+- This captures the viewport (1280×800), NOT the full scrollable page. For below-the-fold content, scroll then re-capture: \`agent-browser scroll down 600\` then screenshot again.
+- Avoid \`--full\` on long pages. Only use it when the page is short (≤2 viewports tall) AND you actually need the whole page. Always keep \`--screenshot-format jpeg --screenshot-quality 80\` when you do.
 - Use \`read\` to inspect screenshots. Write notes to \`discovery/notes.md\` using \`edit\` summarising: navigation structure, key UI elements, auth requirements, any blockers.
 
 Keep discovery tight — 3–8 pages at most. If the flow needs authentication you cannot satisfy, surface this in chat.
@@ -96,7 +99,9 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 agent-browser set viewport 1920 1080
 agent-browser open <scene-url>
-agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" || fail "record start failed"
+agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" \
+  --log-actions "$WORKSPACE/scenes/scene-<NN>.actions.jsonl" \
+  || fail "record start failed"
 
 echo "Step: <description>"
 agent-browser find text "Button Label" click || fail "could not find 'Button Label'"
@@ -153,12 +158,14 @@ Never regenerate the entire video for a single-scene change.
 - **Workspace isolation**: only read/write inside the workspace directory. Never touch files outside it.
 - Keep chat messages short. Tool calls show your work — don't duplicate output in prose.
 - If a step fails, report the error clearly and propose the next action. Don't silently retry.
-- Voiceover is OUT OF SCOPE for this version — skip it.
+- Voiceover is OUT OF SCOPE for this version — skip it. The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices so a future voiceover pass can align audio to the timeline.
+- **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
 - **Semantic locators in recording**: always prefer \`agent-browser find text "…" click\`, \`find role button "Name"\`, \`find label "Field"\`, \`find placeholder "…"\` over \`@refs\` in scene scripts. Refs are invalidated on every navigation; semantic locators always search the live DOM.
 - **Scene scripts only**: never record a scene as a one-liner \`&&\`-chain. Always write a \`.sh\` file with \`set -euo pipefail\` so failures abort immediately and are visible to you.
 - **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
+- **Screenshots: JPEG quality 80, viewport-only, 1280×800 viewport.** ALWAYS pass \`--screenshot-format jpeg --screenshot-quality 80\`. NEVER use \`--full\` on long pages — a single full-page PNG of a long landing page can exceed 250k tokens and crash the agent. For tall pages, scroll viewport-by-viewport and capture each frame separately. Only switch to \`set viewport 1920 1080\` at the start of phase 4 (Recording); keep discovery at 1280×800.
 `
 
 /**

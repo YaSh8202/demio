@@ -24,6 +24,17 @@ export type StreamStatus = "idle" | "connecting" | "live" | "disconnected"
 type FrameCallback = (img: HTMLImageElement) => void
 type StatusCallback = (status: StreamStatus) => void
 type ViewportCallback = (width: number, height: number) => void
+type StaleUrlCallback = () => void
+
+/**
+ * Number of failed reconnects (close events without an intervening open) before
+ * we give up on the current URL and ask the parent for a fresh one.
+ *
+ * Three matches the exponential-backoff schedule (1s, 2s, 4s) — by the time
+ * we hit it, the daemon has had ~7s to come back on the same port. If it
+ * hasn't, the URL is almost certainly stale (different port, or daemon dead).
+ */
+const MAX_RECONNECT_BEFORE_REFRESH = 3
 
 /** JSON message from the agent-browser WebSocket stream. */
 interface StreamMessage {
@@ -56,10 +67,12 @@ export class BrowserStream {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectDelay = 1000
   private readonly maxReconnectDelay = 8000
+  private failedReconnects = 0
 
   private frameCallbacks = new Set<FrameCallback>()
   private statusCallbacks = new Set<StatusCallback>()
   private viewportCallbacks = new Set<ViewportCallback>()
+  private staleUrlCallbacks = new Set<StaleUrlCallback>()
 
   private _status: StreamStatus = "idle"
   private _viewportWidth = 1280
@@ -99,6 +112,10 @@ export class BrowserStream {
     this.intentionalClose = false
     this.clearReconnectTimer()
 
+    // Reset stale-URL counter — a fresh `connect` call (e.g. after refresh)
+    // means the parent gave us a new URL and we should retry from scratch.
+    this.failedReconnects = 0
+
     // Close existing connection if any
     if (this.ws) {
       this.ws.onopen = null
@@ -116,6 +133,7 @@ export class BrowserStream {
 
     ws.onopen = () => {
       this.reconnectDelay = 1000 // reset backoff
+      this.failedReconnects = 0
       this.setStatus("live")
     }
 
@@ -127,12 +145,21 @@ export class BrowserStream {
 
     ws.onclose = () => {
       this.ws = null
-      if (!this.intentionalClose) {
-        this.setStatus("disconnected")
-        this.scheduleReconnect(wsUrl)
-      } else {
+      if (this.intentionalClose) {
         this.setStatus("idle")
+        return
       }
+
+      this.setStatus("disconnected")
+      this.failedReconnects += 1
+
+      if (this.failedReconnects >= MAX_RECONNECT_BEFORE_REFRESH) {
+        // Stop hammering the dead URL; signal the parent to fetch a new one.
+        this.staleUrlCallbacks.forEach((cb) => cb())
+        return
+      }
+
+      this.scheduleReconnect(wsUrl)
     }
 
     ws.onerror = () => {
@@ -143,6 +170,7 @@ export class BrowserStream {
   disconnect(): void {
     this.intentionalClose = true
     this.clearReconnectTimer()
+    this.failedReconnects = 0
 
     if (this.ws) {
       this.ws.onopen = null
@@ -178,6 +206,16 @@ export class BrowserStream {
     // Fire immediately with current viewport
     callback(this._viewportWidth, this._viewportHeight)
     return () => this.viewportCallbacks.delete(callback)
+  }
+
+  /**
+   * Fired when reconnect attempts to the current URL have been exhausted.
+   * The parent should fetch a fresh URL (e.g. via stream.refresh IPC) and
+   * call `connect(newUrl)` to retry.
+   */
+  onStaleUrl(callback: StaleUrlCallback): () => void {
+    this.staleUrlCallbacks.add(callback)
+    return () => this.staleUrlCallbacks.delete(callback)
   }
 
   // ---------------------------------------------------------------------------

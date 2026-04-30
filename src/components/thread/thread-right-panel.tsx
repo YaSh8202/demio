@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { Globe, Video, X } from "lucide-react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -35,6 +35,15 @@ export function ThreadRightPanel({
     })
   }, [activeTab])
 
+  // Re-enable the stream when the renderer's WebSocket gives up reconnecting
+  // (daemon was killed by `agent-browser close --all` or crashed).
+  const handleStaleUrl = useCallback(() => {
+    if (!apis) return
+    apis.stream.refresh().then((info) => {
+      setWsUrl(info?.wsUrl ?? null)
+    })
+  }, [])
+
   return (
     <Tabs
       value={activeTab ?? "browser"}
@@ -62,7 +71,11 @@ export function ThreadRightPanel({
       </div>
 
       <TabsContent value="browser" className="flex-1 overflow-hidden p-2">
-        <LiveBrowserView wsUrl={wsUrl} className="size-full rounded-md" />
+        <LiveBrowserView
+          wsUrl={wsUrl}
+          className="size-full rounded-md"
+          onStaleUrl={handleStaleUrl}
+        />
       </TabsContent>
 
       <TabsContent value="video" className="flex-1 overflow-hidden">

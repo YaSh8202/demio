@@ -29,6 +29,7 @@ import { MessageStatus } from "../store/types"
 import { type GoogleLanguageModelOptions } from "@ai-sdk/google"
 import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic"
 import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai"
+import log from "../lib/logger"
 
 export interface RunAgentOptions {
   projectId: string
@@ -55,14 +56,20 @@ export async function runAgent({
   const read = createReadTool({ cwd: workspace })
   const edit = createEditTool({ cwd: workspace })
 
+  const systemPromptText = systemPrompt({
+    workspace,
+    projectTitle: project?.project.name,
+    threadTitle: thread?.title,
+    domain: thread?.domain ?? null,
+  })
+
+  log.info(
+    `[agent] Starting agent with model ${modelId} and system prompt:\n${systemPromptText}`
+  )
+
   const agent = new ToolLoopAgent({
     model,
-    instructions: systemPrompt({
-      workspace,
-      projectTitle: project?.project.name,
-      threadTitle: thread?.title,
-      domain: thread?.domain ?? null,
-    }),
+    instructions: systemPromptText,
     tools: { terminal, present_files, read, edit },
     stopWhen: [stepCountIs(50), hasToolCall("present_files")],
     providerOptions: {
