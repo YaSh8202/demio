@@ -3,7 +3,6 @@
 // Each thread has its own directory `threads/<tid>/` containing:
 //   - meta.json       (ThreadMeta)
 //   - messages.json   (UIMessage[])
-//   - workspace/      (agent working directory)
 //
 // `threads/index.json` keeps only an ordered list of thread IDs, so per-thread
 // title / timestamp updates don't rewrite a shared file.
@@ -17,7 +16,6 @@ import {
   threadsDir,
   threadMetaPath,
   threadMessagesPath,
-  threadWorkspaceDir,
   ensureDir,
   atomicWriteSync,
 } from "./paths"
@@ -115,10 +113,7 @@ function metaToThread(meta: ThreadMeta): StoredThread {
   return rest
 }
 
-/**
- * Create a new thread.
- * Creates the thread directory, workspace/, meta.json, and empty messages.json.
- */
+/** Create a new thread. */
 export function createThread(projectId: string, title?: string): StoredThread {
   const now = new Date().toISOString()
   const id = randomUUID()
@@ -133,12 +128,7 @@ export function createThread(projectId: string, title?: string): StoredThread {
     domain: null,
   }
 
-  // Create thread dir + workspace subdirs
   ensureDir(threadDir(projectId, id))
-  ensureDir(threadWorkspaceDir(projectId, id))
-  ensureDir(`${threadWorkspaceDir(projectId, id)}/discovery`)
-  ensureDir(`${threadWorkspaceDir(projectId, id)}/scenes`)
-  ensureDir(`${threadWorkspaceDir(projectId, id)}/output`)
 
   // Write meta + empty messages
   writeMeta(projectId, meta)

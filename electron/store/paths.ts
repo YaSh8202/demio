@@ -6,14 +6,14 @@
 // Layout:
 //   ~/.demio/
 //   ├── projects.json                         # project index
-//   └── projects/<projectId>/
-//       ├── meta.json                         # project meta (selectedModel)
-//       └── threads/
-//           ├── index.json                    # { version, threadIds: [] }
-//           └── <threadId>/
-//               ├── meta.json                 # thread meta (title, timestamps, domain, …)
-//               ├── messages.json             # UIMessage[]
-//               └── workspace/                # agent working directory
+//   ├── projects/<projectId>/
+//   │   ├── meta.json                         # project meta (selectedModel)
+//   │   └── threads/
+//   │       ├── index.json                    # { version, threadIds: [] }
+//   │       └── <threadId>/
+//   │           ├── meta.json                 # thread meta (title, timestamps, domain, …)
+//   │           └── messages.json             # UIMessage[]
+//   └── workspaces/<threadId>/                # agent working directory
 
 import os from "node:os"
 import path from "node:path"
@@ -67,15 +67,7 @@ export function threadMessagesPath(
   return path.join(threadDir(projectId, threadId), "messages.json")
 }
 
-/** Thread workspace: ~/.demio/projects/<id>/threads/<tid>/workspace/ */
-export function threadWorkspaceDir(
-  projectId: string,
-  threadId: string
-): string {
-  return path.join(threadDir(projectId, threadId), "workspace")
-}
-
-/** Isolated agent workspace: ~/.demio/workspaces/<threadId>/ */
+/** Agent workspace: ~/.demio/workspaces/<threadId>/ */
 export function workspaceDir(threadId: string): string {
   return path.join(storeRoot(), "workspaces", threadId)
 }
