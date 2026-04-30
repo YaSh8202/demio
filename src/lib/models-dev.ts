@@ -14,6 +14,7 @@ const PROVIDER_ID_MAP: Record<LLMProvider, string> = {
   [LLMProvider.OPENAI]: "openai",
   [LLMProvider.ANTHROPIC]: "anthropic",
   [LLMProvider.GOOGLE]: "google",
+  [LLMProvider.AMAZON_BEDROCK]: "amazon-bedrock",
 }
 
 function sortModelsByDate(models: ModelWithProvider[]): ModelWithProvider[] {

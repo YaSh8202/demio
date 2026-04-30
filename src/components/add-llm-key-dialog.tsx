@@ -42,7 +42,26 @@ const PROVIDER_API_KEY_URLS: Record<
     url: "https://aistudio.google.com/apikey",
     label: "Google AI Studio",
   },
+  [LLMProvider.AMAZON_BEDROCK]: {
+    url: "https://console.aws.amazon.com/bedrock/home#/api-keys",
+    label: "AWS Bedrock Console",
+  },
 }
+
+const BEDROCK_REGIONS = [
+  "us-east-1",
+  "us-east-2",
+  "us-west-2",
+  "eu-west-1",
+  "eu-west-3",
+  "eu-central-1",
+  "ap-northeast-1",
+  "ap-southeast-1",
+  "ap-southeast-2",
+  "ap-south-1",
+  "ca-central-1",
+  "sa-east-1",
+]
 
 interface AddLLMKeyDialogProps {
   open: boolean
@@ -52,6 +71,7 @@ interface AddLLMKeyDialogProps {
   onAddKey: (params: {
     provider: string
     apiKey: string
+    metadata?: Record<string, string>
   }) => Promise<ProviderKeyInfo>
 }
 
@@ -66,6 +86,7 @@ export function AddLLMKeyDialog({
     initialProvider || LLMProvider.OPENAI
   )
   const [apiKey, setApiKey] = useState("")
+  const [region, setRegion] = useState<string>(BEDROCK_REGIONS[0])
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -73,6 +94,7 @@ export function AddLLMKeyDialog({
   useEffect(() => {
     if (open) {
       setApiKey("")
+      setRegion(BEDROCK_REGIONS[0])
       setError(null)
       setIsSubmitting(false)
       if (initialProvider) setProvider(initialProvider)
@@ -99,12 +121,18 @@ export function AddLLMKeyDialog({
       setError("API key seems too short")
       return
     }
+    if (provider === LLMProvider.AMAZON_BEDROCK && !region) {
+      setError("AWS region is required for Amazon Bedrock")
+      return
+    }
 
     setIsSubmitting(true)
     setError(null)
 
     try {
-      await onAddKey({ provider, apiKey: apiKey.trim() })
+      const metadata =
+        provider === LLMProvider.AMAZON_BEDROCK ? { region } : undefined
+      await onAddKey({ provider, apiKey: apiKey.trim(), metadata })
       onOpenChange(false)
     } catch (err) {
       setError(
@@ -216,6 +244,25 @@ export function AddLLMKeyDialog({
               <p className="text-xs text-destructive">{error}</p>
             )}
           </div>
+
+          {/* AWS Region (Bedrock only) */}
+          {provider === LLMProvider.AMAZON_BEDROCK && (
+            <div className="flex flex-col gap-1.5">
+              <label className="text-sm font-medium">AWS Region</label>
+              <Select value={region} onValueChange={setRegion}>
+                <SelectTrigger className="h-12">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {BEDROCK_REGIONS.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {r}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
             <Button

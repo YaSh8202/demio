@@ -9,7 +9,8 @@
 import { createAnthropic } from "@ai-sdk/anthropic"
 import { createOpenAI } from "@ai-sdk/openai"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
-import { getDecryptedKey } from "../store/provider-keys"
+import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
+import { getDecryptedKey, getProviderKeyMetadata } from "../store/provider-keys"
 
 /**
  * Parse a full model ID into provider + model parts.
@@ -40,6 +41,8 @@ function getEnvKey(provider: string): string | undefined {
       return process.env.OPENAI_API_KEY
     case "google":
       return process.env.GOOGLE_API_KEY
+    case "amazon-bedrock":
+      return process.env.AWS_BEDROCK_API_KEY
     default:
       return undefined
   }
@@ -71,6 +74,13 @@ export function getModel(fullModelId: string) {
       return createOpenAI({ apiKey })(modelId)
     case "google":
       return createGoogleGenerativeAI({ apiKey })(modelId)
+    case "amazon-bedrock": {
+      const region =
+        getProviderKeyMetadata("amazon-bedrock")?.region ||
+        process.env.AWS_REGION ||
+        "us-east-1"
+      return createAmazonBedrock({ apiKey, region })(modelId)
+    }
     default:
       throw new Error(`Unsupported provider: ${provider}`)
   }

@@ -35,15 +35,16 @@ export const providerKeysHandlers = {
   addKey: async (
     _event: Electron.IpcMainInvokeEvent,
     provider: string,
-    apiKey: string
+    apiKey: string,
+    metadata?: Record<string, string>
   ) => {
-    const isValid = await validateProviderKey(provider, apiKey)
+    const isValid = await validateProviderKey(provider, apiKey, metadata)
     if (!isValid) {
       throw new Error(
         `API key validation failed for ${provider}. Please check your key and try again.`
       )
     }
-    const result = addProviderKey(provider, apiKey)
+    const result = addProviderKey(provider, apiKey, metadata)
     broadcastKeysChanged()
     return result
   },
@@ -57,9 +58,10 @@ export const providerKeysHandlers = {
   validateKey: async (
     _event: Electron.IpcMainInvokeEvent,
     provider: string,
-    apiKey: string
+    apiKey: string,
+    metadata?: Record<string, string>
   ) => {
-    const isValid = await validateProviderKey(provider, apiKey)
+    const isValid = await validateProviderKey(provider, apiKey, metadata)
     return { isValid }
   },
 } satisfies NamespaceHandlers

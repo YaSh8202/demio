@@ -33,14 +33,17 @@ export function useProviderKeys() {
     mutationFn: async ({
       provider,
       apiKey,
+      metadata,
     }: {
       provider: string
       apiKey: string
+      metadata?: Record<string, string>
     }): Promise<ProviderKeyInfo> => {
       if (!apis) throw new Error("APIs not available")
       return (await apis.providerKeys.addKey(
         provider,
-        apiKey
+        apiKey,
+        metadata
       )) as ProviderKeyInfo
     },
     onSuccess: () => {

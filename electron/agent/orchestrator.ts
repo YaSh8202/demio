@@ -29,6 +29,7 @@ import { MessageStatus } from "../store/types"
 import { type GoogleLanguageModelOptions } from "@ai-sdk/google"
 import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic"
 import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai"
+import type { AmazonBedrockLanguageModelOptions } from "@ai-sdk/amazon-bedrock"
 import log from "../lib/logger"
 
 export interface RunAgentOptions {
@@ -89,6 +90,9 @@ export async function runAgent({
         forceReasoning: true,
         reasoningEffort: "high",
       } satisfies OpenAILanguageModelChatOptions,
+      bedrock: {
+        reasoningConfig: { type: "enabled", budgetTokens: 4096 },
+      } satisfies AmazonBedrockLanguageModelOptions,
     },
   })
 

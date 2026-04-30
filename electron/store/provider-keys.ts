@@ -22,6 +22,8 @@ interface StoredKey {
   isValid: boolean
   createdAt: string
   updatedAt: string
+  /** Non-secret per-provider config (e.g. AWS region for Bedrock). */
+  metadata?: Record<string, string>
 }
 
 interface ProviderKeysFile {
@@ -31,10 +33,11 @@ interface ProviderKeysFile {
 
 export interface ProviderKeyInfo {
   id: string
-  provider: string // LLMProvider value ("openai" | "anthropic" | "google")
+  provider: string // LLMProvider value
   isValid: boolean
   createdAt: string
   updatedAt: string
+  metadata?: Record<string, string>
 }
 
 // ── State ───────────────────────────────────────────────────────────────────
@@ -103,19 +106,23 @@ function decryptKey(encryptedKey: string): string {
 
 /** Get all keys (without decrypted values) for the renderer. */
 export function getProviderKeys(): ProviderKeyInfo[] {
-  return cache.keys.map(({ id, provider, isValid, createdAt, updatedAt }) => ({
-    id,
-    provider,
-    isValid,
-    createdAt,
-    updatedAt,
-  }))
+  return cache.keys.map(
+    ({ id, provider, isValid, createdAt, updatedAt, metadata }) => ({
+      id,
+      provider,
+      isValid,
+      createdAt,
+      updatedAt,
+      metadata,
+    })
+  )
 }
 
 /** Add a new provider key. Encrypts and persists. */
 export function addProviderKey(
   provider: string,
-  apiKey: string
+  apiKey: string,
+  metadata?: Record<string, string>
 ): ProviderKeyInfo {
   // Remove existing key for this provider (one key per provider)
   cache.keys = cache.keys.filter((k) => k.provider !== provider)
@@ -128,6 +135,7 @@ export function addProviderKey(
     isValid: true,
     createdAt: now,
     updatedAt: now,
+    metadata,
   }
 
   cache.keys.push(stored)
@@ -139,6 +147,7 @@ export function addProviderKey(
     isValid: stored.isValid,
     createdAt: stored.createdAt,
     updatedAt: stored.updatedAt,
+    metadata: stored.metadata,
   }
 }
 
@@ -167,12 +176,21 @@ export function getDecryptedKey(provider: string): string | null {
   }
 }
 
+/** Get non-secret metadata stored alongside a provider key (e.g. AWS region). */
+export function getProviderKeyMetadata(
+  provider: string
+): Record<string, string> | null {
+  const stored = cache.keys.find((k) => k.provider === provider && k.isValid)
+  return stored?.metadata ?? null
+}
+
 // ── Key Validation ──────────────────────────────────────────────────────────
 
 /** Validate an API key against its provider's API. */
 export async function validateProviderKey(
   provider: string,
-  apiKey: string
+  apiKey: string,
+  metadata?: Record<string, string>
 ): Promise<boolean> {
   try {
     switch (provider) {
@@ -182,6 +200,8 @@ export async function validateProviderKey(
         return await validateAnthropic(apiKey)
       case "google":
         return await validateGoogle(apiKey)
+      case "amazon-bedrock":
+        return await validateAmazonBedrock(apiKey, metadata?.region)
       default:
         return false
     }
@@ -222,4 +242,17 @@ async function validateGoogle(apiKey: string): Promise<boolean> {
     `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
   )
   return res.ok
+}
+
+async function validateAmazonBedrock(
+  apiKey: string,
+  region: string | undefined
+): Promise<boolean> {
+  if (!region) return false
+  const res = await fetch(
+    `https://bedrock.${region}.amazonaws.com/foundation-models`,
+    { headers: { Authorization: `Bearer ${apiKey}` } }
+  )
+  // 401/403 = invalid; everything else (200, 429, 5xx, etc.) treated as valid
+  return res.status !== 401 && res.status !== 403
 }

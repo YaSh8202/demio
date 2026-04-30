@@ -9,6 +9,7 @@ export const LLMProvider = {
   OPENAI: "openai",
   ANTHROPIC: "anthropic",
   GOOGLE: "google",
+  AMAZON_BEDROCK: "amazon-bedrock",
 } as const
 
 export type LLMProvider = (typeof LLMProvider)[keyof typeof LLMProvider]
@@ -17,6 +18,7 @@ export const LLM_PROVIDER_NAMES: Record<LLMProvider, string> = {
   [LLMProvider.OPENAI]: "OpenAI",
   [LLMProvider.ANTHROPIC]: "Anthropic",
   [LLMProvider.GOOGLE]: "Google",
+  [LLMProvider.AMAZON_BEDROCK]: "Amazon Bedrock",
 }
 
 /** Model with provider context, extended from models.dev data */
@@ -44,4 +46,6 @@ export interface ProviderKeyInfo {
   isValid: boolean
   createdAt: string
   updatedAt: string
+  /** Non-secret per-provider config (e.g. AWS region for Bedrock). */
+  metadata?: Record<string, string>
 }
