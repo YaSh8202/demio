@@ -113,6 +113,10 @@ export function AddLLMKeyDialog({
     ) {
       setProvider(availableProviders[0])
     }
+    // Intentionally omit availableProviders/provider — we only react to
+    // the existingProviders set changing externally; including the others
+    // would loop on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [existingProviders])
 
   const handleSubmit = async (e: React.FormEvent) => {

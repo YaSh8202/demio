@@ -23,12 +23,19 @@ interface LiveBrowserViewProps {
    * update `wsUrl` — the keyed remount below will reconnect cleanly.
    */
   onStaleUrl?: () => void
+  /**
+   * Bumped by the parent after a refresh so the canvas remounts even when
+   * the new wsUrl string is identical to the old one (daemon restarted on
+   * the same port).
+   */
+  refreshNonce?: number
 }
 
 export function LiveBrowserView({
   wsUrl,
   className,
   onStaleUrl,
+  refreshNonce = 0,
 }: LiveBrowserViewProps) {
   // When wsUrl is null, show idle placeholder.
   // When wsUrl is set, render the StreamCanvas keyed by the URL
@@ -41,7 +48,11 @@ export function LiveBrowserView({
       )}
     >
       {wsUrl ? (
-        <StreamCanvas key={wsUrl} wsUrl={wsUrl} onStaleUrl={onStaleUrl} />
+        <StreamCanvas
+          key={`${wsUrl}#${refreshNonce}`}
+          wsUrl={wsUrl}
+          onStaleUrl={onStaleUrl}
+        />
       ) : (
         <Placeholder />
       )}

@@ -5,7 +5,7 @@
 //   2. Thread context (workspace path, project/thread, known domain)
 //   3. Inlined agent-browser SKILL.md (LLMs don't know the CLI)
 
-import agentBrowserSkill from "../../.claude/skills/agent-browser/SKILL.md?raw"
+import agentBrowserSkill from "./agent-browser-skill.md?raw"
 
 const ROLE_PROMPT = `You are Demio — an AI agent that turns a product URL + description into a polished demo video. You collaborate with the user through chat while autonomously driving a browser, writing files, and running video tools.
 

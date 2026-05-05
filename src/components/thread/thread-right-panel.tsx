@@ -18,6 +18,7 @@ export function ThreadRightPanel({
   videoPath,
 }: ThreadRightPanelProps) {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
+  const [refreshNonce, setRefreshNonce] = useState(0)
 
   // Fetch stream URL when browser tab becomes active
   useEffect(() => {
@@ -36,11 +37,13 @@ export function ThreadRightPanel({
   }, [activeTab])
 
   // Re-enable the stream when the renderer's WebSocket gives up reconnecting
-  // (daemon was killed by `agent-browser close --all` or crashed).
+  // (daemon was killed by `agent-browser close --all` or crashed). Bump the
+  // nonce so the canvas remounts even if the daemon restarted on the same port.
   const handleStaleUrl = useCallback(() => {
     if (!apis) return
     apis.stream.refresh().then((info) => {
       setWsUrl(info?.wsUrl ?? null)
+      setRefreshNonce((n) => n + 1)
     })
   }, [])
 
@@ -75,6 +78,7 @@ export function ThreadRightPanel({
           wsUrl={wsUrl}
           className="size-full rounded-md"
           onStaleUrl={handleStaleUrl}
+          refreshNonce={refreshNonce}
         />
       </TabsContent>
 

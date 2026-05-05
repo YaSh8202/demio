@@ -98,6 +98,12 @@ function ProviderSidebar({
     setButtonRefs((prev) => prev.slice(0, providers.length))
   }, [providers.length])
 
+  // Read DOM rects synchronously during render so the active/hover
+  // overlays animate to the correct position on the same paint as the
+  // buttons themselves. The eslint rule warns about refs-during-render
+  // generally, but for layout-driven animations this is the established
+  // framer-motion pattern.
+  // eslint-disable-next-line react-hooks/refs
   const navRect = navRef.current?.getBoundingClientRect()
   const activeIndex = providers.findIndex((p) => p.id === activeProvider)
   const activeRect = buttonRefs[activeIndex]?.getBoundingClientRect()
@@ -257,7 +263,9 @@ export function ModelSelectorPopover({
     return activeProvider?.models ?? []
   }, [availableProviders, activeProviderTab, searchQuery])
 
-  // Sync provider tab when popover opens
+  // Sync provider tab when popover opens. Derive from the open transition
+  // edge — setState calls below are guarded so they only run on the open
+  // edge, not on every effect re-run.
   const prevOpenRef = useRef(false)
   useEffect(() => {
     const wasOpen = prevOpenRef.current
@@ -267,6 +275,7 @@ export function ModelSelectorPopover({
         selectedModelInfo &&
         availableProviders.some((p) => p.id === selectedModelInfo.provider)
       ) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setActiveProviderTab(selectedModelInfo.provider)
       } else if (availableProviders.length > 0) {
         setActiveProviderTab(availableProviders[0].id)

@@ -214,5 +214,10 @@ export function invalidateStreamCache(): void {
  */
 export async function refreshStream(): Promise<StreamInfo | null> {
   invalidateStreamCache()
-  return enableStream()
+  const info = await enableStream()
+  log.log(
+    `[stream] Refresh →`,
+    info ? `port ${info.port}` : "null (daemon unreachable)"
+  )
+  return info
 }

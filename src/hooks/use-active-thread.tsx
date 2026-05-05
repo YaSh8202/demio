@@ -93,12 +93,29 @@ export function ActiveThreadProvider({
     selectedModelRef.current = meta?.selectedModel ?? ""
   }, [meta])
 
-  // Build the transport once per thread (keyed via `useChat`'s `id`).
-  // const transport = useMemo(
-  //   () =>
-  //     ,
-  //   [projectId]
-  // )
+  // Build the transport once per project. The refs are passed by reference
+  // and only read later when ai-sdk invokes the fetch/prepare callbacks
+  // (event-handler-like context), so the lint rule against ref-during-render
+  // doesn't apply here.
+  const transport = useMemo(
+    () =>
+      // eslint-disable-next-line react-hooks/refs
+      new DefaultChatTransport<UIMessage>({
+        api: "ipc://agent",
+        // eslint-disable-next-line react-hooks/refs
+        fetch: createIpcChatFetch(projectId, threadIdRef),
+        prepareSendMessagesRequest: ({ messages }) => ({
+          body: {
+            message: messages.at(-1),
+            modelId: selectedModelRef.current || undefined,
+          },
+        }),
+        prepareReconnectToStreamRequest: ({ id }) => ({
+          api: `ipc://agent/${id}/stream`,
+        }),
+      }),
+    [projectId]
+  )
 
   const {
     messages,
@@ -109,18 +126,14 @@ export function ActiveThreadProvider({
     error: chatError,
   } = useChat<UIMessage>({
     id: threadId ?? undefined,
+    // Wait for persisted messages to load before resuming. Otherwise
+    // resumeStream races with `setMessages(loaded)` from the load effect
+    // and any in-flight assistant content streamed in via reconnect gets
+    // wiped when we replay disk messages.
+    resume: isLoaded,
     messages: initialMessages,
     generateId,
-    transport: new DefaultChatTransport<UIMessage>({
-      api: "ipc://agent",
-      fetch: createIpcChatFetch(projectId, threadIdRef),
-      prepareSendMessagesRequest: ({ messages }) => ({
-        body: {
-          message: messages.at(-1),
-          modelId: selectedModelRef.current || undefined,
-        },
-      }),
-    }),
+    transport,
     experimental_throttle: 50,
   })
 

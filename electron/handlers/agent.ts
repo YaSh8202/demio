@@ -17,6 +17,15 @@ import {
 } from "../store"
 import { runAgent } from "../agent/orchestrator"
 import { startSession, cancelSession } from "../agent/sessions"
+import {
+  appendChunk,
+  clearRun,
+  endRun,
+  errorRun,
+  getActiveRunSnapshot,
+  runKey,
+  startRun,
+} from "../agent/runs"
 import { DEFAULT_MODEL_ID } from "../agent/types"
 import type { UIMessage, MessageMetadata } from "../store/types"
 import { MessageStatus } from "../store/types"
@@ -67,7 +76,18 @@ export const agentHandlers = {
     const signal = startSession(projectId, threadId)
     const messages = getMessages(projectId, threadId)
 
+    // Buffer this run in main so a refreshed renderer can reattach via
+    // `agent.reconnect`. Replaces any prior buffered entry for this thread.
+    const key = runKey(projectId, threadId)
+    clearRun(key)
+    startRun(key, runId)
+
     const decoder = new TextDecoder()
+
+    const emitChunk = (decoded: string) => {
+      const seq = appendChunk(key, runId, decoded)
+      broadcast("agent:onChunk", runId, decoded, seq)
+    }
 
     const pump = async () => {
       try {
@@ -81,6 +101,7 @@ export const agentHandlers = {
 
         const reader = response.body?.getReader()
         if (!reader) {
+          endRun(key, runId)
           broadcast("agent:onEnd", runId)
           return
         }
@@ -89,15 +110,17 @@ export const agentHandlers = {
           const { value, done } = await reader.read()
           if (done) break
           if (value && value.byteLength > 0) {
-            broadcast("agent:onChunk", runId, decoder.decode(value, { stream: true }))
+            emitChunk(decoder.decode(value, { stream: true }))
           }
         }
         const tail = decoder.decode()
-        if (tail) broadcast("agent:onChunk", runId, tail)
+        if (tail) emitChunk(tail)
+        endRun(key, runId)
         broadcast("agent:onEnd", runId)
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error)
         log.error("[agent] run failed:", error)
+        errorRun(key, runId, msg)
         broadcast("agent:onError", runId, msg)
       }
     }
@@ -107,12 +130,29 @@ export const agentHandlers = {
     return { runId }
   },
 
+  /**
+   * Return a snapshot of the in-flight (or recently-finished) run for this
+   * thread, or null if there is none. The renderer uses this on mount to
+   * resume an interrupted stream after a refresh.
+   */
+  reconnect: async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    threadId: string
+  ) => {
+    return getActiveRunSnapshot(runKey(projectId, threadId))
+  },
+
   cancel: async (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
     threadId: string
   ) => {
     cancelSession(projectId, threadId)
+    // Drop the buffered run so a refresh after cancel doesn't replay
+    // partial content from a deliberately stopped stream. The pump's
+    // own errorRun call no-ops because the entry is already gone.
+    clearRun(runKey(projectId, threadId))
     return { cancelled: true }
   },
 } satisfies NamespaceHandlers

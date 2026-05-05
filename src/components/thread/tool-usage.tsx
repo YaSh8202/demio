@@ -261,17 +261,6 @@ function getPathBasename(filePath?: string): string | undefined {
   return segments.at(-1) || normalized
 }
 
-function getPathDirname(filePath?: string): string | undefined {
-  const normalized = normalizePath(filePath)?.replace(/\/+$/, "")
-  if (!normalized) return undefined
-
-  const index = normalized.lastIndexOf("/")
-  if (index < 0) return undefined
-  if (index === 0) return "/"
-
-  return normalized.slice(0, index)
-}
-
 type ToolClusterKind = "read" | "edit" | "terminal" | "other"
 
 function getClusterKind(part: ThreadToolPart): ToolClusterKind {
@@ -423,7 +412,6 @@ function ReadToolRow({ part }: { part: ThreadToolPart }) {
 
   return (
     <CompactToolSummary
-      directory={getPathDirname(filePath)}
       error={part.errorText}
       label="Read"
       meta={meta}

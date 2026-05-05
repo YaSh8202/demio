@@ -112,10 +112,6 @@ export class BrowserStream {
     this.intentionalClose = false
     this.clearReconnectTimer()
 
-    // Reset stale-URL counter — a fresh `connect` call (e.g. after refresh)
-    // means the parent gave us a new URL and we should retry from scratch.
-    this.failedReconnects = 0
-
     // Close existing connection if any
     if (this.ws) {
       this.ws.onopen = null
@@ -171,6 +167,7 @@ export class BrowserStream {
     this.intentionalClose = true
     this.clearReconnectTimer()
     this.failedReconnects = 0
+    this.reconnectDelay = 1000
 
     if (this.ws) {
       this.ws.onopen = null

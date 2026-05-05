@@ -11,7 +11,7 @@
 import type { NamespaceEvents, EventCallback } from "../constants"
 
 export const agentEvents = {
-  /** Fired with (runId: string, chunk: Uint8Array) for each SSE chunk. */
+  /** Fired with (runId: string, chunk: string, seq: number) for each SSE chunk. */
   onChunk: (_callback: EventCallback) => {
     return () => {}
   },

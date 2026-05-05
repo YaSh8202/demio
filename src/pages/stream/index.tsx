@@ -14,6 +14,7 @@ import { apis, isElectron, appInfo } from "@/types/electron-api"
 
 export function StreamPage() {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
+  const [refreshNonce, setRefreshNonce] = useState(0)
   const [browserResult, setBrowserResult] = useState("")
   const [browserLoading, setBrowserLoading] = useState(false)
   const isMac = appInfo?.platform === "darwin"
@@ -37,11 +38,13 @@ export function StreamPage() {
   }, [])
 
   // Re-enable the stream when the renderer's WebSocket gives up reconnecting
-  // (daemon was killed by `agent-browser close --all` or crashed).
+  // (daemon was killed by `agent-browser close --all` or crashed). Bump the
+  // nonce so the canvas remounts even if the daemon restarted on the same port.
   const handleStaleUrl = useCallback(() => {
     if (!apis) return
     apis.stream.refresh().then((info) => {
       setWsUrl(info?.wsUrl ?? null)
+      setRefreshNonce((n) => n + 1)
     })
   }, [])
 
@@ -209,6 +212,7 @@ export function StreamPage() {
             wsUrl={wsUrl}
             className="h-full w-full"
             onStaleUrl={handleStaleUrl}
+            refreshNonce={refreshNonce}
           />
         </div>
       </div>
