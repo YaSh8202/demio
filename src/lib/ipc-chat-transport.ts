@@ -74,7 +74,12 @@ async function handleReconnect(
     threadId
   )) as ReconnectSnapshot | null
 
-  if (!snap) {
+  // For non-running snapshots (ended, errored, or cancelled), the
+  // orchestrator's onFinish has already persisted the final/partial
+  // assistant message to disk. The thread loader picks it up; replaying
+  // the buffer here would just duplicate work and risk surfacing a
+  // spurious error state for runs the user explicitly cancelled.
+  if (!snap || snap.state !== "running") {
     return new Response(null, { status: 204 })
   }
 

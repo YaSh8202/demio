@@ -149,10 +149,12 @@ export const agentHandlers = {
     threadId: string
   ) => {
     cancelSession(projectId, threadId)
-    // Drop the buffered run so a refresh after cancel doesn't replay
-    // partial content from a deliberately stopped stream. The pump's
-    // own errorRun call no-ops because the entry is already gone.
-    clearRun(runKey(projectId, threadId))
+    // Don't clearRun here — the agent's stream takes a few seconds to
+    // actually drain after abort, and we want a refresh during that
+    // window to still pick up the partial via reconnect. The pump's
+    // own end/errorRun keeps the buffer for the 60s grace, and the
+    // orchestrator's onFinish persists the partial to disk for the
+    // post-drain refresh path.
     return { cancelled: true }
   },
 } satisfies NamespaceHandlers

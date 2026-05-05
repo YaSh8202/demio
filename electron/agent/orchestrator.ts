@@ -13,6 +13,7 @@ import {
   stepCountIs,
   hasToolCall,
   convertToModelMessages,
+  isToolUIPart,
 } from "ai"
 import type { UIMessage as AISdkUIMessage } from "ai"
 import { getModel } from "./providers"
@@ -97,7 +98,9 @@ export async function runAgent({
   })
 
   const result = await agent.stream({
-    messages: await convertToModelMessages(messages),
+    messages: await convertToModelMessages(messages, {
+      ignoreIncompleteToolCalls: true,
+    }),
     abortSignal: signal,
   })
 
@@ -108,21 +111,46 @@ export async function runAgent({
   return result.toUIMessageStreamResponse<AISdkUIMessage<MessageMetadata>>({
     sendReasoning: true,
     onFinish: ({ responseMessage, isAborted }) => {
-      if (isAborted || !responseMessage || responseMessage.role !== "assistant")
-        return
+      if (!responseMessage || responseMessage.role !== "assistant") return
+      // If the user cancelled before the model produced anything, skip
+      // persisting an empty assistant message — it would clutter the thread
+      // and confuse follow-up turns.
+      if (!responseMessage.parts || responseMessage.parts.length === 0) return
 
       const metadata: MessageMetadata = {
         modelId,
         totalUsage: null,
         cost: null,
-        status: MessageStatus.COMPLETE,
+        status: isAborted ? MessageStatus.CANCELLED : MessageStatus.COMPLETE,
         messageTokens: 0,
       }
+
+      // Rewrite tool parts that never reached a terminal state into
+      // `output-error` so the persisted message is self-consistent — every
+      // tool-call has a matching tool-result. Without this, an abort
+      // mid-execution leaves an `input-available` tool part on disk and the
+      // next turn's convertToModelMessages emits an orphan tool-call,
+      // throwing MissingToolResultsError.
+      const sanitizedParts = responseMessage.parts.map((part) => {
+        if (!isToolUIPart(part)) return part
+        if (
+          part.state === "input-streaming" ||
+          part.state === "input-available" ||
+          part.state === "approval-requested"
+        ) {
+          return {
+            ...part,
+            state: "output-error",
+            errorText: "Stopped by user",
+          }
+        }
+        return part
+      }) as typeof responseMessage.parts
 
       appendMessage(projectId, threadId, {
         id: responseMessage.id,
         role: "assistant",
-        parts: responseMessage.parts,
+        parts: sanitizedParts,
         metadata,
       } as AISdkUIMessage<MessageMetadata>)
     },
