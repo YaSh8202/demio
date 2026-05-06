@@ -62,16 +62,20 @@ Read the user's request. Identify the product domain and the specific flow to sh
 If the request is ambiguous (e.g. "demo my product" with no domain), ask one clarifying question in chat and stop.
 
 ## 2. Discovery
-Use \`agent-browser\` to explore the product:
-- Set a small viewport before discovery: \`agent-browser set viewport 1280 800\`. This keeps screenshot dimensions (and therefore token cost) bounded.
-- \`agent-browser open <domain>\` then \`agent-browser snapshot -i\` to understand the landing page.
-- Navigate to the key pages relevant to the demo flow.
-- Capture screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`
-- This captures the viewport (1280×800), NOT the full scrollable page. For below-the-fold content, scroll then re-capture: \`agent-browser scroll down 600\` then screenshot again.
-- Avoid \`--full\` on long pages. Only use it when the page is short (≤2 viewports tall) AND you actually need the whole page. Always keep \`--screenshot-format jpeg --screenshot-quality 80\` when you do.
-- Use \`read\` to inspect screenshots. Write notes to \`discovery/notes.md\` using \`edit\` summarising: navigation structure, key UI elements, auth requirements, any blockers.
+Use \`agent-browser\` to explore the product. **Default to \`snapshot -i\`; only \`screenshot\` when you need to *see* the rendering.** A snapshot is a text accessibility tree (~1–5k tokens) and is enough to understand structure, find selectors, and plan the demo flow. A screenshot is an image (10–250k tokens) — reserve it for moments where pixels matter.
 
-Keep discovery tight — 3–8 pages at most. If the flow needs authentication you cannot satisfy, surface this in chat.
+- Set a small viewport before discovery: \`agent-browser set viewport 1280 800\`.
+- \`agent-browser open <domain>\` then \`agent-browser snapshot -i\` and \`read\` the snapshot. Roles, names, and \`@eN\` refs come from this.
+- Navigate to each key page in the flow and \`snapshot -i\` it. Most pages need 1 snapshot and 0 screenshots.
+- Take a \`screenshot\` ONLY when:
+  - You need to verify visual layout, branding, or styling (e.g. "is the hero section visually engaging?").
+  - The snapshot is missing semantic info (canvas, image-only content, complex visualizations).
+  - You're checking the result of an interaction that is purely visual.
+- When you do screenshot: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`. Captures the viewport (1280×800). For below-the-fold content, scroll then re-capture: \`agent-browser scroll down 600\` then screenshot again.
+- NEVER \`--full\` on long pages — a single full-page PNG can exceed 250k tokens and crash the agent.
+- Use \`read\` to inspect screenshots only when you need them. Write notes to \`discovery/notes.md\` using \`edit\` summarising: navigation structure, key UI elements, auth requirements, any blockers.
+
+Keep discovery tight — 3–8 pages at most. Reserve screenshots for the 1–2 hero/visual moments you'll feature in the demo. If the flow needs authentication you cannot satisfy, surface this in chat.
 
 ## 3. Script draft + user approval (HARD GATE)
 Write \`script.md\` using \`edit\`. Structure it as a numbered list of scenes. Each scene has:
@@ -103,14 +107,17 @@ agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" \
   --log-actions "$WORKSPACE/scenes/scene-<NN>.actions.jsonl" \
   || fail "record start failed"
 
-echo "Step: <description>"
-agent-browser find text "Button Label" click || fail "could not find 'Button Label'"
+echo "Step: open Login button"
+agent-browser find role button --name "Login" --exact click \
+  || fail "could not click 'Login' button"
 
-echo "Step: <description>"
-agent-browser find label "Field Name" fill "value" || fail "could not find 'Field Name' field"
+echo "Step: fill email"
+agent-browser find label "Email" fill "demo@example.com" \
+  || fail "could not fill 'Email' field"
 
-echo "Step: waiting for <thing>"
-agent-browser wait --text "Expected Text" || fail "'Expected Text' did not appear"
+echo "Step: waiting for dashboard heading"
+agent-browser find role heading --name "Dashboard" --exact \
+  || fail "'Dashboard' heading did not appear"
 
 agent-browser wait 1000
 agent-browser record stop || fail "record stop failed"
@@ -118,10 +125,16 @@ agent-browser record stop || fail "record stop failed"
 
 Key rules for the script:
 - \`set -euo pipefail\` — any failing command aborts the script immediately
-- Use **semantic locators** (\`find text\`, \`find role\`, \`find label\`, \`find placeholder\`) — they search the current DOM and never go stale
+- **Locator selection (priority order):**
+  1. Clickable controls → \`find role button --name "Save" --exact click\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
+  2. Form inputs → \`find label "Email" fill "..."\` or \`find placeholder "Search..."\`.
+  3. Non-interactive text waits → \`find text "Loaded" --exact\`.
+  4. Last resort: take a fresh \`agent-browser snapshot -i\` *inside* the scene script (after \`record start\`) and use the returned \`@eN\` refs.
+- **NEVER** write \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button --name "Login" --exact click\` instead.
+- **Before drafting each scene script**, run \`agent-browser snapshot -i\` against the scene URL and read it. Pick selectors based on the roles you see — that is the only way to know whether "Save" is a \`button\`, \`menuitem\`, or \`link\`.
+- If \`agent-browser\` returns \`✗ Ambiguous … match\`, do NOT retry blindly. Read the listed candidates from the error, then switch to a more specific selector (\`find role …\`, \`--exact\`, or \`find nth N\`).
 - Append \`|| fail "description"\` to every interaction line for a clear error message
 - \`echo "Step: …"\` before each interaction so the log shows exactly where a failure happened
-- Use \`@refs\` only if semantic locators are insufficient; if so, take \`snapshot -i\` inside the script (after \`record start\`) and use only those fresh refs
 
 **b. Run the script** via \`bash $WORKSPACE/scenes/scene-<NN>.sh\` in the terminal tool.
 - If \`ok: false\`, the log shows exactly which step failed — fix the locator or wait condition and re-run.
@@ -162,10 +175,10 @@ Never regenerate the entire video for a single-scene change.
 - **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
-- **Semantic locators in recording**: always prefer \`agent-browser find text "…" click\`, \`find role button "Name"\`, \`find label "Field"\`, \`find placeholder "…"\` over \`@refs\` in scene scripts. Refs are invalidated on every navigation; semantic locators always search the live DOM.
+- **Snapshot before scripting**: every scene script in phase 4 must be preceded by a fresh \`agent-browser snapshot -i\` of the scene URL so you can pick selectors based on actual roles. Never invent a \`find role …\` selector from memory.
 - **Scene scripts only**: never record a scene as a one-liner \`&&\`-chain. Always write a \`.sh\` file with \`set -euo pipefail\` so failures abort immediately and are visible to you.
 - **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
-- **Screenshots: JPEG quality 80, viewport-only, 1280×800 viewport.** ALWAYS pass \`--screenshot-format jpeg --screenshot-quality 80\`. NEVER use \`--full\` on long pages — a single full-page PNG of a long landing page can exceed 250k tokens and crash the agent. For tall pages, scroll viewport-by-viewport and capture each frame separately. Only switch to \`set viewport 1920 1080\` at the start of phase 4 (Recording); keep discovery at 1280×800.
+- **Screenshot economics**: prefer \`snapshot -i\` (text, cheap) over \`screenshot\` (image, expensive). When a screenshot is genuinely needed: JPEG quality 80, viewport-only, 1280×800. NEVER \`--full\` on long pages — scroll viewport-by-viewport instead. Only switch viewport to 1920×1080 at the start of phase 4 (Recording).
 `
 
 /**

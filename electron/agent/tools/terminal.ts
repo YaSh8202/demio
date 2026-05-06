@@ -98,6 +98,36 @@ function linkExe(
   }
 }
 
+// ── Action-log path extraction ──────────────────────────────────────────────
+
+/**
+ * Find action-log JSONL files that were touched while the command was
+ * running. Looks under `<workspace>/scenes/` for `*.actions.jsonl` files with
+ * mtime ≥ startMs. Handles both direct `--log-actions` invocations and the
+ * common case where the flag lives inside a scene `.sh` script.
+ */
+function findRecentActionLogs(workspace: string, startMs: number): string[] {
+  const dir = path.join(workspace, "scenes")
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(dir)
+  } catch {
+    return []
+  }
+  const out: string[] = []
+  for (const name of entries) {
+    if (!name.endsWith(".actions.jsonl")) continue
+    const full = path.join(dir, name)
+    try {
+      const stat = fs.statSync(full)
+      if (stat.mtimeMs >= startMs - 1000) out.push(full)
+    } catch {
+      /* ignore */
+    }
+  }
+  return out
+}
+
 // ── Output truncation ───────────────────────────────────────────────────────
 
 const MAX_OUTPUT_BYTES = 20_000
@@ -261,6 +291,48 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
             .split("\n")
             .filter((line) => line.trimStart().startsWith("✗ "))
             .map((line) => line.trim())
+
+          // Pull failed actions out of any action-log JSONL files that
+          // agent-browser wrote during this command. Catches scene scripts
+          // that invoked `record start --log-actions …` from a `.sh` file —
+          // the bash stdout would otherwise hide per-action failures.
+          for (const resolved of findRecentActionLogs(cwd, start)) {
+            try {
+              const stat = fs.statSync(resolved)
+              if (stat.size === 0 || stat.size > 200_000) continue
+              const content = fs.readFileSync(resolved, "utf8")
+              for (const line of content.split("\n")) {
+                if (!line.trim()) continue
+                try {
+                  const entry = JSON.parse(line) as {
+                    action?: string
+                    args?: unknown
+                    target?: { x?: number; y?: number }
+                    tsMs?: number
+                    ok?: boolean
+                  }
+                  if (entry.ok === false) {
+                    const tx = entry.target?.x ?? "?"
+                    const ty = entry.target?.y ?? "?"
+                    const argStr = JSON.stringify(entry.args ?? {}).slice(
+                      0,
+                      120
+                    )
+                    agentBrowserErrors.push(
+                      `✗ scene action failed: ${entry.action ?? "?"} target=(${tx},${ty}) tsMs=${entry.tsMs ?? "?"} args=${argStr}`
+                    )
+                  }
+                } catch {
+                  /* skip malformed line */
+                }
+              }
+            } catch (err) {
+              log.warn(
+                `[terminal] could not read action log ${resolved}:`,
+                err
+              )
+            }
+          }
 
           resolve({
             ok: code === 0 && !aborted && !timedOut && agentBrowserErrors.length === 0,

@@ -34,23 +34,30 @@ agent-browser skills get agentcore         # AWS Bedrock AgentCore cloud browser
 Run `agent-browser skills list` to see everything available on the
 installed version.
 
-## Demo Mode
+## Recording demo videos
 
-For creating high-quality, human-like demo videos, you can enable Demo Mode by passing the `--demo-mode` flag or setting the `AGENT_BROWSER_DEMO_MODE=1` environment variable.
+Recording is **natural-looking by default**. `agent-browser record start <path>` automatically:
+- Injects a visible cursor that animates to each click/hover/fill target.
+- Types text one character at a time with realistic jitter.
+- Captures at 30 FPS via CDP screenshots piped to ffmpeg.
 
-```bash
-# Enable Demo Mode globally for the session
-export AGENT_BROWSER_DEMO_MODE=1
+Useful flags on `record start` / `record restart`:
+- `--log-actions <path>` — append a JSONL line per user action with shape
+  `{action, args, target:{x,y}, tsMs, frameIdx, durationMs, ok}`. Use this for
+  voiceover/annotation alignment, and so the demio agent surfaces failed
+  actions back to chat.
+- `--robotic` — opt out of natural mode (instant cursor, no typing jitter).
+- `--auto-cursor` / `--no-auto-cursor` — toggle the cursor independently.
 
-agent-browser record start ./demo.webm
-# ... your automation steps ...
-agent-browser record stop
-```
+Disambiguating element lookups:
+- `find text` now refuses to silently pick when multiple leaves match. Use
+  `find role button --name "Save" --exact click` for buttons, `find role link
+  --name "Login" --exact click` for links. Pass `--allow-ambiguous` only when
+  you genuinely want first-match-wins behaviour.
 
-**Features included in Demo Mode:**
-- **Auto Cursor Positioning:** A visible CSS cursor (red dot) is injected into the page and smoothly transitions to the target element's center before `click`, `type`, `hover`, or `fill` actions.
-- **Human-like Typing Delays:** Enforces a natural typing delay (50ms per keystroke) for all typing actions.
-- **Action Timing Logs:** A structured JSON log of all actions (including `timestamp`, `video_time_ms`, `duration_ms`, `x`, `y` coordinates) is automatically dumped to the console when the recording is stopped or if an action fails. This is highly useful for aligning voiceovers or annotations with the video.
+There is **no `AGENT_BROWSER_DEMO_MODE` env var** and **no `--demo-mode` flag** —
+earlier docs described one; ignore. Locator selection guidance lives in the
+Demio system prompt; do not duplicate it here.
 
 ## Why agent-browser
 
