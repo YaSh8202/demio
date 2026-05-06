@@ -1,6 +1,8 @@
 import { app, BrowserWindow, net, protocol } from "electron"
 import path from "path"
 import { pathToFileURL } from "url"
+import { config as loadDotenv } from "dotenv"
+loadDotenv({ path: [".env.local", ".env"], quiet: true })
 import log from "./lib/logger"
 import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"
@@ -11,6 +13,7 @@ import { initProviderKeys } from "./store/provider-keys"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 import { enableStream, disableStream } from "./lib/agent-browser/stream"
 import { registerSecurityRestrictions } from "./security/restrictions"
+import { initPhoenix, shutdownPhoenix } from "./observability/phoenix"
 
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string
 declare const MAIN_WINDOW_VITE_NAME: string
@@ -64,6 +67,9 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 app.on("ready", () => {
+  // Initialize Phoenix tracing first so any spans from later init are captured
+  initPhoenix()
+
   // Register demio-file:// protocol for serving local files (videos, etc.)
   protocol.handle("demio-file", (req) => {
     const filePath = decodeURIComponent(
@@ -112,13 +118,26 @@ app.on("window-all-closed", () => {
   }
 })
 
-app.on("before-quit", () => {
+let cleanupDone = false
+app.on("before-quit", (event) => {
+  if (cleanupDone) return
+  event.preventDefault()
+
   // Disable the stream server before closing sessions
   disableStream()
   // Close all agent-browser sessions and stop the daemon
   stopDaemon()
   // Flush any pending debounced writes to disk before exit
   flushSharedStorage()
+
+  // Flush queued Phoenix spans, but don't hang quit if the collector is slow
+  Promise.race([
+    shutdownPhoenix(),
+    new Promise<void>((resolve) => setTimeout(resolve, 2000)),
+  ]).finally(() => {
+    cleanupDone = true
+    app.quit()
+  })
 })
 
 app.on("activate", () => {

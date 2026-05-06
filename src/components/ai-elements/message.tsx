@@ -320,6 +320,8 @@ export type MessageResponseProps = ComponentProps<typeof Streamdown>
 
 const streamdownPlugins = { cjk, code, math, mermaid }
 
+const messageResponseControls = { code: false } as const
+
 export const MessageResponse = memo(
   ({ className, ...props }: MessageResponseProps) => (
     <Streamdown
@@ -327,6 +329,7 @@ export const MessageResponse = memo(
         "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
         className
       )}
+      controls={messageResponseControls}
       plugins={streamdownPlugins}
       {...props}
     />

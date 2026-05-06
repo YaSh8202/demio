@@ -31,6 +31,7 @@ import { type GoogleLanguageModelOptions } from "@ai-sdk/google"
 import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic"
 import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai"
 import type { AmazonBedrockLanguageModelOptions } from "@ai-sdk/amazon-bedrock"
+import { isPhoenixEnabled } from "../observability/phoenix"
 import log from "../lib/logger"
 
 export interface RunAgentOptions {
@@ -74,6 +75,19 @@ export async function runAgent({
     instructions: systemPromptText,
     tools: { terminal, present_files, read, edit },
     stopWhen: [stepCountIs(50), hasToolCall("present_files")],
+    experimental_telemetry: {
+      isEnabled: isPhoenixEnabled(),
+      functionId: "demio.agent.run",
+      metadata: {
+        "session.id": threadId,
+        "user.id": projectId,
+        projectId,
+        threadId,
+        modelId,
+        projectTitle: project?.project.name ?? "",
+        threadTitle: thread?.title ?? "",
+      },
+    },
     providerOptions: {
       google: {
         thinkingConfig: {
