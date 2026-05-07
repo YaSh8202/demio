@@ -101,38 +101,66 @@ For each scene in the approved \`script.md\` (use \`read\` to inspect it):
 set -euo pipefail
 fail() { echo "ERROR: $*" >&2; exit 1; }
 
+# Trap EXIT so a mid-scene failure still tears down the recording task in the
+# daemon. Without this, set -e leaves the daemon in 'recording active' state
+# and re-running the scene errors with "Recording already active".
+trap 'agent-browser record stop 2>/dev/null || true' EXIT
+
 agent-browser set viewport 1920 1080
 agent-browser open <scene-url>
 agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" \
   --log-actions "$WORKSPACE/scenes/scene-<NN>.actions.jsonl" \
   || fail "record start failed"
 
-echo "Step: open Login button"
-agent-browser find role button --name "Login" --exact click \
-  || fail "could not click 'Login' button"
+# Snapshot AFTER record start so the @eN refs you reference below are
+# stable and the snapshot itself appears in the recorded video.
+agent-browser snapshot -i > "$WORKSPACE/scenes/scene-<NN>.snapshot.txt" \
+  || fail "snapshot failed"
+
+echo "Step: submit login form"
+# Form submits: prefer 'form button[type=submit]' over find-role to dodge
+# OAuth buttons, hydration-duplicate buttons, and shadcn responsive spans.
+agent-browser click 'form button[type="submit"]' \
+  || fail "could not submit login form"
+
+# After a click that should land on a same-origin destination, verify URL.
+# An unexpected redirect (accounts.google.com, github.com/login) means the
+# click hit an OAuth button — fail loudly so you can fix the locator.
+agent-browser wait --url "**/dashboard*" --timeout 5000 \
+  || fail "unexpected post-submit URL (likely OAuth redirect)"
 
 echo "Step: fill email"
 agent-browser find label "Email" fill "demo@example.com" \
   || fail "could not fill 'Email' field"
 
-echo "Step: waiting for dashboard heading"
+echo "Step: wait for dashboard to settle"
+# Replaces 'wait 1000' magic numbers — resolves when MutationObserver sees
+# no DOM changes for 500ms (with a sane upper-bound timeout).
+agent-browser wait --stable 500 --timeout 5000 \
+  || fail "dashboard never settled"
+
+echo "Step: confirm dashboard heading"
 agent-browser find role heading --name "Dashboard" --exact \
   || fail "'Dashboard' heading did not appear"
 
-agent-browser wait 1000
 agent-browser record stop || fail "record stop failed"
 \`\`\`
 
 Key rules for the script:
 - \`set -euo pipefail\` — any failing command aborts the script immediately
-- **Locator selection (priority order):**
-  1. Clickable controls → \`find role button --name "Save" --exact click\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
-  2. Form inputs → \`find label "Email" fill "..."\` or \`find placeholder "Search..."\`.
-  3. Non-interactive text waits → \`find text "Loaded" --exact\`.
-  4. Last resort: take a fresh \`agent-browser snapshot -i\` *inside* the scene script (after \`record start\`) and use the returned \`@eN\` refs.
-- **NEVER** write \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button --name "Login" --exact click\` instead.
-- **Before drafting each scene script**, run \`agent-browser snapshot -i\` against the scene URL and read it. Pick selectors based on the roles you see — that is the only way to know whether "Save" is a \`button\`, \`menuitem\`, or \`link\`.
-- If \`agent-browser\` returns \`✗ Ambiguous … match\`, do NOT retry blindly. Read the listed candidates from the error, then switch to a more specific selector (\`find role …\`, \`--exact\`, or \`find nth N\`).
+- \`trap 'agent-browser record stop 2>/dev/null || true' EXIT\` — required so failures don't leak the recording task. Always include this on the line below \`fail()\`.
+- **Locator priority (highest reliability first):**
+  1. **Snapshot refs**: take \`agent-browser snapshot -i\` immediately after \`record start\`, then \`click @eN\` against the ref shown in the tree. Most precise selector — never misfires on responsive duplicates or hydration ghosts.
+  2. **Form submits**: for any button inside a \`<form>\` (login, sign-up, search), prefer \`agent-browser click 'form button[type="submit"]'\`. Dodges OAuth buttons (Google, GitHub), hydration-duplicate buttons, and shadcn responsive spans.
+  3. **Other clickable controls** → \`find role button --name "Save" --exact click\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
+  4. **Form inputs** → \`find label "Email" fill "..."\` or \`find placeholder "Search..."\`.
+  5. **Non-interactive text waits** → \`find text "Loaded" --exact\`.
+- **NEVER** write \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button --name "Login" --exact click\` or a snapshot ref instead.
+- **OAuth detection**: after every click that should keep you on the same origin, follow with \`agent-browser wait --url '<expected-pattern>' --timeout 5000 || fail "unexpected redirect"\`. If the URL becomes \`accounts.google.com\` / \`github.com/login\` / similar, the click hit an OAuth button — re-open the original URL and switch to \`click 'form button[type="submit"]'\`.
+- **Before drafting each scene script**, run \`agent-browser snapshot -i\` against the scene URL and read it. Pick selectors (and \`@eN\` refs for ambiguous targets) based on the roles you see. Never invent a \`find role …\` selector from memory.
+- **DO NOT retry blindly with another role or \`find nth N\`** when a locator fails. If \`find role <X>\` returns "Ambiguous" or "Element not found", re-snapshot and use \`click @eN\` from the snapshot. \`find nth\` with a positional guess is the leading cause of clicking the wrong button (most often the OAuth button next to the form submit).
+- **Locator failure ≠ bad credentials**. If a click fails or auth seems to fail, you have NOT proven the user's input is wrong. Exhaust this list before saying so: (1) snapshot \`@eN\` ref, (2) \`click 'form button[type="submit"]'\`, (3) \`find role button --exact\`, (4) \`find label\` for inputs. Only after a successful submit produces an explicit on-page error message ("invalid email or password") may you conclude credentials are wrong.
+- Prefer \`wait --stable <ms>\` or \`wait --text "<known>"\` over magic \`wait <ms>\` sleeps. Use \`wait --url '<pattern>' --timeout <ms>\` after navigation-causing clicks.
 - Append \`|| fail "description"\` to every interaction line for a clear error message
 - \`echo "Step: …"\` before each interaction so the log shows exactly where a failure happened
 
