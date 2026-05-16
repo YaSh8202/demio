@@ -20,7 +20,11 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { ModelSelectorLogo } from "@/components/ai-elements/model-selector"
 import { AddLLMKeyDialog } from "@/components/add-llm-key-dialog"
 import { useModels } from "@/hooks/use-models"
@@ -154,7 +158,7 @@ function ProviderSidebar({
             {hoveredRect && navRect && hoveredIndex !== activeIndex && (
               <motion.div
                 key="hover"
-                className="absolute left-0 top-0 z-10 rounded-md bg-muted"
+                className="absolute top-0 left-0 z-10 rounded-md bg-muted"
                 initial={{ opacity: 0 }}
                 animate={{
                   opacity: 1,
@@ -173,7 +177,7 @@ function ProviderSidebar({
           <AnimatePresence>
             {activeRect && navRect && (
               <motion.div
-                className="absolute left-0 top-0 z-10 rounded-md bg-primary/10 ring-1 ring-primary/20"
+                className="absolute top-0 left-0 z-10 rounded-md bg-primary/10 ring-1 ring-primary/20"
                 initial={false}
                 animate={{
                   width: activeRect.width,
@@ -218,9 +222,7 @@ interface ModelSelectorPopoverProps {
   disabled?: boolean
 }
 
-export function ModelSelectorPopover({
-  disabled,
-}: ModelSelectorPopoverProps) {
+export function ModelSelectorPopover({ disabled }: ModelSelectorPopoverProps) {
   const [open, setOpen] = useState(false)
   const [isAddKeyDialogOpen, setIsAddKeyDialogOpen] = useState(false)
   const [activeProviderTab, setActiveProviderTab] =
@@ -350,10 +352,7 @@ export function ModelSelectorPopover({
             <ChevronDown className="ml-2 shrink-0 opacity-50" />
           </Button>
         </PopoverTrigger>
-        <PopoverContent
-          className="h-[380px] w-[420px] gap-0 p-0"
-          align="start"
-        >
+        <PopoverContent className="h-[380px] w-[420px] gap-0 p-0" align="start">
           <Command shouldFilter={false} className="flex h-full flex-col">
             <CommandInput
               placeholder="Search models..."

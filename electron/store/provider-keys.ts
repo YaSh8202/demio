@@ -164,9 +164,7 @@ export function deleteProviderKey(id: string): boolean {
 
 /** Get the decrypted API key for a provider. Used by the agent. */
 export function getDecryptedKey(provider: string): string | null {
-  const stored = cache.keys.find(
-    (k) => k.provider === provider && k.isValid
-  )
+  const stored = cache.keys.find((k) => k.provider === provider && k.isValid)
   if (!stored) return null
   try {
     return decryptKey(stored.encryptedKey)

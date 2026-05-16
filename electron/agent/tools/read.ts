@@ -24,11 +24,41 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
 }
 
 const BINARY_EXTENSIONS = new Set([
-  ".zip", ".tar", ".gz", ".exe", ".dll", ".so", ".class", ".jar",
-  ".war", ".7z", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-  ".bin", ".dat", ".obj", ".o", ".a", ".lib", ".wasm", ".pyc", ".pyo",
-  ".mp4", ".mp3", ".wav", ".avi", ".mov", ".mkv", ".webm", ".flac",
-  ".aac", ".ogg",
+  ".zip",
+  ".tar",
+  ".gz",
+  ".exe",
+  ".dll",
+  ".so",
+  ".class",
+  ".jar",
+  ".war",
+  ".7z",
+  ".doc",
+  ".docx",
+  ".xls",
+  ".xlsx",
+  ".ppt",
+  ".pptx",
+  ".bin",
+  ".dat",
+  ".obj",
+  ".o",
+  ".a",
+  ".lib",
+  ".wasm",
+  ".pyc",
+  ".pyo",
+  ".mp4",
+  ".mp3",
+  ".wav",
+  ".avi",
+  ".mov",
+  ".mkv",
+  ".webm",
+  ".flac",
+  ".aac",
+  ".ogg",
 ])
 
 export interface ReadToolOptions {
@@ -49,7 +79,9 @@ Paths can be workspace-relative or absolute.`,
     inputSchema: z.object({
       filePath: z
         .string()
-        .describe("Absolute or workspace-relative path to the file or directory"),
+        .describe(
+          "Absolute or workspace-relative path to the file or directory"
+        ),
       offset: z
         .number()
         .int()
@@ -139,13 +171,20 @@ Paths can be workspace-relative or absolute.`,
       if (imageMime) {
         const data = await fsPromises.readFile(absPath)
         return [
-          { type: "image" as const, data: data.toString("base64"), mimeType: imageMime },
+          {
+            type: "image" as const,
+            data: data.toString("base64"),
+            mimeType: imageMime,
+          },
           { type: "text" as const, text: "Image read successfully" },
         ]
       }
 
       // ── Binary guard ─────────────────────────────────────────────────────────
-      if (BINARY_EXTENSIONS.has(ext) || (await hasBinaryContent(absPath, stat.size))) {
+      if (
+        BINARY_EXTENSIONS.has(ext) ||
+        (await hasBinaryContent(absPath, stat.size))
+      ) {
         throw new Error(`Cannot read binary file: ${absPath}`)
       }
 
@@ -176,7 +215,8 @@ Paths can be workspace-relative or absolute.`,
             text.length > MAX_LINE_LENGTH
               ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX
               : text
-          const size = Buffer.byteLength(line, "utf-8") + (raw.length > 0 ? 1 : 0)
+          const size =
+            Buffer.byteLength(line, "utf-8") + (raw.length > 0 ? 1 : 0)
           if (bytes + size > MAX_BYTES) {
             truncatedByBytes = true
             hasMoreLines = true
@@ -190,7 +230,10 @@ Paths can be workspace-relative or absolute.`,
         stream.destroy()
       }
 
-      if (totalLines < effectiveOffset - 1 && !(totalLines === 0 && effectiveOffset === 1)) {
+      if (
+        totalLines < effectiveOffset - 1 &&
+        !(totalLines === 0 && effectiveOffset === 1)
+      ) {
         throw new Error(
           `Offset ${effectiveOffset} is out of range for this file (${totalLines} lines)`
         )

@@ -183,7 +183,9 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
   return tool({
     description: TOOL_DESCRIPTION,
     inputSchema: z.object({
-      command: z.string().describe("Shell command to execute. Runs in `sh -c`."),
+      command: z
+        .string()
+        .describe("Shell command to execute. Runs in `sh -c`."),
       description: z
         .string()
         .describe(
@@ -327,15 +329,16 @@ export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
                 }
               }
             } catch (err) {
-              log.warn(
-                `[terminal] could not read action log ${resolved}:`,
-                err
-              )
+              log.warn(`[terminal] could not read action log ${resolved}:`, err)
             }
           }
 
           resolve({
-            ok: code === 0 && !aborted && !timedOut && agentBrowserErrors.length === 0,
+            ok:
+              code === 0 &&
+              !aborted &&
+              !timedOut &&
+              agentBrowserErrors.length === 0,
             stdout: outT.text,
             stderr: errT.text,
             exitCode: code ?? -1,

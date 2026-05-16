@@ -5,9 +5,7 @@ const DEFAULT_ALLOWED_PROTOCOLS = new Set(["http:", "https:", "mailto:"])
 
 export const isAllowedExternalUrl = (rawUrl: string) => {
   try {
-    return DEFAULT_ALLOWED_PROTOCOLS.has(
-      new URL(rawUrl).protocol.toLowerCase()
-    )
+    return DEFAULT_ALLOWED_PROTOCOLS.has(new URL(rawUrl).protocol.toLowerCase())
   } catch (error) {
     log.warn("[security] Failed to parse external URL", rawUrl, error)
     return false

@@ -4,7 +4,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 
 export function RootLayout() {
   return (
-    <ThemeProvider>
+    <ThemeProvider defaultTheme="dark">
       <TooltipProvider>
         <Outlet />
       </TooltipProvider>

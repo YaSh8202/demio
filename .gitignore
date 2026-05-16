@@ -29,3 +29,8 @@ dist-ssr
 out
 .agents
 .claude
+
+**/CLAUDE.md
+!/CLAUDE.md
+graphify-out
+demio-design

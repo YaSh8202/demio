@@ -96,7 +96,11 @@ export function getProject(
  * Creates the project directory, meta.json, and adds to the index.
  * Does NOT create the default thread — that's handled by the store facade.
  */
-export function createProject(name: string, model?: string): StoredProject {
+export function createProject(
+  name: string,
+  model?: string,
+  opts?: { domain?: string | null }
+): StoredProject {
   const now = new Date().toISOString()
   const id = randomUUID()
 
@@ -106,6 +110,7 @@ export function createProject(name: string, model?: string): StoredProject {
     createdAt: now,
     updatedAt: now,
     lastThreadId: null,
+    domain: opts?.domain ?? null,
   }
 
   const meta: ProjectMeta = {
@@ -134,7 +139,7 @@ export function createProject(name: string, model?: string): StoredProject {
  */
 export function updateProject(
   projectId: string,
-  updates: Partial<Pick<StoredProject, "name" | "lastThreadId">>
+  updates: Partial<Pick<StoredProject, "name" | "lastThreadId" | "domain">>
 ): StoredProject | null {
   const index = readIndex()
   const project = index.projects.find((p) => p.id === projectId)
@@ -143,6 +148,7 @@ export function updateProject(
   if (updates.name !== undefined) project.name = updates.name
   if (updates.lastThreadId !== undefined)
     project.lastThreadId = updates.lastThreadId
+  if (updates.domain !== undefined) project.domain = updates.domain
   project.updatedAt = new Date().toISOString()
 
   writeIndex(index)

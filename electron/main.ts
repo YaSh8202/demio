@@ -72,9 +72,7 @@ app.on("ready", () => {
 
   // Register demio-file:// protocol for serving local files (videos, etc.)
   protocol.handle("demio-file", (req) => {
-    const filePath = decodeURIComponent(
-      new URL(req.url).pathname
-    )
+    const filePath = decodeURIComponent(new URL(req.url).pathname)
     return net.fetch(pathToFileURL(filePath).href)
   })
 

@@ -212,12 +212,10 @@ function buildLiveResponse(
         }
       }
 
-      unsubChunk = events!.agent.onChunk(
-        (evtRunId: string, chunk: string) => {
-          if (evtRunId !== runId) return
-          controller.enqueue(encoder.encode(chunk))
-        }
-      )
+      unsubChunk = events!.agent.onChunk((evtRunId: string, chunk: string) => {
+        if (evtRunId !== runId) return
+        controller.enqueue(encoder.encode(chunk))
+      })
       unsubEnd = events!.agent.onEnd((evtRunId: string) => {
         if (evtRunId !== runId) return
         safeClose()

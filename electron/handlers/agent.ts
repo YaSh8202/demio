@@ -10,11 +10,7 @@ import { randomUUID } from "node:crypto"
 import log from "../lib/logger"
 import { DEMIO_EVENT_CHANNEL } from "../constants"
 import type { NamespaceHandlers } from "../constants"
-import {
-  getMessages,
-  getProject,
-  appendMessage,
-} from "../store"
+import { getMessages, getProject, appendMessage } from "../store"
 import { runAgent } from "../agent/orchestrator"
 import { startSession, cancelSession } from "../agent/sessions"
 import {

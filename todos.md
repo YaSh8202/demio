@@ -1,0 +1,2 @@
+- create project level persistent memory for the demio agent
+- improve present_files tool UI

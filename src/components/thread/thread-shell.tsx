@@ -224,6 +224,8 @@ export function ThreadShell() {
           threads={threads}
           activeThreadId={threadId ?? ""}
           projectId={projectId}
+          project={project}
+          isStreaming={isStreaming || isSubmitted}
           onNewThread={handleNewThread}
         />
       </Sidebar>
@@ -236,6 +238,7 @@ export function ThreadShell() {
             thread?.title ?? (threadId ? "Loading..." : "New thread")
           }
           projectName={project?.name ?? ""}
+          projectDomain={project?.domain}
           rightPanelTab={rightPanelTab}
           onRightPanelTabChange={handleRightPanelTabChange}
           onNewThread={handleNewThread}
@@ -287,6 +290,14 @@ export function ThreadShell() {
                             <Shimmer>Thinking...</Shimmer>
                           </MessageContent>
                         </Message>
+                      )}
+
+                      {/* Live status pill while streaming */}
+                      {(isStreaming || isSubmitted) && (
+                        <div className="inline-flex w-fit items-center gap-2 self-start rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 font-mono text-[10.5px] text-white/45">
+                          <span className="pulse-dot size-1.5 rounded-full bg-amber-400" />
+                          recording agent · live
+                        </div>
                       )}
                     </>
                   )}
@@ -347,6 +358,7 @@ export function ThreadShell() {
               activeTab={rightPanelTab}
               onTabChange={handleRightPanelTabChange}
               videoPath={videoPath}
+              projectDomain={project?.domain}
             />
           </ResizablePanel>
         </ResizablePanelGroup>

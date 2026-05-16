@@ -6,11 +6,11 @@ import {
   MoreHorizontal,
   Globe,
   Video,
+  Sparkles,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
-import { Badge } from "@/components/ui/badge"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,13 +25,14 @@ import {
 import { cn } from "@/lib/utils"
 import { appInfo } from "@/types/electron-api"
 
-export type RightPanelTab = "browser" | "video" | null
+export type RightPanelTab = "browser" | "video" | "script" | null
 
 const isMac = appInfo?.platform === "darwin"
 
 interface ThreadHeaderProps {
   threadTitle: string
   projectName: string
+  projectDomain?: string | null
   rightPanelTab: RightPanelTab
   onRightPanelTabChange: (tab: RightPanelTab) => void
   onNewThread: () => void
@@ -42,6 +43,7 @@ interface ThreadHeaderProps {
 export function ThreadHeader({
   threadTitle,
   projectName,
+  projectDomain,
   rightPanelTab,
   onRightPanelTabChange,
   onNewThread,
@@ -51,7 +53,7 @@ export function ThreadHeader({
   const navigate = useNavigate()
   const { open: sidebarOpen } = useSidebar()
 
-  function toggleTab(tab: "browser" | "video") {
+  function toggleTab(tab: "browser" | "video" | "script") {
     onRightPanelTabChange(rightPanelTab === tab ? null : tab)
   }
 
@@ -109,12 +111,25 @@ export function ThreadHeader({
       )}
 
       {/* Center cluster — thread title + project badge + more menu */}
-      <div className="no-drag flex min-w-0 flex-1 items-center justify-center gap-2">
-        <h1 className="truncate text-sm font-semibold">{threadTitle}</h1>
+      <div className="no-drag flex min-w-0 flex-1 items-center justify-center gap-2.5">
+        <h1 className="truncate text-[12.5px] font-semibold">{threadTitle}</h1>
         {projectName && (
-          <Badge variant="secondary" className="shrink-0 text-xs font-normal">
-            {projectName}
-          </Badge>
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/[0.05] bg-white/[0.06] px-2 py-[3px]">
+            {projectDomain && (
+              <img
+                src={`https://www.google.com/s2/favicons?sz=64&domain=${projectDomain}`}
+                alt=""
+                width={11}
+                height={11}
+                onError={(e) => {
+                  e.currentTarget.style.display = "none"
+                }}
+              />
+            )}
+            <span className="font-mono text-[10.5px] text-white/75">
+              {projectName}
+            </span>
+          </span>
         )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
@@ -164,6 +179,20 @@ export function ThreadHeader({
             </Button>
           </TooltipTrigger>
           <TooltipContent>Video</TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              onClick={() => toggleTab("script")}
+              className={cn(rightPanelTab === "script" && "bg-muted")}
+            >
+              <Sparkles className="size-4" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Script</TooltipContent>
         </Tooltip>
       </div>
     </header>

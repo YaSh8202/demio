@@ -1,4 +1,7 @@
-import { BrowserWindow } from "electron"
+import { BrowserWindow, app, shell } from "electron"
+import { constants as fsConstants } from "node:fs"
+import { copyFile } from "node:fs/promises"
+import { basename, extname, join } from "node:path"
 import type { NamespaceHandlers } from "../constants"
 import { openExternalSafely } from "../security/open-external"
 
@@ -58,5 +61,37 @@ export const uiHandlers = {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     win.setFullScreen(!win.isFullScreen())
+  },
+
+  /**
+   * Copy a file at `srcPath` into the user's Downloads folder.
+   * Picks a unique filename if a collision exists. Reveals the copy in Finder/Explorer.
+   * Returns the destination path.
+   */
+  exportToDownloads: async (
+    _event: Electron.IpcMainInvokeEvent,
+    srcPath: string,
+    suggestedName?: string
+  ) => {
+    const downloadsDir = app.getPath("downloads")
+    const original = suggestedName || basename(srcPath)
+    const ext = extname(original)
+    const stem = original.slice(0, original.length - ext.length)
+
+    let destPath = join(downloadsDir, original)
+    let counter = 1
+    while (true) {
+      try {
+        await copyFile(srcPath, destPath, fsConstants.COPYFILE_EXCL)
+        break
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err
+        destPath = join(downloadsDir, `${stem} (${counter})${ext}`)
+        counter += 1
+      }
+    }
+
+    shell.showItemInFolder(destPath)
+    return destPath
   },
 } satisfies NamespaceHandlers

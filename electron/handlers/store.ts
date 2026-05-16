@@ -64,9 +64,10 @@ export const storeHandlers = {
   createProject: (
     _event: Electron.IpcMainInvokeEvent,
     name: string,
-    model?: string
+    model?: string,
+    opts?: { domain?: string | null }
   ) => {
-    const result = createProject(name, model)
+    const result = createProject(name, model, opts)
     broadcastProjectsChanged()
     return result
   },
@@ -78,7 +79,7 @@ export const storeHandlers = {
   updateProject: (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
-    updates: Partial<Pick<StoredProject, "name" | "lastThreadId">>
+    updates: Partial<Pick<StoredProject, "name" | "lastThreadId" | "domain">>
   ) => {
     const result = updateProject(projectId, updates)
     broadcastProjectsChanged()

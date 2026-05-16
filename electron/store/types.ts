@@ -17,6 +17,8 @@ export interface StoredProject {
   createdAt: string // ISO 8601
   updatedAt: string // ISO 8601
   lastThreadId: string | null
+  /** Source product domain (e.g. "workik.com"). Used for sidebar favicons. */
+  domain?: string | null
 }
 
 export interface ProjectIndex {

@@ -18,17 +18,25 @@ Paths can be workspace-relative or absolute. Parent directories are created auto
     inputSchema: z.object({
       filePath: z
         .string()
-        .describe("Absolute or workspace-relative path to the file to edit or create"),
+        .describe(
+          "Absolute or workspace-relative path to the file to edit or create"
+        ),
       oldString: z
         .string()
-        .describe("The exact text to find in the file. Use empty string '' to create a new file."),
+        .describe(
+          "The exact text to find in the file. Use empty string '' to create a new file."
+        ),
       newString: z
         .string()
-        .describe("The text to replace oldString with (must differ from oldString)"),
+        .describe(
+          "The text to replace oldString with (must differ from oldString)"
+        ),
       replaceAll: z
         .boolean()
         .optional()
-        .describe("Replace all occurrences (default: false — replaces only the first)"),
+        .describe(
+          "Replace all occurrences (default: false — replaces only the first)"
+        ),
     }),
 
     execute: async ({ filePath, oldString, newString, replaceAll = false }) => {
@@ -63,9 +71,7 @@ Paths can be workspace-relative or absolute. Parent directories are created auto
       }
 
       if (!content.includes(oldString)) {
-        throw new Error(
-          `oldString not found in ${path.relative(cwd, absPath)}`
-        )
+        throw new Error(`oldString not found in ${path.relative(cwd, absPath)}`)
       }
 
       let replacements = 0

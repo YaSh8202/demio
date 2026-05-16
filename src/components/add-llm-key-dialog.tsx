@@ -107,10 +107,7 @@ export function AddLLMKeyDialog({
 
   // Auto-select first available if current is taken
   useEffect(() => {
-    if (
-      availableProviders.length > 0 &&
-      existingProviders.includes(provider)
-    ) {
+    if (availableProviders.length > 0 && existingProviders.includes(provider)) {
       setProvider(availableProviders[0])
     }
     // Intentionally omit availableProviders/provider — we only react to
@@ -139,9 +136,7 @@ export function AddLLMKeyDialog({
       await onAddKey({ provider, apiKey: apiKey.trim(), metadata })
       onOpenChange(false)
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to add API key"
-      )
+      setError(err instanceof Error ? err.message : "Failed to add API key")
     } finally {
       setIsSubmitting(false)
     }
@@ -183,10 +178,7 @@ export function AddLLMKeyDialog({
               <SelectTrigger className="h-12">
                 <SelectValue>
                   <div className="flex items-center gap-3">
-                    <ModelSelectorLogo
-                      provider={provider}
-                      className="size-5"
-                    />
+                    <ModelSelectorLogo provider={provider} className="size-5" />
                     <span className="font-medium">
                       {LLM_PROVIDER_NAMES[provider]}
                     </span>
@@ -202,10 +194,7 @@ export function AddLLMKeyDialog({
                   availableProviders.map((p) => (
                     <SelectItem key={p} value={p} className="py-3">
                       <div className="flex items-center gap-3">
-                        <ModelSelectorLogo
-                          provider={p}
-                          className="size-5"
-                        />
+                        <ModelSelectorLogo provider={p} className="size-5" />
                         <span className="font-medium">
                           {LLM_PROVIDER_NAMES[p]}
                         </span>
@@ -244,9 +233,7 @@ export function AddLLMKeyDialog({
                 </a>
               </div>
             )}
-            {error && (
-              <p className="text-xs text-destructive">{error}</p>
-            )}
+            {error && <p className="text-xs text-destructive">{error}</p>}
           </div>
 
           {/* AWS Region (Bedrock only) */}
@@ -268,7 +255,7 @@ export function AddLLMKeyDialog({
             </div>
           )}
 
-          <DialogFooter className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+          <DialogFooter className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button
               type="button"
               variant="outline"

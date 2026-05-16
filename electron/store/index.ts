@@ -84,9 +84,10 @@ export type {
  */
 export function createProject(
   name: string,
-  model?: string
+  model?: string,
+  opts?: { domain?: string | null }
 ): { project: StoredProject; thread: StoredThread } {
-  const project = rawCreateProject(name, model)
+  const project = rawCreateProject(name, model, opts)
   const thread = createThread(project.id, "Chat")
   updateProject(project.id, { lastThreadId: thread.id })
   project.lastThreadId = thread.id
