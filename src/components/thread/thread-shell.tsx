@@ -44,6 +44,7 @@ import {
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input"
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import {
+  ThreadActions,
   ThreadHeader,
   type RightPanelTab,
 } from "@/components/thread/thread-header"
@@ -56,7 +57,7 @@ import {
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
-import { CopyIcon, RefreshCwIcon } from "lucide-react"
+import { CopyIcon } from "lucide-react"
 import type { UIMessage } from "@electron/store/types"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -109,9 +110,6 @@ function ThreadMessage({
             <MessageActions>
               <MessageAction tooltip="Copy" onClick={handleCopy}>
                 <CopyIcon />
-              </MessageAction>
-              <MessageAction tooltip="Regenerate">
-                <RefreshCwIcon />
               </MessageAction>
             </MessageActions>
           </MessageToolbar>
@@ -218,6 +216,9 @@ export function ThreadShell() {
 
   return (
     <SidebarProvider>
+      {/* Floating action cluster — fixed top-left, sits above sidebar (z-30 > z-10) */}
+      <ThreadActions onNewThread={handleNewThread} />
+
       {/* Left sidebar — thread list */}
       <Sidebar variant="sidebar" collapsible="offcanvas" side="left">
         <ThreadSidebar
@@ -232,7 +233,7 @@ export function ThreadShell() {
 
       {/* Main content area */}
       <SidebarInset className="flex h-svh flex-col overflow-hidden">
-        {/* Top header bar */}
+        {/* Inline main header — title + more menu + right cluster */}
         <ThreadHeader
           threadTitle={
             thread?.title ?? (threadId ? "Loading..." : "New thread")
@@ -241,7 +242,6 @@ export function ThreadShell() {
           projectDomain={project?.domain}
           rightPanelTab={rightPanelTab}
           onRightPanelTabChange={handleRightPanelTabChange}
-          onNewThread={handleNewThread}
           onDeleteThread={threadId ? deleteThread : undefined}
         />
 

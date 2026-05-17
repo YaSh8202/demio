@@ -36,7 +36,7 @@ function createWindow() {
     width: 1440,
     height: 900,
     titleBarStyle: "hidden",
-    trafficLightPosition: { x: 12, y: 14 },
+    trafficLightPosition: { x: 12, y: 16 },
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

@@ -1,20 +1,7 @@
-import { useNavigate, Link } from "react-router-dom"
-import {
-  Search,
-  ArrowLeft,
-  ArrowRight,
-  SquarePen,
-  FileText,
-  Home,
-} from "lucide-react"
+import { Link, useNavigate } from "react-router-dom"
+import { Home, Search, FileText, SquarePen } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import {
-  SidebarContent,
-  SidebarHeader,
-  SidebarInput,
-  SidebarTrigger,
-} from "@/components/ui/sidebar"
-import { Separator } from "@/components/ui/separator"
+import { SidebarContent, SidebarInput } from "@/components/ui/sidebar"
 import {
   Tooltip,
   TooltipContent,
@@ -22,11 +9,8 @@ import {
 } from "@/components/ui/tooltip"
 import { formatRelativeTime } from "@/lib/mock-data/projects"
 import { cn } from "@/lib/utils"
-import { appInfo } from "@/types/electron-api"
 import type { StoredProject, StoredThread } from "@electron/store/types"
 import { useMemo, useState } from "react"
-
-const isMac = appInfo?.platform === "darwin"
 
 interface ThreadSidebarProps {
   threads: StoredThread[]
@@ -93,67 +77,25 @@ export function ThreadSidebar({
 
   return (
     <>
-      <SidebarHeader
-        className={cn(
-          "drag-region flex-row items-center gap-0.5 border-b border-white/[0.05]",
-          isMac && "traffic-light-pad"
-        )}
-      >
-        <div className="no-drag flex items-center gap-0.5">
-          <SidebarTrigger />
-          <Separator orientation="vertical" className="mx-0.5 h-4" />
+      {/* Project banner — top padding clears the floating header (h-12) */}
+      <div className="px-3 pt-15">
+        <div className="mb-2 flex items-center justify-between">
+          <span className="font-mono text-[9.5px] tracking-[0.16em] text-white/40 uppercase">
+            Project
+          </span>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button
                 variant="ghost"
-                size="icon-sm"
-                onClick={() => navigate(-1)}
-              >
-                <ArrowLeft className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Back</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => navigate(1)}
-              >
-                <ArrowRight className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Forward</TooltipContent>
-          </Tooltip>
-          <Separator orientation="vertical" className="mx-0.5 h-4" />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
+                size="icon-xs"
+                className="-mr-1 size-5 text-white/50 hover:text-white"
                 onClick={() => navigate("/")}
               >
-                <Home className="size-4" />
+                <Home className="size-3" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>Home</TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon-sm" onClick={onNewThread}>
-                <SquarePen className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>New thread</TooltipContent>
-          </Tooltip>
-        </div>
-      </SidebarHeader>
-
-      {/* Project banner */}
-      <div className="px-3 pt-3">
-        <div className="mb-2 font-mono text-[9.5px] tracking-[0.16em] text-white/40 uppercase">
-          Project
         </div>
         <div className="flex items-center gap-2.5 rounded-md border border-white/[0.05] bg-white/[0.04] px-2.5 py-2">
           <FaviconTile domain={project?.domain} size={20} />
@@ -209,7 +151,7 @@ export function ThreadSidebar({
                 key={thread.id}
                 to={`/projects/${projectId}/threads/${thread.id}`}
                 className={cn(
-                  "flex w-full min-w-0 items-start gap-2.5 border-l-2 px-3 py-2.5 transition-colors",
+                  "flex w-full min-w-0 items-center gap-2.5 border-l-2 px-3 py-2 transition-colors",
                   isActive
                     ? "border-l-[var(--accent-brand)] bg-white/[0.04]"
                     : "border-l-transparent hover:border-l-[var(--accent-brand)] hover:bg-white/[0.03]"
@@ -217,31 +159,38 @@ export function ThreadSidebar({
               >
                 <span
                   className={cn(
-                    "mt-1.5 size-1.5 shrink-0 rounded-full",
+                    "size-1.5 shrink-0 rounded-full",
                     dotColor,
                     isRendering && "pulse-dot"
                   )}
                 />
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={cn(
-                      "block truncate text-[12.5px]",
-                      isActive
-                        ? "font-semibold text-white"
-                        : "font-medium text-white/90"
-                    )}
-                  >
-                    {thread.title}
-                  </span>
-                  <span className="mt-0.5 block font-mono text-[10px] text-white/40">
-                    {isRendering ? "rendering" : "ready"} ·{" "}
-                    {formatRelativeTime(thread.updatedAt)}
-                  </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-[12.5px]",
+                    isActive
+                      ? "font-semibold text-white"
+                      : "font-medium text-white/90"
+                  )}
+                >
+                  {thread.title}
+                </span>
+                <span className="shrink-0 font-mono text-[10px] text-white/40">
+                  {formatRelativeTime(thread.updatedAt)}
                 </span>
               </Link>
             )
           })}
         </div>
+
+        {/* New thread button — appears after the threads list when the sidebar
+            is open; when closed, the same action lives in ThreadActions. */}
+        <button
+          onClick={onNewThread}
+          className="flex w-full items-center gap-2.5 border-l-2 border-l-transparent px-3 py-2.5 text-[12.5px] font-medium text-white/85 transition-colors hover:border-l-[var(--accent-brand)] hover:bg-white/[0.03] hover:text-white"
+        >
+          <SquarePen className="size-3.5" />
+          New thread
+        </button>
       </SidebarContent>
     </>
   )

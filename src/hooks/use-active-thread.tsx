@@ -165,10 +165,24 @@ export function ActiveThreadProvider({
 
         if (cancelled) return
 
+        // Stale threadId — thread no longer exists. Bounce back to the
+        // project route so ProjectPage can pick a valid thread (or land on
+        // the empty new-thread state if none remain).
+        if (!t) {
+          navigate(`/projects/${projectId}`, { replace: true })
+          return
+        }
+
         setThread(t)
         const loaded = msgs as UIMessage[]
         setInitialMessages(loaded)
         setMessages(loaded)
+
+        // Keep the project's "last opened" pointer in sync for any
+        // navigation path (sidebar click, deep link, back/forward).
+        if (proj?.project && proj.project.lastThreadId !== threadId) {
+          void storeApi.updateProject(projectId, { lastThreadId: threadId })
+        }
       } else {
         setThread(null)
         setInitialMessages([])
@@ -183,15 +197,29 @@ export function ActiveThreadProvider({
     return () => {
       cancelled = true
     }
-  }, [projectId, threadId, setMessages])
+  }, [projectId, threadId, navigate, setMessages])
 
   // ── Subscribe to thread list changes ───────────────────────────────────
   useEffect(() => {
     const unsub = events?.store.onThreadsChanged(
       (evtProjectId: string, updatedThreads: StoredThread[]) => {
-        if (evtProjectId === projectId) {
-          setThreads(updatedThreads)
+        if (evtProjectId !== projectId) return
+        setThreads(updatedThreads)
+        if (threadId) {
+          const updated = updatedThreads.find((t) => t.id === threadId)
+          if (updated) setThread(updated)
         }
+      }
+    )
+    return () => unsub?.()
+  }, [projectId, threadId])
+
+  // ── Subscribe to project list changes ──────────────────────────────────
+  useEffect(() => {
+    const unsub = events?.store.onProjectsChanged(
+      (updatedProjects: StoredProject[]) => {
+        const updated = updatedProjects.find((p) => p.id === projectId)
+        if (updated) setProject(updated)
       }
     )
     return () => unsub?.()
@@ -275,8 +303,12 @@ export function ActiveThreadProvider({
     await apis.store.deleteThread(projectId, threadId)
     const remaining = threads.filter((t) => t.id !== threadId)
     if (remaining.length > 0) {
+      await apis.store.updateProject(projectId, {
+        lastThreadId: remaining[0].id,
+      })
       navigate(`/projects/${projectId}/threads/${remaining[0].id}`)
     } else {
+      await apis.store.updateProject(projectId, { lastThreadId: null })
       navigate("/")
     }
   }, [projectId, threadId, threads, navigate])

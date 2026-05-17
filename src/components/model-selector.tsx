@@ -329,7 +329,7 @@ export function ModelSelectorPopover({ disabled }: ModelSelectorPopoverProps) {
 
   return (
     <>
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen} modal>
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
