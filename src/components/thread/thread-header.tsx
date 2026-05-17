@@ -104,8 +104,6 @@ export function ThreadActions({ onNewThread }: ThreadActionsProps) {
 
 interface ThreadHeaderProps {
   threadTitle: string
-  projectName: string
-  projectDomain?: string | null
   rightPanelTab: RightPanelTab
   onRightPanelTabChange: (tab: RightPanelTab) => void
   onRenameThread?: () => void
@@ -114,8 +112,6 @@ interface ThreadHeaderProps {
 
 export function ThreadHeader({
   threadTitle,
-  projectName,
-  projectDomain,
   rightPanelTab,
   onRightPanelTabChange,
   onRenameThread,
@@ -139,24 +135,6 @@ export function ThreadHeader({
           floating actions and eat their clicks. */}
       <div className="drag-region flex min-w-0 flex-1 items-center gap-2.5">
         <h1 className="truncate text-[12.5px] font-semibold">{threadTitle}</h1>
-        {projectName && (
-          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-white/[0.05] bg-white/[0.06] px-2 py-[3px]">
-            {projectDomain && (
-              <img
-                src={`https://www.google.com/s2/favicons?sz=64&domain=${projectDomain}`}
-                alt=""
-                width={11}
-                height={11}
-                onError={(e) => {
-                  e.currentTarget.style.display = "none"
-                }}
-              />
-            )}
-            <span className="font-mono text-[10.5px] text-white/75">
-              {projectName}
-            </span>
-          </span>
-        )}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button

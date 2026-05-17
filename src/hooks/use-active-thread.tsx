@@ -50,6 +50,7 @@ interface ActiveThreadContextValue {
   sendMessage: (text: string) => Promise<void>
   cancelRun: () => void
   createThread: (title?: string) => Promise<StoredThread>
+  renameThread: (title: string) => Promise<void>
   deleteThread: () => Promise<void>
   setSelectedModel: (fullModelId: string) => Promise<void>
 
@@ -298,6 +299,16 @@ export function ActiveThreadProvider({
     [projectId]
   )
 
+  const renameThread = useCallback(
+    async (title: string) => {
+      if (!apis || !threadId) return
+      const trimmed = title.trim()
+      if (!trimmed) return
+      await apis.store.updateThread(projectId, threadId, { title: trimmed })
+    },
+    [projectId, threadId]
+  )
+
   const deleteThread = useCallback(async () => {
     if (!apis || !threadId) return
     await apis.store.deleteThread(projectId, threadId)
@@ -342,6 +353,7 @@ export function ActiveThreadProvider({
       sendMessage,
       cancelRun,
       createThread,
+      renameThread,
       deleteThread,
       setSelectedModel,
       isLoaded,
@@ -360,6 +372,7 @@ export function ActiveThreadProvider({
       sendMessage,
       cancelRun,
       createThread,
+      renameThread,
       deleteThread,
       setSelectedModel,
       isLoaded,

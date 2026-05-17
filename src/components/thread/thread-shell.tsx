@@ -50,6 +50,8 @@ import {
 } from "@/components/thread/thread-header"
 import { ThreadSidebar } from "@/components/thread/thread-sidebar"
 import { ThreadRightPanel } from "@/components/thread/thread-right-panel"
+import { RenameThreadDialog } from "@/components/thread/rename-thread-dialog"
+import { ConfirmDialog } from "@/components/confirm-dialog"
 import {
   hasRenderableAssistantParts,
   ThreadAssistantPartRenderer,
@@ -134,11 +136,15 @@ export function ThreadShell() {
     sendMessage,
     cancelRun,
     createThread,
+    renameThread,
     deleteThread,
     setSelectedModel,
     selectedModel,
     isLoaded,
   } = useActiveThread()
+
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
 
   // Sync Zustand model store → project meta
   const zustandModel = useModelStore((s) => s.selectedModel)
@@ -238,11 +244,26 @@ export function ThreadShell() {
           threadTitle={
             thread?.title ?? (threadId ? "Loading..." : "New thread")
           }
-          projectName={project?.name ?? ""}
-          projectDomain={project?.domain}
           rightPanelTab={rightPanelTab}
           onRightPanelTabChange={handleRightPanelTabChange}
-          onDeleteThread={threadId ? deleteThread : undefined}
+          onRenameThread={threadId ? () => setRenameOpen(true) : undefined}
+          onDeleteThread={threadId ? () => setDeleteOpen(true) : undefined}
+        />
+
+        <RenameThreadDialog
+          open={renameOpen}
+          onOpenChange={setRenameOpen}
+          currentTitle={thread?.title ?? ""}
+          onSubmit={renameThread}
+        />
+        <ConfirmDialog
+          open={deleteOpen}
+          onOpenChange={setDeleteOpen}
+          title="Delete thread?"
+          description="This will permanently delete this thread and all its messages. This action cannot be undone."
+          confirmLabel="Delete"
+          variant="destructive"
+          onConfirm={deleteThread}
         />
 
         {/* Content area: conversation + optional right panel */}
