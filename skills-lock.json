@@ -9,7 +9,7 @@
     "agent-browser": {
       "source": "vercel-labs/agent-browser",
       "sourceType": "github",
-      "computedHash": "fc173a14ecea820739ea971bf81eddbf94e12ce99312fb83e55342724316c5dd"
+      "computedHash": "c19a532a3777698b80b35270939a1dc559da451381971b3e1e78174d1ab54863"
     },
     "ai-elements": {
       "source": "vercel/ai-elements",
@@ -25,6 +25,18 @@
       "source": "hairyf/skills",
       "sourceType": "github",
       "computedHash": "3374a4d6bb73403841b437cc546efa1baa952034c0a8f2666fa260d52e97e166"
+    },
+    "mastra": {
+      "source": "mastra-ai/skills",
+      "sourceType": "github",
+      "skillPath": "skills/mastra/SKILL.md",
+      "computedHash": "c64e9569033a5ee35333f175f831c6fbcf0f894af2095f1415c431eae3c63d65"
+    },
+    "phoenix-tracing": {
+      "source": "github/awesome-copilot",
+      "sourceType": "github",
+      "skillPath": "skills/phoenix-tracing/SKILL.md",
+      "computedHash": "6254a7a562de9e528acf2017d88aab3d324e00e75b70118284e7ed1da045a811"
     },
     "shadcn": {
       "source": "shadcn/ui",

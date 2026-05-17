@@ -1,36 +1,28 @@
 // ── Agent Orchestrator ───────────────────────────────────────────────────────
 //
-// Builds a ToolLoopAgent per run with:
-//   - a single `terminal` tool whose cwd is the thread workspace
-//   - a system prompt carrying workspace + project/thread context
-//   - stepCountIs(50) to cover the full discovery → script → record → compose loop
+// Builds a Mastra `Agent` per run (via `createDemioAgent`) and streams its
+// output as an ai-sdk v6 UIMessage SSE Response. The handler pipes
+// `response.body` over IPC to the renderer.
 //
-// Returns an ai-sdk UIMessage SSE Response. The handler pipes response.body
-// over IPC to the renderer.
+// Stop conditions: `stepCountIs(50)` (hard ceiling) and `hasToolCall("present_files")`
+// (turn ender — `present_files` is the agent's "I'm done, show me to the user"
+// signal). Mastra's `stopWhen` accepts ai-sdk v6 StopConditions directly.
 
 import {
-  ToolLoopAgent,
-  stepCountIs,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
   hasToolCall,
-  convertToModelMessages,
   isToolUIPart,
+  stepCountIs,
 } from "ai"
-import type { UIMessage as AISdkUIMessage } from "ai"
-import { getModel } from "./providers"
-import { systemPrompt } from "./prompts"
-import { createTerminalTool } from "./tools/terminal"
-import { createPresentFilesTool } from "./tools/present-files"
-import { createReadTool } from "./tools/read"
-import { createEditTool } from "./tools/edit"
+import type { InferUIMessageChunk, UIMessage as AISdkUIMessage } from "ai"
+import { toAISdkStream } from "@mastra/ai-sdk"
+import { createDemioAgent } from "./mastra"
 import { clearSession } from "./sessions"
 import { ensureWorkspace } from "./workspace"
 import { appendMessage, getThread, getProject } from "../store"
 import type { MessageMetadata } from "../store/types"
 import { MessageStatus } from "../store/types"
-import { type GoogleLanguageModelOptions } from "@ai-sdk/google"
-import type { AnthropicLanguageModelOptions } from "@ai-sdk/anthropic"
-import type { OpenAILanguageModelChatOptions } from "@ai-sdk/openai"
-import type { AmazonBedrockLanguageModelOptions } from "@ai-sdk/amazon-bedrock"
 import { isPhoenixEnabled } from "../observability/phoenix"
 import log from "../lib/logger"
 
@@ -53,77 +45,87 @@ export async function runAgent({
   const project = getProject(projectId)
   const thread = getThread(projectId, threadId)
 
-  const model = getModel(modelId)
-  const terminal = createTerminalTool({ cwd: workspace, signal })
-  const present_files = createPresentFilesTool({ cwd: workspace })
-  const read = createReadTool({ cwd: workspace })
-  const edit = createEditTool({ cwd: workspace })
-
-  const systemPromptText = systemPrompt({
+  const agent = createDemioAgent({
     workspace,
+    signal,
+    modelId,
     projectTitle: project?.project.name,
     threadTitle: thread?.title,
     domain: thread?.domain ?? null,
   })
 
-  log.info(
-    `[agent] Starting agent with model ${modelId} and system prompt:\n${systemPromptText}`
-  )
+  log.info(`[agent] Starting Mastra agent with model ${modelId}`)
 
-  const agent = new ToolLoopAgent({
-    model,
-    instructions: systemPromptText,
-    tools: { terminal, present_files, read, edit },
+  const mastraStream = await agent.stream(messages, {
+    abortSignal: signal,
     stopWhen: [stepCountIs(50), hasToolCall("present_files")],
-    experimental_telemetry: {
-      isEnabled: isPhoenixEnabled(),
-      functionId: "demio.agent.run",
-      metadata: {
-        "session.id": threadId,
-        "user.id": projectId,
-        projectId,
-        threadId,
-        modelId,
-        projectTitle: project?.project.name ?? "",
-        threadTitle: thread?.title ?? "",
-      },
-    },
+    // Phoenix tracing: the global NodeTracerProvider from observability/phoenix.ts
+    // picks up OpenInference spans from the underlying ai-sdk model calls when
+    // PHOENIX_ENABLED=true. `tracingOptions.metadata` attaches our run metadata
+    // to Mastra's root span — Mastra's own observability layer is opt-in via
+    // @mastra/observability and not wired up here.
+    tracingOptions: isPhoenixEnabled()
+      ? {
+          metadata: {
+            "session.id": threadId,
+            "user.id": projectId,
+            projectId,
+            threadId,
+            modelId,
+            projectTitle: project?.project.name ?? "",
+            threadTitle: thread?.title ?? "",
+            functionId: "demio.agent.run",
+          },
+        }
+      : undefined,
     providerOptions: {
       google: {
         thinkingConfig: {
           thinkingLevel: "high",
           includeThoughts: true,
         },
-      } satisfies GoogleLanguageModelOptions,
+      },
       anthropic: {
         effort: "high",
         thinking: {
           type: "enabled",
         },
-      } satisfies AnthropicLanguageModelOptions,
+      },
       openai: {
         forceReasoning: true,
         reasoningEffort: "high",
-      } satisfies OpenAILanguageModelChatOptions,
+      },
       bedrock: {
         reasoningConfig: { type: "enabled", budgetTokens: 4096 },
-      } satisfies AmazonBedrockLanguageModelOptions,
+      },
     },
-  })
-
-  const result = await agent.stream({
-    messages: await convertToModelMessages(messages, {
-      ignoreIncompleteToolCalls: true,
-    }),
-    abortSignal: signal,
   })
 
   signal.addEventListener("abort", () => clearSession(projectId, threadId), {
     once: true,
   })
 
-  return result.toUIMessageStreamResponse<AISdkUIMessage<MessageMetadata>>({
-    sendReasoning: true,
+  const uiMessageStream = createUIMessageStream<AISdkUIMessage<MessageMetadata>>({
+    originalMessages: messages,
+    execute: async ({ writer }) => {
+      const aiStream = toAISdkStream(mastraStream, {
+        from: "agent",
+        version: "v6",
+        sendReasoning: true,
+      })
+      const reader = aiStream.getReader()
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        // Mastra emits default-typed V6 chunks (`messageMetadata: unknown`);
+        // our stream is parameterized with `MessageMetadata`. The runtime
+        // shape matches — metadata is attached in `onFinish`, not via the
+        // chunk stream — so cast to satisfy the writer's narrower generic.
+        writer.write(
+          value as InferUIMessageChunk<AISdkUIMessage<MessageMetadata>>
+        )
+      }
+    },
     onFinish: ({ responseMessage, isAborted }) => {
       if (!responseMessage || responseMessage.role !== "assistant") return
       // If the user cancelled before the model produced anything, skip
@@ -131,20 +133,12 @@ export async function runAgent({
       // and confuse follow-up turns.
       if (!responseMessage.parts || responseMessage.parts.length === 0) return
 
-      const metadata: MessageMetadata = {
-        modelId,
-        totalUsage: null,
-        cost: null,
-        status: isAborted ? MessageStatus.CANCELLED : MessageStatus.COMPLETE,
-        messageTokens: 0,
-      }
-
       // Rewrite tool parts that never reached a terminal state into
       // `output-error` so the persisted message is self-consistent — every
       // tool-call has a matching tool-result. Without this, an abort
       // mid-execution leaves an `input-available` tool part on disk and the
-      // next turn's convertToModelMessages emits an orphan tool-call,
-      // throwing MissingToolResultsError.
+      // next turn's message conversion emits an orphan tool-call, throwing
+      // MissingToolResultsError.
       const sanitizedParts = responseMessage.parts.map((part) => {
         if (!isToolUIPart(part)) return part
         if (
@@ -161,6 +155,14 @@ export async function runAgent({
         return part
       }) as typeof responseMessage.parts
 
+      const metadata: MessageMetadata = {
+        modelId,
+        totalUsage: null,
+        cost: null,
+        status: isAborted ? MessageStatus.CANCELLED : MessageStatus.COMPLETE,
+        messageTokens: 0,
+      }
+
       appendMessage(projectId, threadId, {
         id: responseMessage.id,
         role: "assistant",
@@ -168,5 +170,9 @@ export async function runAgent({
         metadata,
       } as AISdkUIMessage<MessageMetadata>)
     },
+  })
+
+  return createUIMessageStreamResponse({
+    stream: uiMessageStream,
   })
 }

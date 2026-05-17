@@ -4,7 +4,10 @@ import { defineConfig } from "vite"
 export default defineConfig({
   build: {
     rollupOptions: {
-      external: ["electron"],
+      // `ws` (transitive via @mastra/core) declares these as optional native
+      // deps for performance; it falls back to a pure-JS path when they are
+      // missing. Externalize so vite doesn't try to resolve them at build time.
+      external: ["electron", "bufferutil", "utf-8-validate"],
     },
   },
 })
