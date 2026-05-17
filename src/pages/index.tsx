@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react"
 import { useNavigate } from "react-router-dom"
-import { Globe, ChevronDown } from "lucide-react"
+import { Globe } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { ProjectSidebar } from "@/components/dashboard/project-sidebar"
@@ -23,6 +23,7 @@ import { useModelStore } from "@/store/model-store"
 import type { StoredProject } from "../../electron/store/types"
 import { apis, events, appInfo } from "@/types/electron-api"
 import { SUGGESTIONS } from "@/lib/constants/suggestions"
+import { useIsFullScreen } from "@/hooks/use-is-full-screen"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export function DashboardPage() {
   }
 
   const isMac = appInfo?.platform === "darwin"
+  const isFullScreen = useIsFullScreen()
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-background text-foreground">
@@ -120,7 +122,7 @@ export function DashboardPage() {
       <header
         className={cn(
           "drag-region flex h-11 shrink-0 items-center justify-between border-b border-white/[0.04] px-5",
-          isMac && "traffic-light-pad"
+          isMac && !isFullScreen && "traffic-light-pad"
         )}
       >
         <div className="flex items-center gap-3">
@@ -131,20 +133,16 @@ export function DashboardPage() {
             <span className="text-sm font-semibold tracking-tight">Demio</span>
           </div>
           <span className="font-mono text-[10.5px] tracking-[0.14em] text-white/40 uppercase">
-            <span className="text-[var(--accent-brand)]">●</span>
+            <span className="text-accent-brand">●</span>
             &nbsp;&nbsp;Home / New project
           </span>
         </div>
         <div className="no-drag flex items-center gap-4">
-          <span className="font-mono text-[10.5px] text-white/40">
-            v2.4 · {selectedModel.split("/").pop() ?? "sonnet"}
-          </span>
-          <button
-            type="button"
-            className="flex items-center gap-1 text-[11.5px] text-white/55 hover:text-white"
-          >
-            Help <ChevronDown className="size-2.5" />
-          </button>
+          {appInfo?.version && (
+            <span className="font-mono text-[10.5px] text-white/40">
+              v{appInfo.version}
+            </span>
+          )}
         </div>
       </header>
 
@@ -160,13 +158,11 @@ export function DashboardPage() {
 
         <main className="relative flex flex-1 flex-col items-center justify-center overflow-y-auto px-12 py-10">
           {/* Hero */}
-          <div className="mb-7 w-full max-w-[720px] text-center">
+          <div className="mb-7 w-full max-w-180 text-center">
             <h1 className="text-[72px] leading-[0.95] font-medium tracking-[-0.035em] text-white">
               Tell us what to <br />
-              <span className="font-serif text-[var(--accent-brand)] italic">
-                demo
-              </span>
-              <span className="text-[var(--accent-brand)]">.</span>
+              <span className="font-serif text-accent-brand italic">demo</span>
+              <span className="text-accent-brand">.</span>
             </h1>
             <p className="mx-auto mt-5 max-w-[480px] text-[14.5px] leading-relaxed text-white/55">
               Drop a URL. Describe what to showcase. Demio's agents will browse,

@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import { appInfo } from "@/types/electron-api"
+import { useIsFullScreen } from "@/hooks/use-is-full-screen"
 
 export type RightPanelTab = "browser" | "video" | "script" | null
 
@@ -46,12 +47,13 @@ interface ThreadActionsProps {
 export function ThreadActions({ onNewThread }: ThreadActionsProps) {
   const navigate = useNavigate()
   const { open: sidebarOpen } = useSidebar()
+  const isFullScreen = useIsFullScreen()
 
   return (
     <div
       className={cn(
         "drag-region fixed top-0 left-0 z-30 flex h-12 items-center px-2",
-        isMac && "pl-[78px]"
+        isMac && !isFullScreen && "pl-[78px]"
       )}
     >
       <div className="no-drag flex items-center gap-0.5">
@@ -137,11 +139,7 @@ export function ThreadHeader({
         <h1 className="truncate text-[12.5px] font-semibold">{threadTitle}</h1>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="no-drag shrink-0"
-            >
+            <Button variant="ghost" size="icon-xs" className="no-drag shrink-0">
               <MoreHorizontal className="size-3.5" />
             </Button>
           </DropdownMenuTrigger>

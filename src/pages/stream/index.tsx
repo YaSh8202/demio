@@ -11,6 +11,7 @@ import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { LiveBrowserView } from "@/components/preview/LiveBrowserView"
 import { apis, isElectron, appInfo } from "@/types/electron-api"
+import { useIsFullScreen } from "@/hooks/use-is-full-screen"
 
 export function StreamPage() {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
@@ -18,6 +19,7 @@ export function StreamPage() {
   const [browserResult, setBrowserResult] = useState("")
   const [browserLoading, setBrowserLoading] = useState(false)
   const isMac = appInfo?.platform === "darwin"
+  const isFullScreen = useIsFullScreen()
 
   // Fetch stream URL on mount
   useEffect(() => {
@@ -90,7 +92,7 @@ export function StreamPage() {
       <div
         className={cn(
           "drag-region flex h-12 shrink-0 items-center gap-4 border-b px-4",
-          isMac && "traffic-light-pad"
+          isMac && !isFullScreen && "traffic-light-pad"
         )}
       >
         <Link
