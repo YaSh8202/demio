@@ -30,7 +30,7 @@ import { AddLLMKeyDialog } from "@/components/add-llm-key-dialog"
 import { useModels } from "@/hooks/use-models"
 import { useProviderKeys } from "@/hooks/use-provider-keys"
 import { useModelStore, useSelectedModelInfo } from "@/store/model-store"
-import { LLMProvider } from "@/types/models"
+import { LLMProvider, LLM_TEXT_PROVIDERS } from "@/types/models"
 import type { ModelWithProvider } from "@/types/models"
 import { cn } from "@/lib/utils"
 
@@ -236,11 +236,20 @@ export function ModelSelectorPopover({ disabled }: ModelSelectorPopoverProps) {
 
   const validKeys = keys.filter((key) => key.isValid)
 
+  // Non-LLM keys (e.g. ElevenLabs) live in the same store but mustn't satisfy
+  // "is an LLM configured?" checks — they back voice tools, not text models.
   const availableProviders = useMemo(() => {
-    if (!providers || validKeys.length === 0) return []
-    const providersWithKeys = validKeys.map((k) => k.provider)
+    if (!providers) return []
+    const providersWithKeys = validKeys
+      .filter((k) => LLM_TEXT_PROVIDERS.has(k.provider as LLMProvider))
+      .map((k) => k.provider)
+    if (providersWithKeys.length === 0) return []
     return providers.filter((p) => providersWithKeys.includes(p.id))
   }, [providers, validKeys])
+
+  const llmValidKeys = validKeys.filter((k) =>
+    LLM_TEXT_PROVIDERS.has(k.provider as LLMProvider)
+  )
 
   const existingProviders = validKeys.map((k) => k.provider as LLMProvider)
   const canAddMoreKeys =
@@ -299,8 +308,8 @@ export function ModelSelectorPopover({ disabled }: ModelSelectorPopoverProps) {
     setOpen(false)
   }, [])
 
-  // No keys state
-  if (validKeys.length === 0) {
+  // No LLM keys state (an ElevenLabs-only setup still shows this CTA)
+  if (llmValidKeys.length === 0) {
     return (
       <>
         <div className="flex items-center gap-2 rounded-lg border-destructive/50 bg-muted/50 px-3 py-2">

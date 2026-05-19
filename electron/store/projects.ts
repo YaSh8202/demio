@@ -99,7 +99,11 @@ export function getProject(
 export function createProject(
   name: string,
   model?: string,
-  opts?: { domain?: string | null }
+  opts?: {
+    domain?: string | null
+    voiceId?: string | null
+    voiceName?: string | null
+  }
 ): StoredProject {
   const now = new Date().toISOString()
   const id = randomUUID()
@@ -117,6 +121,8 @@ export function createProject(
     version: 1,
     id,
     selectedModel: model ?? "",
+    voiceId: opts?.voiceId ?? null,
+    voiceName: opts?.voiceName ?? null,
   }
 
   // Create project directory structure
@@ -161,7 +167,7 @@ export function updateProject(
  */
 export function updateProjectMeta(
   projectId: string,
-  updates: Partial<Pick<ProjectMeta, "selectedModel">>
+  updates: Partial<Pick<ProjectMeta, "selectedModel" | "voiceId" | "voiceName">>
 ): ProjectMeta | null {
   const index = readIndex()
   const exists = index.projects.some((p) => p.id === projectId)
@@ -175,6 +181,8 @@ export function updateProjectMeta(
 
   if (updates.selectedModel !== undefined)
     meta.selectedModel = updates.selectedModel
+  if (updates.voiceId !== undefined) meta.voiceId = updates.voiceId
+  if (updates.voiceName !== undefined) meta.voiceName = updates.voiceName
 
   writeMeta(meta)
   return meta

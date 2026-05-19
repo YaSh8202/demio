@@ -10,6 +10,7 @@ export const LLMProvider = {
   ANTHROPIC: "anthropic",
   GOOGLE: "google",
   AMAZON_BEDROCK: "amazon-bedrock",
+  ELEVENLABS: "elevenlabs",
 } as const
 
 export type LLMProvider = (typeof LLMProvider)[keyof typeof LLMProvider]
@@ -19,7 +20,20 @@ export const LLM_PROVIDER_NAMES: Record<LLMProvider, string> = {
   [LLMProvider.ANTHROPIC]: "Anthropic",
   [LLMProvider.GOOGLE]: "Google",
   [LLMProvider.AMAZON_BEDROCK]: "Amazon Bedrock",
+  [LLMProvider.ELEVENLABS]: "ElevenLabs",
 }
+
+/**
+ * Providers backing real text-generation models (excludes voice/TTS providers).
+ * The model selector should ignore non-LLM provider keys when deciding whether
+ * any LLM is configured.
+ */
+export const LLM_TEXT_PROVIDERS: ReadonlySet<LLMProvider> = new Set([
+  LLMProvider.OPENAI,
+  LLMProvider.ANTHROPIC,
+  LLMProvider.GOOGLE,
+  LLMProvider.AMAZON_BEDROCK,
+])
 
 /** Model with provider context, extended from models.dev data */
 export interface ModelWithProvider extends ProviderModel {

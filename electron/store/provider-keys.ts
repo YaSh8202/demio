@@ -200,6 +200,8 @@ export async function validateProviderKey(
         return await validateGoogle(apiKey)
       case "amazon-bedrock":
         return await validateAmazonBedrock(apiKey, metadata?.region)
+      case "elevenlabs":
+        return await validateElevenLabs(apiKey)
       default:
         return false
     }
@@ -253,4 +255,27 @@ async function validateAmazonBedrock(
   )
   // 401/403 = invalid; everything else (200, 429, 5xx, etc.) treated as valid
   return res.status !== 401 && res.status !== 403
+}
+
+async function validateElevenLabs(apiKey: string): Promise<boolean> {
+  // `/v1/voices` is the broadest endpoint — almost every API key (including
+  // scoped keys without `user_read`) can hit it. `/v1/user` returns 401 on
+  // keys that lack the user_read permission, which falsely flagged valid
+  // keys as invalid.
+  const res = await fetch("https://api.elevenlabs.io/v1/voices", {
+    method: "GET",
+    headers: { "xi-api-key": apiKey },
+  })
+  if (res.status === 401) {
+    log.warn(`[provider-keys] ElevenLabs validation: 401 unauthorized`)
+    return false
+  }
+  if (!res.ok) {
+    // 429/5xx aren't proof the key is bad — let it through and surface real
+    // errors at usage time. Log so we can debug if needed.
+    log.warn(
+      `[provider-keys] ElevenLabs validation: status ${res.status}, treating as valid`
+    )
+  }
+  return true
 }

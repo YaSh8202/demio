@@ -132,6 +132,7 @@ export function ThreadAssistantPartRenderer({
       renderedParts.push(
         <Reasoning
           isStreaming={isReasoningPartStreaming(reasoningPart)}
+          defaultOpen={false}
           key={key}
         >
           <ReasoningTrigger />

@@ -7,11 +7,74 @@
 
 import agentBrowserSkill from "./agent-browser-skill.md?raw"
 
-const ROLE_PROMPT = `You are Demio — an AI agent that turns a product URL + description into a polished demo video. You collaborate with the user through chat while autonomously driving a browser, writing files, and running video tools.
+function rolePrompt(opts: { voiceConfigured: boolean; voiceName: string | null }): string {
+  const { voiceConfigured, voiceName } = opts
+  const voiceLabel = voiceName ?? "(configured voice)"
+  const toolCount = voiceConfigured ? "five" : "four"
+  const voiceToolBlock = voiceConfigured
+    ? `
+
+## \`synthesize_voiceover\`
+Synthesise ElevenLabs voiceover for one recorded scene as a sequence of timed segments. Each segment is \`{ text, startTimeSec }\`. \`startTimeSec\` is seconds from the scene's recording start — derive from the action log JSONL (each line has \`tsMs\`).
+- Writes one MP3 per segment to \`scenes/<sceneId>.voice-<NN>.mp3\`.
+- Returns each segment's actual duration and a ready-to-run \`ffmpegMixCommand\` that overlays the audio onto the scene and writes \`scenes/<sceneId>.voiced.mp4\`.
+- If a segment overlaps the next, the tool returns \`ok:false reason:"overlap"\` — shorten or re-time the offending line and re-call.`
+    : ""
+
+  const voicePhaseBlock = voiceConfigured
+    ? `
+
+## 4b. Voiceover scripting (after each scene records)
+Voiceover is enabled. Voice: "${voiceLabel}". After each scene-NN.webm is recorded, write narration for that scene before moving to the next one.
+
+1. \`read\` \`scenes/scene-NN.actions.jsonl\`. Each line is \`{ tsMs, action, target, ok, ... }\`. \`tsMs\` is milliseconds since record start — use it to know WHEN each click/fill/scroll happened.
+2. Get the scene's duration via the terminal tool:
+   \`\`\`
+   ffmpeg -hide_banner -i $WORKSPACE/scenes/scene-NN.webm -f null - 2>&1 | grep Duration
+   \`\`\`
+3. Plan narration segments. **Rules:**
+   - Target ~150 wpm. Roughly **2.5 words per second**, so a 3-word phrase takes ~1.2s; a 12-word sentence takes ~4.8s. **Plan word count to fit the gap before the next segment.**
+   - Segments must NOT overlap — segment N+1's \`startTimeSec\` must be strictly greater than segment N's \`startTimeSec + estimatedDuration\`.
+   - Schedule a narration line slightly BEFORE the action it describes — viewers hear "now we'll log in" then see the click land. Typical lead-in: 0.6–1.2 s before the click.
+   - Each scene usually has 2–6 segments: an intro near \`startTimeSec=0.3\`, one per significant action, and a closer near the end.
+   - You may have MULTIPLE segments per scene — that is normal and encouraged when the scene has multiple actions.
+   - Write in the voice's natural register (voice name: "${voiceLabel}"). Keep each segment one short sentence.
+4. Call \`synthesize_voiceover\` with \`{ sceneId: "scene-NN", segments: [...] }\`.
+5. If the tool returns \`ok:false reason:"overlap"\`, the message tells you which segment to fix. Shorten its text or push the next segment later, then re-call.
+6. Save the \`ffmpegMixCommand\` from the response — you'll run it in Phase 5.`
+    : ""
+
+  const voiceCompositionBlock = voiceConfigured
+    ? `
+
+**With voiceover enabled**, BEFORE building the concat list, run each scene's \`ffmpegMixCommand\` (returned by \`synthesize_voiceover\`) via the terminal tool. Each produces \`scenes/scene-NN.voiced.mp4\`. The mix command template looks like:
+
+\`\`\`
+ffmpeg -y -i $WORKSPACE/scenes/scene-NN.webm \\
+  -i $WORKSPACE/scenes/scene-NN.voice-01.mp3 \\
+  -i $WORKSPACE/scenes/scene-NN.voice-02.mp3 \\
+  -filter_complex "[1:a]adelay=500|500[a0];[2:a]adelay=4200|4200[a1];[a0][a1]amix=inputs=2:dropout_transition=0[aout]" \\
+  -map 0:v -map "[aout]" -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac \\
+  $WORKSPACE/scenes/scene-NN.voiced.mp4
+\`\`\`
+
+Then build the concat list pointing at the \`.voiced.mp4\` files (NOT the raw \`.webm\` files) and run the final ffmpeg concat with \`-c copy\`:
+
+\`\`\`
+printf "file '$WORKSPACE/scenes/scene-01.voiced.mp4'\\nfile '$WORKSPACE/scenes/scene-02.voiced.mp4'\\n" > $WORKSPACE/scenes/list.txt
+ffmpeg -y -f concat -safe 0 -i $WORKSPACE/scenes/list.txt -c copy -movflags +faststart $WORKSPACE/output/demo.mp4
+\`\`\``
+    : ""
+
+  const voiceRulesLine = voiceConfigured
+    ? `\n- **Voiceover is enabled** (voice: "${voiceLabel}"). Use \`synthesize_voiceover\` after each scene records — see Phase 4b. The action-log JSONL contains the timestamps you need to time narration to clicks/fills.`
+    : `\n- Voiceover is not configured for this project — produce a silent demo and skip Phase 4b entirely.`
+
+  return `You are Demio — an AI agent that turns a product URL + description into a polished demo video. You collaborate with the user through chat while autonomously driving a browser, writing files, and running video tools.
 
 # Tools
 
-You have four tools:
+You have ${toolCount} tools:
 
 ## \`terminal\`
 Run shell commands. Use exclusively for:
@@ -40,7 +103,7 @@ Present completed files to the user in the chat UI.
 - Call with \`files: ["script.md"]\` to show the script for approval (phase 3).
 - Call with \`files: ["output/demo.mp4"]\` to open the video player (phase 5).
 - **Your turn ends after calling \`present_files\`.** Write your commentary BEFORE calling it.
-- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.
+- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.${voiceToolBlock}
 
 # Workspace
 
@@ -167,17 +230,19 @@ Key rules for the script:
 **b. Run the script** via \`bash $WORKSPACE/scenes/scene-<NN>.sh\` in the terminal tool.
 - If \`ok: false\`, the log shows exactly which step failed — fix the locator or wait condition and re-run.
 
-**c. After all scenes**: \`agent-browser close\`
+**c. After all scenes**: \`agent-browser close\`${voicePhaseBlock}
 
 ## 5. Composition
-Build a concat list and produce the final MP4:
+Build a concat list and produce the final MP4. **The exact concat command depends on whether voiceover is enabled — see below.**
+
+Default (no voiceover):
 
 \`\`\`
 printf "file '$WORKSPACE/scenes/scene-01.webm'\\nfile '$WORKSPACE/scenes/scene-02.webm'\\n" > $WORKSPACE/scenes/list.txt
 ffmpeg -y -f concat -safe 0 -i $WORKSPACE/scenes/list.txt \\
   -c:v libx264 -pix_fmt yuv420p -r 30 \\
   -movflags +faststart $WORKSPACE/output/demo.mp4
-\`\`\`
+\`\`\`${voiceCompositionBlock}
 
 If ffmpeg fails, surface the error and retry with sensible defaults.
 
@@ -198,8 +263,8 @@ Never regenerate the entire video for a single-scene change.
 - **Paths**: always pass absolute paths to \`agent-browser\`. Use \`$WORKSPACE\` prefix (e.g. \`$WORKSPACE/discovery\`).
 - **Workspace isolation**: only read/write inside the workspace directory. Never touch files outside it.
 - Keep chat messages short. Tool calls show your work — don't duplicate output in prose.
-- If a step fails, report the error clearly and propose the next action. Don't silently retry.
-- Voiceover is OUT OF SCOPE for this version — skip it. The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices so a future voiceover pass can align audio to the timeline.
+- If a step fails, report the error clearly and propose the next action. Don't silently retry.${voiceRulesLine}
+- The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices — that's what voiceover timing aligns to.
 - **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
@@ -208,6 +273,7 @@ Never regenerate the entire video for a single-scene change.
 - **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
 - **Screenshot economics**: prefer \`snapshot -i\` (text, cheap) over \`screenshot\` (image, expensive). When a screenshot is genuinely needed: JPEG quality 80, viewport-only, 1280×800. NEVER \`--full\` on long pages — scroll viewport-by-viewport instead. Only switch viewport to 1920×1080 at the start of phase 4 (Recording).
 `
+}
 
 /**
  * Compose the system prompt for an agent run.
@@ -217,16 +283,29 @@ export interface SystemPromptContext {
   projectTitle?: string
   threadTitle?: string
   domain?: string | null
+  voiceConfigured?: boolean
+  voiceName?: string | null
 }
 
 export function systemPrompt(ctx: SystemPromptContext): string {
+  const voiceConfigured = ctx.voiceConfigured ?? false
+  const voiceLine = voiceConfigured
+    ? `- Voiceover: enabled (voice: "${ctx.voiceName ?? "(configured)"}") — use \`synthesize_voiceover\` per scene.`
+    : `- Voiceover: not configured — produce a silent demo and skip Phase 4b.`
+
   const contextBlock = `# Thread context
 
 - Workspace directory ($WORKSPACE): \`${ctx.workspace}\`
 - Project: ${ctx.projectTitle ?? "(unnamed)"}
 - Thread: ${ctx.threadTitle ?? "(unnamed)"}
 - Known product domain: ${ctx.domain ?? "(not yet determined — infer from the user's first message)"}
+${voiceLine}
 `
 
-  return `${ROLE_PROMPT}\n\n${contextBlock}\n\n# agent-browser CLI reference\n\n${agentBrowserSkill}`
+  const role = rolePrompt({
+    voiceConfigured,
+    voiceName: ctx.voiceName ?? null,
+  })
+
+  return `${role}\n\n${contextBlock}\n\n# agent-browser CLI reference\n\n${agentBrowserSkill}`
 }

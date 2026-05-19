@@ -17,6 +17,7 @@ import { createTerminalTool } from "./tools/terminal"
 import { createPresentFilesTool } from "./tools/present-files"
 import { createReadTool } from "./tools/read"
 import { createEditTool } from "./tools/edit"
+import { createVoiceoverTool } from "./tools/voiceover"
 
 export const mastra = new Mastra({
   agents: {},
@@ -29,9 +30,17 @@ export interface CreateDemioAgentOpts {
   projectTitle?: string
   threadTitle?: string
   domain?: string | null
+  /** ElevenLabs voice id selected for this project. Null = no voiceover. */
+  voiceId?: string | null
+  /** Human-readable voice name surfaced in the system prompt for tone cues. */
+  voiceName?: string | null
+  /** Decrypted ElevenLabs API key. Null = no voiceover. */
+  elevenLabsKey?: string | null
 }
 
 export function createDemioAgent(opts: CreateDemioAgentOpts) {
+  const voiceConfigured = Boolean(opts.voiceId && opts.elevenLabsKey)
+
   return new Agent({
     id: "demio",
     name: "Demio",
@@ -40,6 +49,8 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
       projectTitle: opts.projectTitle,
       threadTitle: opts.threadTitle,
       domain: opts.domain ?? null,
+      voiceConfigured,
+      voiceName: opts.voiceName ?? null,
     }),
     model: getModel(opts.modelId),
     // Keys here become the streamed `toolName` — they must match the names
@@ -50,6 +61,16 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
       present_files: createPresentFilesTool({ cwd: opts.workspace }),
       read: createReadTool({ cwd: opts.workspace }),
       edit: createEditTool({ cwd: opts.workspace }),
+      ...(voiceConfigured
+        ? {
+            synthesize_voiceover: createVoiceoverTool({
+              cwd: opts.workspace,
+              voiceId: opts.voiceId as string,
+              apiKey: opts.elevenLabsKey as string,
+              signal: opts.signal,
+            }),
+          }
+        : {}),
     },
   })
 }

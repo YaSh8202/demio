@@ -65,7 +65,11 @@ export const storeHandlers = {
     _event: Electron.IpcMainInvokeEvent,
     name: string,
     model?: string,
-    opts?: { domain?: string | null }
+    opts?: {
+      domain?: string | null
+      voiceId?: string | null
+      voiceName?: string | null
+    }
   ) => {
     const result = createProject(name, model, opts)
     broadcastProjectsChanged()
@@ -89,9 +93,15 @@ export const storeHandlers = {
   updateProjectMeta: (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
-    updates: Partial<Pick<ProjectMeta, "selectedModel">>
+    updates: Partial<
+      Pick<ProjectMeta, "selectedModel" | "voiceId" | "voiceName">
+    >
   ) => {
-    return updateProjectMeta(projectId, updates)
+    const result = updateProjectMeta(projectId, updates)
+    // Voice changes don't alter the project record itself, but the renderer
+    // listens on `onProjectsChanged` for cross-window meta updates today.
+    broadcastProjectsChanged()
+    return result
   },
 
   deleteProject: (_event: Electron.IpcMainInvokeEvent, projectId: string) => {

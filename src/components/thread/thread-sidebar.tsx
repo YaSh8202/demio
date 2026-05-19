@@ -1,5 +1,5 @@
 import { Link, useNavigate } from "react-router-dom"
-import { Home, Search, FileText, SquarePen } from "lucide-react"
+import { Home, Search, FileText, Settings, SquarePen } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { SidebarContent, SidebarInput } from "@/components/ui/sidebar"
 import {
@@ -7,6 +7,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { ProjectSettingsDialog } from "@/components/project/project-settings-dialog"
 import { formatRelativeTime } from "@/lib/mock-data/projects"
 import { cn } from "@/lib/utils"
 import type { StoredProject, StoredThread } from "@electron/store/types"
@@ -17,6 +18,9 @@ interface ThreadSidebarProps {
   activeThreadId: string
   projectId: string
   project: StoredProject | null
+  /** Current voice config for this project (drives the settings dialog defaults). */
+  voiceId: string | null
+  voiceName: string | null
   isStreaming: boolean
   onNewThread: () => void
 }
@@ -63,11 +67,14 @@ export function ThreadSidebar({
   activeThreadId,
   projectId,
   project,
+  voiceId,
+  voiceName,
   isStreaming,
   onNewThread,
 }: ThreadSidebarProps) {
   const navigate = useNavigate()
   const [search, setSearch] = useState("")
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   const filtered = useMemo(() => {
     if (!search.trim()) return threads
@@ -83,19 +90,35 @@ export function ThreadSidebar({
           <span className="font-mono text-[9.5px] tracking-[0.16em] text-white/40 uppercase">
             Project
           </span>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className="-mr-1 size-5 text-white/50 hover:text-white"
-                onClick={() => navigate("/")}
-              >
-                <Home className="size-3" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>Home</TooltipContent>
-          </Tooltip>
+          <div className="-mr-1 flex items-center gap-0.5">
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="size-5 text-white/50 hover:text-white"
+                  onClick={() => setSettingsOpen(true)}
+                  disabled={!project}
+                >
+                  <Settings className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Project settings</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  className="size-5 text-white/50 hover:text-white"
+                  onClick={() => navigate("/")}
+                >
+                  <Home className="size-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Home</TooltipContent>
+            </Tooltip>
+          </div>
         </div>
         <div className="flex items-center gap-2.5 rounded-md border border-white/[0.05] bg-white/[0.04] px-2.5 py-2">
           <FaviconTile domain={project?.domain} size={20} />
@@ -192,6 +215,16 @@ export function ThreadSidebar({
           New thread
         </button>
       </SidebarContent>
+
+      {project && (
+        <ProjectSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          projectId={projectId}
+          initialName={project.name}
+          initialVoice={{ voiceId, voiceName }}
+        />
+      )}
     </>
   )
 }

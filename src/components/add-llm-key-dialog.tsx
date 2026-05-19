@@ -4,7 +4,7 @@
 // Validates the key against the provider's API before storing.
 
 import { useState, useEffect } from "react"
-import { ExternalLink, Key, Loader2, Shield } from "lucide-react"
+import { AudioLines, ExternalLink, Key, Loader2, Shield } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -46,6 +46,25 @@ const PROVIDER_API_KEY_URLS: Record<
     url: "https://console.aws.amazon.com/bedrock/home#/api-keys",
     label: "AWS Bedrock Console",
   },
+  [LLMProvider.ELEVENLABS]: {
+    url: "https://elevenlabs.io/app/settings/api-keys",
+    label: "ElevenLabs Settings",
+  },
+}
+
+// ElevenLabs isn't on models.dev, so ModelSelectorLogo can't render it. Use a
+// Lucide icon as a stand-in everywhere the provider appears.
+function ProviderIcon({
+  provider,
+  className,
+}: {
+  provider: LLMProvider
+  className?: string
+}) {
+  if (provider === LLMProvider.ELEVENLABS) {
+    return <AudioLines className={className} />
+  }
+  return <ModelSelectorLogo provider={provider} className={className} />
 }
 
 const BEDROCK_REGIONS = [
@@ -178,7 +197,7 @@ export function AddLLMKeyDialog({
               <SelectTrigger className="h-12">
                 <SelectValue>
                   <div className="flex items-center gap-3">
-                    <ModelSelectorLogo provider={provider} className="size-5" />
+                    <ProviderIcon provider={provider} className="size-5" />
                     <span className="font-medium">
                       {LLM_PROVIDER_NAMES[provider]}
                     </span>
@@ -194,7 +213,7 @@ export function AddLLMKeyDialog({
                   availableProviders.map((p) => (
                     <SelectItem key={p} value={p} className="py-3">
                       <div className="flex items-center gap-3">
-                        <ModelSelectorLogo provider={p} className="size-5" />
+                        <ProviderIcon provider={p} className="size-5" />
                         <span className="font-medium">
                           {LLM_PROVIDER_NAMES[p]}
                         </span>

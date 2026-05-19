@@ -43,6 +43,8 @@ interface ActiveThreadContextValue {
   error: string | null
 
   selectedModel: string
+  voiceId: string | null
+  voiceName: string | null
 
   input: string
   setInput: (value: string) => void
@@ -221,6 +223,14 @@ export function ActiveThreadProvider({
       (updatedProjects: StoredProject[]) => {
         const updated = updatedProjects.find((p) => p.id === projectId)
         if (updated) setProject(updated)
+        // Project meta (voice, model) can change in other windows too — fetch
+        // a fresh meta whenever the projects list broadcasts. Cheap, and keeps
+        // the gear-icon dialog in sync without its own event channel.
+        if (apis) {
+          void apis.store.getProject(projectId).then((proj) => {
+            if (proj?.meta) setMeta(proj.meta)
+          })
+        }
       }
     )
     return () => unsub?.()
@@ -348,6 +358,8 @@ export function ActiveThreadProvider({
       status,
       error: chatError?.message ?? null,
       selectedModel: meta?.selectedModel ?? "",
+      voiceId: meta?.voiceId ?? null,
+      voiceName: meta?.voiceName ?? null,
       input,
       setInput,
       sendMessage,

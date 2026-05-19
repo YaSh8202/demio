@@ -32,6 +32,13 @@ export interface ProjectMeta {
   version: 1
   id: string
   selectedModel: string
+  /**
+   * ElevenLabs voice id. When null/undefined the agent runs without voiceover
+   * and the synthesize_voiceover tool is omitted from its toolset.
+   */
+  voiceId?: string | null
+  /** Human-readable name cached for display in chat & UI. */
+  voiceName?: string | null
 }
 
 // ── Threads ──────────────────────────────────────────────────────────────────

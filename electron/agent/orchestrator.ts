@@ -21,6 +21,7 @@ import { createDemioAgent } from "./mastra"
 import { clearSession } from "./sessions"
 import { ensureWorkspace } from "./workspace"
 import { appendMessage, getThread, getProject } from "../store"
+import { getDecryptedKey } from "../store/provider-keys"
 import type { MessageMetadata } from "../store/types"
 import { MessageStatus } from "../store/types"
 import { isPhoenixEnabled } from "../observability/phoenix"
@@ -45,6 +46,11 @@ export async function runAgent({
   const project = getProject(projectId)
   const thread = getThread(projectId, threadId)
 
+  const voiceId = project?.meta.voiceId ?? null
+  const voiceName = project?.meta.voiceName ?? null
+  const elevenLabsKey = voiceId ? getDecryptedKey("elevenlabs") : null
+  const voiceConfigured = Boolean(voiceId && elevenLabsKey)
+
   const agent = createDemioAgent({
     workspace,
     signal,
@@ -52,9 +58,15 @@ export async function runAgent({
     projectTitle: project?.project.name,
     threadTitle: thread?.title,
     domain: thread?.domain ?? null,
+    voiceId,
+    voiceName,
+    elevenLabsKey,
   })
 
-  log.info(`[agent] Starting Mastra agent with model ${modelId}`)
+  log.info(
+    `[agent] Starting Mastra agent with model ${modelId}` +
+      (voiceConfigured ? ` (voice: ${voiceName ?? voiceId})` : "")
+  )
 
   const mastraStream = await agent.stream(messages, {
     abortSignal: signal,
@@ -75,6 +87,9 @@ export async function runAgent({
             projectTitle: project?.project.name ?? "",
             threadTitle: thread?.title ?? "",
             functionId: "demio.agent.run",
+            voiceConfigured: String(voiceConfigured),
+            voiceId: voiceId ?? "",
+            voiceName: voiceName ?? "",
           },
         }
       : undefined,

@@ -19,6 +19,8 @@ import {
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input"
 import { ModelSelectorPopover } from "@/components/model-selector"
+import { VoiceSelectorPopover } from "@/components/voice-selector-popover"
+import type { VoiceSelection } from "@/components/voice-selector-popover"
 import { useModelStore } from "@/store/model-store"
 import type { StoredProject } from "../../electron/store/types"
 import { apis, events, appInfo } from "@/types/electron-api"
@@ -44,6 +46,10 @@ export function DashboardPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState("")
   const [domain, setDomain] = useState("")
+  const [voice, setVoice] = useState<VoiceSelection>({
+    voiceId: null,
+    voiceName: null,
+  })
   const selectedModel = useModelStore((s) => s.selectedModel)
 
   useEffect(() => {
@@ -69,7 +75,11 @@ export function DashboardPage() {
       const { project, thread } = await apis.store.createProject(
         "Untitled project",
         selectedModel,
-        cleanDomain ? { domain: cleanDomain } : undefined
+        {
+          ...(cleanDomain ? { domain: cleanDomain } : {}),
+          voiceId: voice.voiceId,
+          voiceName: voice.voiceName,
+        }
       )
 
       void apis.store.autoTitleFromPrompt(
@@ -85,7 +95,7 @@ export function DashboardPage() {
         state: { pendingPrompt: text },
       })
     },
-    [selectedModel, cleanDomain, navigate]
+    [selectedModel, cleanDomain, voice, navigate]
   )
 
   const handleSelect = useCallback(
@@ -223,6 +233,11 @@ export function DashboardPage() {
                     </PromptInputActionMenuContent>
                   </PromptInputActionMenu>
                   <ModelSelectorPopover />
+                  <VoiceSelectorPopover
+                    value={voice}
+                    onChange={setVoice}
+                    placeholder="No voiceover"
+                  />
                 </PromptInputTools>
                 <PromptInputSubmit disabled={!prompt.trim()} />
               </PromptInputFooter>

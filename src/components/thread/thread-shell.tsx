@@ -140,6 +140,8 @@ export function ThreadShell() {
     deleteThread,
     setSelectedModel,
     selectedModel,
+    voiceId,
+    voiceName,
     isLoaded,
   } = useActiveThread()
 
@@ -232,6 +234,8 @@ export function ThreadShell() {
           activeThreadId={threadId ?? ""}
           projectId={projectId}
           project={project}
+          voiceId={voiceId}
+          voiceName={voiceName}
           isStreaming={isStreaming || isSubmitted}
           onNewThread={handleNewThread}
         />
@@ -314,12 +318,12 @@ export function ThreadShell() {
                       )}
 
                       {/* Live status pill while streaming */}
-                      {(isStreaming || isSubmitted) && (
-                        <div className="inline-flex w-fit items-center gap-2 self-start rounded-full border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 font-mono text-[10.5px] text-white/45">
+                      {/* {(isStreaming || isSubmitted) && (
+                        <div className="inline-flex w-fit items-center gap-2 self-start rounded-full px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground">
                           <span className="pulse-dot size-1.5 rounded-full bg-amber-400" />
                           recording agent · live
                         </div>
-                      )}
+                      )} */}
                     </>
                   )}
                 </ConversationContent>

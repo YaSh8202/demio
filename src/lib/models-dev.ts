@@ -9,12 +9,17 @@ import { fetchModels } from "tokenlens"
 import { LLMProvider } from "@/types/models"
 import type { ModelsData, ModelWithProvider } from "@/types/models"
 
-/** Map our provider values to models.dev provider IDs */
+/**
+ * Map our provider values to models.dev provider IDs.
+ * ElevenLabs isn't a text-model provider — it has no models.dev entry — so
+ * it maps to an empty string and is filtered out below.
+ */
 const PROVIDER_ID_MAP: Record<LLMProvider, string> = {
   [LLMProvider.OPENAI]: "openai",
   [LLMProvider.ANTHROPIC]: "anthropic",
   [LLMProvider.GOOGLE]: "google",
   [LLMProvider.AMAZON_BEDROCK]: "amazon-bedrock",
+  [LLMProvider.ELEVENLABS]: "",
 }
 
 function sortModelsByDate(models: ModelWithProvider[]): ModelWithProvider[] {
@@ -33,6 +38,7 @@ export function processModelsDevData(modelsDevData: {
 
   for (const providerId of Object.values(LLMProvider)) {
     const modelsDevId = PROVIDER_ID_MAP[providerId]
+    if (!modelsDevId) continue
     const providerData = modelsDevData[modelsDevId]
 
     if (!providerData) continue
