@@ -167,6 +167,48 @@ export async function runAgent({
             errorText: "Stopped by user",
           }
         }
+
+        // Redact secret answers from the `ask_user` tool before persistence.
+        // The live stream that already reached the renderer carries the real
+        // values (so the agent could act on them this turn); the on-disk
+        // history must NOT. Each question in `part.input.questions[i]` carries
+        // a `secret` flag — when true, replace `part.output.answers[i]` with
+        // `["***"]` in a cloned output.
+        if (
+          part.type === "tool-ask_user" &&
+          part.state === "output-available"
+        ) {
+          const input = part.input as
+            | { questions?: Array<{ secret?: boolean }> }
+            | undefined
+          const output = part.output as
+            | { answers?: string[][]; summary?: string; ok?: boolean }
+            | undefined
+
+          if (input?.questions && output?.answers) {
+            const hasSecret = input.questions.some((q) => q?.secret === true)
+            if (hasSecret) {
+              const redactedAnswers = output.answers.map((ans, i) =>
+                input.questions?.[i]?.secret ? ["***"] : ans
+              )
+              const redactedSummary = input.questions
+                .map((q, i) => {
+                  const a = redactedAnswers[i]
+                  const text = a && a.length ? a.join(", ") : "Unanswered"
+                  return `"${(q as { question?: string }).question ?? ""}"="${text}"`
+                })
+                .join(", ")
+              return {
+                ...part,
+                output: {
+                  ...output,
+                  answers: redactedAnswers,
+                  summary: `User answered: ${redactedSummary}. Continue with these answers in mind.`,
+                },
+              }
+            }
+          }
+        }
         return part
       }) as typeof responseMessage.parts
 

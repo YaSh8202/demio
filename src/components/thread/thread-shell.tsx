@@ -56,6 +56,10 @@ import {
   hasRenderableAssistantParts,
   ThreadAssistantPartRenderer,
 } from "@/components/thread/tool-usage"
+import {
+  PromptQuestionCard,
+  useActiveQuestion,
+} from "@/components/thread/prompt-question-card"
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
@@ -147,6 +151,7 @@ export function ThreadShell() {
 
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const pendingQuestion = useActiveQuestion()
 
   // Sync Zustand model store → project meta
   const zustandModel = useModelStore((s) => s.selectedModel)
@@ -330,32 +335,40 @@ export function ThreadShell() {
                 <ConversationScrollButton />
               </Conversation>
 
-              {/* Prompt input */}
+              {/* Prompt input — replaced by question card when the agent
+                  is awaiting an `ask_user` answer. */}
               <div className="shrink-0 p-4">
-                <PromptInput
-                  onSubmit={handleSubmit}
-                  className="mx-auto w-full max-w-3xl"
-                >
-                  <PromptInputBody>
-                    <PromptInputTextarea
-                      value={input}
-                      onChange={(e) => setInput(e.currentTarget.value)}
-                      placeholder="Ask for follow-up changes"
-                    />
-                  </PromptInputBody>
-                  <PromptInputFooter>
-                    <PromptInputTools>
-                      <ModelSelectorPopover
-                        disabled={isStreaming || isSubmitted}
+                {pendingQuestion ? (
+                  <PromptQuestionCard
+                    key={pendingQuestion.id}
+                    request={pendingQuestion}
+                  />
+                ) : (
+                  <PromptInput
+                    onSubmit={handleSubmit}
+                    className="mx-auto w-full max-w-3xl"
+                  >
+                    <PromptInputBody>
+                      <PromptInputTextarea
+                        value={input}
+                        onChange={(e) => setInput(e.currentTarget.value)}
+                        placeholder="Ask for follow-up changes"
                       />
-                    </PromptInputTools>
-                    <PromptInputSubmit
-                      disabled={!input.trim() && chatStatus === "ready"}
-                      status={chatStatus === "ready" ? undefined : chatStatus}
-                      onStop={cancelRun}
-                    />
-                  </PromptInputFooter>
-                </PromptInput>
+                    </PromptInputBody>
+                    <PromptInputFooter>
+                      <PromptInputTools>
+                        <ModelSelectorPopover
+                          disabled={isStreaming || isSubmitted}
+                        />
+                      </PromptInputTools>
+                      <PromptInputSubmit
+                        disabled={!input.trim() && chatStatus === "ready"}
+                        status={chatStatus === "ready" ? undefined : chatStatus}
+                        onStop={cancelRun}
+                      />
+                    </PromptInputFooter>
+                  </PromptInput>
+                )}
               </div>
             </div>
           </ResizablePanel>

@@ -1,7 +1,6 @@
-import { BrowserWindow, app, shell } from "electron"
-import { constants as fsConstants } from "node:fs"
+import { BrowserWindow, app, dialog, shell } from "electron"
 import { copyFile } from "node:fs/promises"
-import { basename, extname, join } from "node:path"
+import { basename, join } from "node:path"
 import type { NamespaceHandlers } from "../constants"
 import { openExternalSafely } from "../security/open-external"
 
@@ -64,34 +63,26 @@ export const uiHandlers = {
   },
 
   /**
-   * Copy a file at `srcPath` into the user's Downloads folder.
-   * Picks a unique filename if a collision exists. Reveals the copy in Finder/Explorer.
-   * Returns the destination path.
+   * Show a native Save As dialog and copy `srcPath` to the chosen location.
+   * Defaults to the Downloads folder. Returns the destination path, or `null` if cancelled.
    */
   exportToDownloads: async (
-    _event: Electron.IpcMainInvokeEvent,
+    event: Electron.IpcMainInvokeEvent,
     srcPath: string,
     suggestedName?: string
   ) => {
-    const downloadsDir = app.getPath("downloads")
-    const original = suggestedName || basename(srcPath)
-    const ext = extname(original)
-    const stem = original.slice(0, original.length - ext.length)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const defaultName = suggestedName || basename(srcPath)
+    const defaultPath = join(app.getPath("downloads"), defaultName)
 
-    let destPath = join(downloadsDir, original)
-    let counter = 1
-    while (true) {
-      try {
-        await copyFile(srcPath, destPath, fsConstants.COPYFILE_EXCL)
-        break
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err
-        destPath = join(downloadsDir, `${stem} (${counter})${ext}`)
-        counter += 1
-      }
-    }
+    const result = win
+      ? await dialog.showSaveDialog(win, { defaultPath })
+      : await dialog.showSaveDialog({ defaultPath })
 
-    shell.showItemInFolder(destPath)
-    return destPath
+    if (result.canceled || !result.filePath) return null
+
+    await copyFile(srcPath, result.filePath)
+    shell.showItemInFolder(result.filePath)
+    return result.filePath
   },
 } satisfies NamespaceHandlers

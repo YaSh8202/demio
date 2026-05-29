@@ -34,6 +34,8 @@ import {
   ChevronDownIcon,
   CopyIcon,
   FileTextIcon,
+  LockIcon,
+  MessageSquareIcon,
   VideoIcon,
 } from "lucide-react"
 
@@ -224,7 +226,9 @@ function isReasoningPartStreaming(part: ThreadReasoningPart): boolean {
 }
 
 function isClusterableToolPart(part: ThreadMessagePart): boolean {
-  return isThreadToolPart(part) && getThreadToolName(part) !== "present_files"
+  if (!isThreadToolPart(part)) return false
+  const name = getThreadToolName(part)
+  return name !== "present_files" && name !== "ask_user"
 }
 
 function isStructuralPart(part: ThreadMessagePart): boolean {
@@ -519,6 +523,138 @@ function TerminalToolCard({ part }: { part: ThreadToolPart }) {
   )
 }
 
+interface AskUserQuestionInput {
+  question?: string
+  header?: string
+  secret?: boolean
+}
+
+interface AskUserToolInput {
+  questions?: AskUserQuestionInput[]
+}
+
+interface AskUserToolOutput {
+  ok?: boolean
+  answers?: string[][]
+  reason?: string
+  message?: string
+}
+
+function AskUserToolCard({ part }: { part: ThreadToolPart }) {
+  const input = asObject<AskUserToolInput>(part.input)
+  const output = asObject<AskUserToolOutput>(part.output)
+  const questions = input?.questions ?? []
+  const answers = output?.answers ?? []
+
+  if (part.state === "input-streaming" || part.state === "input-available") {
+    const headers = questions
+      .map((q) => q.header)
+      .filter(Boolean)
+      .join(" · ")
+    return (
+      <div className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2">
+        <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 text-[13px] leading-5 text-muted-foreground">
+          {headers
+            ? `Waiting for your answer — ${headers}`
+            : "Waiting for your answer…"}
+        </span>
+        <span className="pulse-dot size-1.5 rounded-full bg-amber-400" />
+      </div>
+    )
+  }
+
+  if (part.state === "output-error") {
+    return (
+      <CompactToolSummary
+        label="Ask"
+        subtitle={part.errorText ?? "Question dismissed"}
+        error={part.errorText}
+      />
+    )
+  }
+
+  if (part.state === "output-available") {
+    if (output?.ok === false) {
+      return (
+        <CompactToolSummary
+          label="Ask"
+          subtitle={output.message ?? "User dismissed the question"}
+        />
+      )
+    }
+    return <AskUserAnsweredCollapsible questions={questions} answers={answers} />
+  }
+
+  return null
+}
+
+function AskUserAnsweredCollapsible({
+  questions,
+  answers,
+}: {
+  questions: AskUserQuestionInput[]
+  answers: string[][]
+}) {
+  const [open, setOpen] = useState(false)
+
+  const single = questions.length === 1
+  const summarySubtitle = single
+    ? questions[0]?.header || "1 question"
+    : `${questions.length} questions${
+        questions.some((q) => q.secret) ? " · includes secret" : ""
+      }`
+
+  return (
+    <Collapsible className="group w-full" onOpenChange={setOpen} open={open}>
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 py-0.5 text-left transition-colors hover:text-foreground">
+        <CompactToolSummary label="Ask" subtitle={summarySubtitle} />
+        <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+      </CollapsibleTrigger>
+
+      <CollapsibleContent className="data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:slide-out-to-top-1 data-[state=open]:animate-in data-[state=open]:slide-in-from-top-1">
+        <div className="mt-1 overflow-hidden rounded-lg border border-border/70 bg-muted/20">
+          <div className="divide-y divide-border/40">
+            {questions.map((q, i) => {
+              const ans = answers[i] ?? []
+              const isSecret = q.secret === true
+              const hasAnswer = ans.length > 0
+              const display = isSecret
+                ? "•••••••"
+                : hasAnswer
+                  ? ans.join(", ")
+                  : "(no answer)"
+
+              return (
+                <div className="px-3 py-2" key={i}>
+                  <p className="text-[12px] leading-5 text-muted-foreground">
+                    {q.question}
+                  </p>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    {isSecret && (
+                      <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+                    )}
+                    <p
+                      className={cn(
+                        "text-[13px] leading-5",
+                        hasAnswer || isSecret
+                          ? "font-medium text-foreground"
+                          : "text-muted-foreground italic"
+                      )}
+                    >
+                      {display}
+                    </p>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  )
+}
+
 function ThreadToolUsage({
   part,
   onVideoReady,
@@ -551,6 +687,10 @@ function ThreadToolUsage({
 
   if (toolName === "edit") {
     return <EditToolRow part={part} />
+  }
+
+  if (toolName === "ask_user") {
+    return <AskUserToolCard part={part} />
   }
 
   return (

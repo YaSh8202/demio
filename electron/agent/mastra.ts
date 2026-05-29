@@ -18,6 +18,7 @@ import { createPresentFilesTool } from "./tools/present-files"
 import { createReadTool } from "./tools/read"
 import { createEditTool } from "./tools/edit"
 import { createVoiceoverTool } from "./tools/voiceover"
+import { createAskUserTool } from "./tools/ask-user"
 
 export const mastra = new Mastra({
   agents: {},
@@ -61,6 +62,7 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
       present_files: createPresentFilesTool({ cwd: opts.workspace }),
       read: createReadTool({ cwd: opts.workspace }),
       edit: createEditTool({ cwd: opts.workspace }),
+      ask_user: createAskUserTool({ signal: opts.signal }),
       ...(voiceConfigured
         ? {
             synthesize_voiceover: createVoiceoverTool({

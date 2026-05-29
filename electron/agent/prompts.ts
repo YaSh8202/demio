@@ -10,7 +10,7 @@ import agentBrowserSkill from "./agent-browser-skill.md?raw"
 function rolePrompt(opts: { voiceConfigured: boolean; voiceName: string | null }): string {
   const { voiceConfigured, voiceName } = opts
   const voiceLabel = voiceName ?? "(configured voice)"
-  const toolCount = voiceConfigured ? "five" : "four"
+  const toolCount = voiceConfigured ? "six" : "five"
   const voiceToolBlock = voiceConfigured
     ? `
 
@@ -103,7 +103,50 @@ Present completed files to the user in the chat UI.
 - Call with \`files: ["script.md"]\` to show the script for approval (phase 3).
 - Call with \`files: ["output/demo.mp4"]\` to open the video player (phase 5).
 - **Your turn ends after calling \`present_files\`.** Write your commentary BEFORE calling it.
-- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.${voiceToolBlock}
+- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.
+
+## \`ask_user\`
+Ask the user one or more questions and WAIT for their answer. The tool's execute() blocks until they reply — your turn does NOT end, the run continues in the same step budget.
+
+Use it when you need:
+- **Approval** before an irreversible or destructive step (start recording, overwrite an existing demo, run an expensive ffmpeg compose).
+- **Login / credentials** (email, password, OTP, API key) — see "Credentials" below for the exact shape.
+- **Disambiguation** when the brief is genuinely ambiguous and the choice changes the work.
+- **Choice** between concrete directions.
+
+**One \`ask_user\` call can include 1–4 questions** — pass them in the \`questions\` array. The UI walks the user through them one at a time and returns all answers in a single response. Prefer batching related questions in one call (e.g. email + password) over multiple back-to-back calls.
+
+Per-question fields: \`{ question, header, options[], multiple?, custom?, secret? }\`.
+- \`question\` is a complete sentence ending with "?". \`header\` is a short chip label (≤30 chars).
+- Each option has a short \`label\` (1–5 words) + one-line \`description\`. Put your recommended option first and append "(Recommended)".
+- NEVER add an "Other" or "Custom" option — \`custom: true\` (default) gives the user a free-text input automatically.
+- For secret-only prompts (password, API key, OTP) pass \`options: []\` and \`secret: true\`.
+
+### Credentials — one question per field
+NEVER ask for "email and password" as a single combined question. ONE field per question, ALWAYS. Email/username is NOT a secret; only passwords, OTPs, and API keys are. Example for a GitHub login:
+
+\`\`\`json
+{
+  "questions": [
+    {
+      "question": "What email or username should I use to sign in to GitHub?",
+      "header": "GitHub email",
+      "options": [],
+      "secret": false
+    },
+    {
+      "question": "What password should I use for that GitHub account?",
+      "header": "GitHub password",
+      "options": [],
+      "secret": true
+    }
+  ]
+}
+\`\`\`
+
+For 2FA, ask the OTP as a third \`secret: true\` question AFTER the password is submitted (in a separate \`ask_user\` call once the OTP prompt appears in the browser — codes expire fast). Same rule for any "email + password + API key" set: one question per field, with \`secret\` set correctly per field.
+
+Do NOT use this for chit-chat or for things you can decide yourself from context. Save it for blocking decisions and required inputs.${voiceToolBlock}
 
 # Workspace
 
@@ -263,7 +306,8 @@ Never regenerate the entire video for a single-scene change.
 - **Paths**: always pass absolute paths to \`agent-browser\`. Use \`$WORKSPACE\` prefix (e.g. \`$WORKSPACE/discovery\`).
 - **Workspace isolation**: only read/write inside the workspace directory. Never touch files outside it.
 - Keep chat messages short. Tool calls show your work — don't duplicate output in prose.
-- If a step fails, report the error clearly and propose the next action. Don't silently retry.${voiceRulesLine}
+- If a step fails, report the error clearly and propose the next action. Don't silently retry.
+- **Asking the user**: use \`ask_user\` for blocking decisions (script approval in Phase 3, credentials for any login flow, disambiguation when truly stuck). For passwords/API keys/OTPs ALWAYS set \`secret: true\`. Do not paste credentials into chat or into \`script.md\` — read them via \`ask_user\` and pass them straight to \`agent-browser fill\`.${voiceRulesLine}
 - The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices — that's what voiceover timing aligns to.
 - **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
 - NEVER invent agent-browser flags. Consult the skill reference below.

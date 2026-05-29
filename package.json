@@ -14,7 +14,9 @@
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
     "summarize-thread": "node scripts/summarize-thread.js",
-    "test:scripts": "node --test scripts/*.test.js"
+    "test:scripts": "node --test scripts/*.test.js",
+    "mastra:dev": "mastra dev",
+    "mastra:build": "mastra build"
   },
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "^4.0.98",
@@ -41,6 +43,7 @@
     "@streamdown/mermaid": "^1.0.2",
     "@tailwindcss/vite": "^4.2.1",
     "@tanstack/react-query": "^5.99.0",
+    "@vidstack/react": "1.12.13",
     "agent-browser": "file:../agent-browser",
     "ai": "^6.0.158",
     "class-variance-authority": "^0.7.1",
@@ -85,6 +88,7 @@
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^16.5.0",
+    "mastra": "^1.9.3",
     "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "typescript": "~5.9.3",

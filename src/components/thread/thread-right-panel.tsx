@@ -213,7 +213,7 @@ export function ThreadRightPanel({
     setIsExporting(true)
     try {
       const dest = await apis.ui.exportToDownloads(videoPath)
-      console.log("[export] saved to", dest)
+      if (dest) console.log("[export] saved to", dest)
     } catch (err) {
       console.error("[export] failed", err)
     } finally {
