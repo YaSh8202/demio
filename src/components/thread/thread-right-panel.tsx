@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
 import { Globe, Video, X, Sparkles, Download, Loader2 } from "lucide-react"
+import { MediaPlayer, MediaProvider } from "@vidstack/react"
+import {
+  DefaultVideoLayout,
+  defaultLayoutIcons,
+} from "@vidstack/react/player/layouts/default"
+import "@vidstack/react/player/styles/default/theme.css"
+import "@vidstack/react/player/styles/default/layouts/video.css"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { LiveBrowserView } from "@/components/preview/LiveBrowserView"
@@ -74,13 +81,19 @@ function VideoView({ videoPath }: { videoPath: string | null }) {
   if (videoPath) {
     return (
       <div className="flex size-full items-center justify-center bg-black p-2">
-        <video
+        <MediaPlayer
           key={videoPath}
           src={`demio-file://${videoPath}`}
-          controls
-          autoPlay
-          className="max-h-full max-w-full rounded-md"
-        />
+          playsInline
+          className="size-full overflow-hidden rounded-md"
+        >
+          <MediaProvider />
+          <DefaultVideoLayout
+            icons={defaultLayoutIcons}
+            smallLayoutWhen={false}
+            slots={{ airPlayButton: null, googleCastButton: null }}
+          />
+        </MediaPlayer>
       </div>
     )
   }

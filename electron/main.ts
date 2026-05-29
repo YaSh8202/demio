@@ -1,6 +1,8 @@
-import { app, BrowserWindow, net, protocol } from "electron"
+import { app, BrowserWindow, protocol } from "electron"
 import path from "path"
-import { pathToFileURL } from "url"
+import { createReadStream, statSync } from "fs"
+import { Readable } from "stream"
+import type { ReadableStream as NodeReadableStream } from "stream/web"
 import { config as loadDotenv } from "dotenv"
 loadDotenv({ path: [".env.local", ".env"], quiet: true })
 import log from "./lib/logger"
@@ -29,6 +31,23 @@ function getWindowAdditionalArguments() {
     `--window-name=main`,
     `--app-version=${app.getVersion()}`,
   ]
+}
+
+const MIME_BY_EXT: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".mkv": "video/x-matroska",
+  ".m4v": "video/x-m4v",
+  ".ogv": "video/ogg",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".m4a": "audio/mp4",
+}
+
+function mimeForPath(filePath: string): string {
+  return MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? "application/octet-stream"
 }
 
 function createWindow() {
@@ -73,7 +92,45 @@ app.on("ready", () => {
   // Register demio-file:// protocol for serving local files (videos, etc.)
   protocol.handle("demio-file", (req) => {
     const filePath = decodeURIComponent(new URL(req.url).pathname)
-    return net.fetch(pathToFileURL(filePath).href)
+    const stat = statSync(filePath)
+    const fileSize = stat.size
+    const contentType = mimeForPath(filePath)
+
+    const range = req.headers.get("range")
+    if (range) {
+      const match = /bytes=(\d+)-(\d*)/.exec(range)
+      if (match) {
+        const start = parseInt(match[1], 10)
+        const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
+        const chunkSize = end - start + 1
+        const stream = createReadStream(filePath, { start, end })
+        return new Response(
+          Readable.toWeb(stream) as unknown as NodeReadableStream,
+          {
+            status: 206,
+            headers: {
+              "Content-Type": contentType,
+              "Content-Length": String(chunkSize),
+              "Content-Range": `bytes ${start}-${end}/${fileSize}`,
+              "Accept-Ranges": "bytes",
+            },
+          }
+        )
+      }
+    }
+
+    const stream = createReadStream(filePath)
+    return new Response(
+      Readable.toWeb(stream) as unknown as NodeReadableStream,
+      {
+        status: 200,
+        headers: {
+          "Content-Type": contentType,
+          "Content-Length": String(fileSize),
+          "Accept-Ranges": "bytes",
+        },
+      }
+    )
   })
 
   // Load persisted shared storage from disk before anything else

@@ -80,6 +80,13 @@ cp agent-browser/cli/target/release/agent-browser.exe \
    agent-browser/bin/agent-browser-win32-x64.exe
 ```
 
+**macOS only — re-sign after copying.** `cp` preserves the linker's ad-hoc signature but macOS (Sequoia+) will SIGKILL the binary at exec (`[1] <pid> killed` with no other output) due to the stale signature + `com.apple.provenance` xattr. Strip xattrs and re-adhoc-sign:
+
+```bash
+xattr -cr agent-browser/bin/agent-browser-darwin-arm64
+codesign --force --sign - agent-browser/bin/agent-browser-darwin-arm64
+```
+
 Verify:
 
 ```bash
@@ -103,7 +110,11 @@ cd agent-browser/cli && cargo build --release && cd -
 cp agent-browser/cli/target/release/agent-browser \
    agent-browser/bin/agent-browser-darwin-arm64
 
-# 4. Restart demio
+# 4. macOS only — re-sign (otherwise the kernel SIGKILLs the new binary)
+xattr -cr agent-browser/bin/agent-browser-darwin-arm64
+codesign --force --sign - agent-browser/bin/agent-browser-darwin-arm64
+
+# 5. Restart demio
 bun start
 ```
 

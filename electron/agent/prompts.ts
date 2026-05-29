@@ -7,7 +7,10 @@
 
 import agentBrowserSkill from "./agent-browser-skill.md?raw"
 
-function rolePrompt(opts: { voiceConfigured: boolean; voiceName: string | null }): string {
+function rolePrompt(opts: {
+  voiceConfigured: boolean
+  voiceName: string | null
+}): string {
   const { voiceConfigured, voiceName } = opts
   const voiceLabel = voiceName ?? "(configured voice)"
   const toolCount = voiceConfigured ? "six" : "five"
@@ -186,11 +189,23 @@ Keep discovery tight — 3–8 pages at most. Reserve screenshots for the 1–2 
 ## 3. Script draft + user approval (HARD GATE)
 Write \`script.md\` using \`edit\`. Structure it as a numbered list of scenes. Each scene has:
 - **Goal**: one sentence
-- **URL**: the page it happens on
+- **Start URL**: where the recording begins. For scene N>1 this MUST equal scene N−1's End URL. For scene 1 it's the entry URL.
+- **End URL**: where the scene lands. If End URL = Start URL, the scene is a "stay-and-explore" scene and must include on-page actions.
+- **Transition**: the visible user action that drives Start URL → End URL (e.g. "click the 'Components' link in the navbar", "click 'Button' in the left sidebar", "type 'dialog' in the search box and pick the first result"). Required whenever Start ≠ End. Omit only for scene 1's cold-open or for stay-and-explore scenes.
+- **On-page actions**: what happens after arrival — scroll to a section, hover a variant, copy a code block, click a tab. Required for any scene where End = Start, and recommended for every scene so it isn't dead air.
 - **Viewport**: e.g. 1920×1080
 - **Duration**: seconds (2–15 typical)
-- **Steps**: ordered list of agent-browser actions (open / click / fill / wait / scroll)
 - **On-screen note**: optional short caption
+
+### Continuity rules (READ CAREFULLY)
+
+A polished demo is ONE continuous session, not a slideshow of unrelated pages. Each scene must START where the previous scene ENDED. A scene must NEVER begin by silently teleporting to its destination URL — show the user clicking the nav link, sidebar item, search result, or breadcrumb that gets them there. Scene 1 is the only scene allowed to open cold, and even then it must include at least one visible action (scroll past the hero, hover the CTA, click into the docs) so the recording is not a static screenshot.
+
+Anti-patterns that make a demo feel broken — DO NOT do these:
+- A scene that opens straight on its destination URL after scene 1 (the viewer has no idea how they got there). Reach the URL by clicking, not by \`open\`-ing.
+- A scene with zero clicks / scrolls / hovers / fills. Either merge it with its neighbor or add a meaningful action.
+- Two scenes visiting the same URL unless the second visit is the natural return point of the demo's journey.
+- A "navigate back to Components, then click Foo" written as if it's one step — split it into the transition (click) and the on-page actions.
 
 Post a brief summary and ask: "Reply **approved** to start recording, or tell me what to change." Then call \`present_files\` with \`files: ["script.md"]\`. Your turn ends.
 
@@ -213,46 +228,56 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 trap 'agent-browser record stop 2>/dev/null || true' EXIT
 
 agent-browser set viewport 1920 1080
-agent-browser open <scene-url>
+
+# 1. Land on the PREVIOUS scene's END URL (for scene 01, the entry URL).
+#    This is the page the viewer last saw — it is NOT this scene's destination.
+#    The 'open' here happens BEFORE record start so the page-load itself is
+#    NOT in the video — only the transition click is.
+agent-browser open <scene-start-url>
+agent-browser wait --stable 800 --timeout 5000 || fail "start page never settled"
+
 agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" \
   --log-actions "$WORKSPACE/scenes/scene-<NN>.actions.jsonl" \
   || fail "record start failed"
 
-# Snapshot AFTER record start so the @eN refs you reference below are
-# stable and the snapshot itself appears in the recorded video.
+# 2. Snapshot AFTER record start so the @eN refs you reference below are
+#    stable and the snapshot itself appears in the recorded video.
 agent-browser snapshot -i > "$WORKSPACE/scenes/scene-<NN>.snapshot.txt" \
   || fail "snapshot failed"
 
-echo "Step: submit login form"
-# Form submits: prefer 'form button[type=submit]' over find-role to dodge
-# OAuth buttons, hydration-duplicate buttons, and shadcn responsive spans.
-agent-browser click 'form button[type="submit"]' \
-  || fail "could not submit login form"
+# 3. TRANSITION — the first recorded action of every scene N>1. This is the
+#    click that drives the visible navigation from Start URL to End URL.
+#    Skip this block ONLY for scene 01's cold-open or stay-and-explore scenes.
+echo "Step: transition — click '<descriptive nav target>'"
+agent-browser find role link --name "<Components>" --exact click \
+  || fail "transition click failed"
 
-# After a click that should land on a same-origin destination, verify URL.
-# An unexpected redirect (accounts.google.com, github.com/login) means the
-# click hit an OAuth button — fail loudly so you can fix the locator.
-agent-browser wait --url "**/dashboard*" --timeout 5000 \
-  || fail "unexpected post-submit URL (likely OAuth redirect)"
+# 4. Verify the transition landed where the script promised. Same
+#    OAuth-redirect detection pattern as below, repurposed for continuity —
+#    a wrong locator that clicked an OAuth button or an outer wrapper will
+#    redirect somewhere unexpected and we want to fail loud, not silently
+#    record the wrong page.
+agent-browser wait --url '**/docs/components/<button>*' --timeout 8000 \
+  || fail "transition did not land on expected End URL"
+agent-browser wait --stable 800 --timeout 5000 || fail "end page never settled"
 
-echo "Step: fill email"
-agent-browser find label "Email" fill "demo@example.com" \
-  || fail "could not fill 'Email' field"
-
-echo "Step: wait for dashboard to settle"
-# Replaces 'wait 1000' magic numbers — resolves when MutationObserver sees
-# no DOM changes for 500ms (with a sane upper-bound timeout).
-agent-browser wait --stable 500 --timeout 5000 \
-  || fail "dashboard never settled"
-
-echo "Step: confirm dashboard heading"
-agent-browser find role heading --name "Dashboard" --exact \
-  || fail "'Dashboard' heading did not appear"
+# 5. On-page actions — what makes this scene worth watching. Scroll to the
+#    code block, hover a variant, click a tab, copy a snippet. Every scene
+#    needs at least one of these; a scene with zero on-page actions is dead
+#    air and must be merged or expanded.
+echo "Step: scroll to the code example"
+agent-browser scroll down 400 || fail "scroll failed"
+agent-browser wait --stable 500 --timeout 3000 || fail "settle after scroll failed"
 
 agent-browser record stop || fail "record stop failed"
 \`\`\`
 
 Key rules for the script:
+- **Continuity is non-negotiable.** Every scene N>1 begins with \`open <previous-scene's-end-url>\` BEFORE \`record start\`, then \`record start\`, then a TRANSITION CLICK that drives navigation to this scene's End URL. NEVER \`open <destination-url>\` after scene 1 — that produces the silent-jump-cut that breaks demos.
+- **Scene 1 exception:** scene 01 may \`open\` cold on the entry URL, but it must still include at least one visible action after \`record start\` (scroll past the hero, hover a CTA, click into the docs) so the opening isn't a static screenshot.
+- **Stay-and-explore scenes (End URL = Start URL):** skip the transition click but the scene MUST include at least one on-page action (\`scroll\`, \`hover\`, \`click\`, \`fill\`). Otherwise drop the scene.
+- **Always verify the transition with \`wait --url '<glob>'\`** immediately after the transition click. If the click hit the wrong link, the recording is now on the wrong page — fail loudly so you fix the locator instead of producing a misleading video.
+- **Re-opening a URL the viewer already saw earlier is a smell** — usually it means the earlier scene was missing the transition. Re-read \`script.md\` before writing such a scene; the right fix is almost always to add the transition to the earlier scene, not to re-open here.
 - \`set -euo pipefail\` — any failing command aborts the script immediately
 - \`trap 'agent-browser record stop 2>/dev/null || true' EXIT\` — required so failures don't leak the recording task. Always include this on the line below \`fail()\`.
 - **Locator priority (highest reliability first):**
@@ -316,6 +341,7 @@ Never regenerate the entire video for a single-scene change.
 - **Scene scripts only**: never record a scene as a one-liner \`&&\`-chain. Always write a \`.sh\` file with \`set -euo pipefail\` so failures abort immediately and are visible to you.
 - **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
 - **Screenshot economics**: prefer \`snapshot -i\` (text, cheap) over \`screenshot\` (image, expensive). When a screenshot is genuinely needed: JPEG quality 80, viewport-only, 1280×800. NEVER \`--full\` on long pages — scroll viewport-by-viewport instead. Only switch viewport to 1920×1080 at the start of phase 4 (Recording).
+- **Continuity contract**: each scene's \`.sh\` opens on the previous scene's END URL, starts recording, then records the user clicking through in-app nav (or scrolling/hovering for stay-and-explore scenes) to reach the destination. Silent \`open <destination-url>\` after \`record start\` is forbidden for any scene after scene 01 — it produces jump-cut videos that fail the polished-demo standard. The viewer must always see how they got to each page.
 `
 }
 
