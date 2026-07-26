@@ -16,11 +16,10 @@ import { spawn } from "node:child_process"
 import fs from "node:fs"
 import fsPromises from "node:fs/promises"
 import path from "node:path"
-import { app } from "electron"
-import ffmpegPath from "ffmpeg-static"
 import { tool } from "ai"
 import { z } from "zod"
 import log from "../../lib/logger"
+import { resolveFfmpeg } from "../../lib/ffmpeg"
 
 const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1/text-to-speech"
 const DEFAULT_MODEL = "eleven_turbo_v2_5"
@@ -33,12 +32,7 @@ export interface VoiceoverToolOptions {
   signal: AbortSignal
 }
 
-function resolveFfmpegPath(): string | null {
-  if (!ffmpegPath) return null
-  return app.isPackaged
-    ? path.join(process.resourcesPath, "ffmpeg")
-    : ffmpegPath
-}
+const resolveFfmpegPath = resolveFfmpeg
 
 /**
  * Estimate MP3 duration from file size for a fixed-bitrate stream.

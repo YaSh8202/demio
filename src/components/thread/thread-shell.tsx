@@ -63,7 +63,8 @@ import {
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
-import { CopyIcon } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { AlertTriangleIcon, CopyIcon, RefreshCwIcon, XIcon } from "lucide-react"
 import type { UIMessage } from "@electron/store/types"
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -135,9 +136,12 @@ export function ThreadShell() {
     threads,
     messages,
     status,
+    error,
     input,
     setInput,
     sendMessage,
+    retryRun,
+    dismissError,
     cancelRun,
     createThread,
     renameThread,
@@ -338,6 +342,43 @@ export function ThreadShell() {
               {/* Prompt input — replaced by question card when the agent
                   is awaiting an `ask_user` answer. */}
               <div className="shrink-0 p-4">
+                {/* A failed run is otherwise invisible — the stream just stops.
+                    Without this the thread looks idle and the user has no idea
+                    the model call died or that retrying is an option. */}
+                {error && (
+                  <div className="mx-auto mb-3 flex w-full max-w-3xl items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2.5">
+                    <AlertTriangleIcon className="mt-0.5 size-4 shrink-0 text-destructive" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[13px] font-medium text-destructive">
+                        The run stopped unexpectedly
+                      </p>
+                      <p className="mt-0.5 text-[13px] break-words text-muted-foreground">
+                        {error}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={retryRun}
+                        className="h-7"
+                      >
+                        <RefreshCwIcon className="size-3.5" />
+                        Retry
+                      </Button>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        onClick={dismissError}
+                        aria-label="Dismiss error"
+                        className="size-7"
+                      >
+                        <XIcon className="size-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+
                 {pendingQuestion ? (
                   <PromptQuestionCard
                     key={pendingQuestion.id}

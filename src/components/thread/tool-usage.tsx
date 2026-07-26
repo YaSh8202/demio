@@ -121,9 +121,10 @@ export function ThreadAssistantPartRenderer({
   onVideoReady?: (absPath: string) => void
 }) {
   const renderedParts: ReactNode[] = []
+  const effectiveParts = resolveStalledParts(parts, isMessageStreaming)
 
-  for (let index = 0; index < parts.length; index++) {
-    const part = parts[index]
+  for (let index = 0; index < effectiveParts.length; index++) {
+    const part = effectiveParts[index]
     const key = `message-${messageId}-part-${index}`
 
     if (part.type === "reasoning") {
@@ -133,7 +134,10 @@ export function ThreadAssistantPartRenderer({
 
       renderedParts.push(
         <Reasoning
-          isStreaming={isReasoningPartStreaming(reasoningPart)}
+          isStreaming={isReasoningPartStreaming(
+            reasoningPart,
+            isMessageStreaming
+          )}
           defaultOpen={false}
           key={key}
         >
@@ -165,8 +169,8 @@ export function ThreadAssistantPartRenderer({
       let scanIndex = index + 1
       let lastClusteredIndex = index
 
-      while (scanIndex < parts.length) {
-        const candidate = parts[scanIndex] as ThreadMessagePart
+      while (scanIndex < effectiveParts.length) {
+        const candidate = effectiveParts[scanIndex] as ThreadMessagePart
 
         if (isStructuralPart(candidate)) {
           scanIndex += 1
@@ -221,8 +225,19 @@ function isThreadToolPart(part: ThreadMessagePart): part is ThreadToolPart {
   return type.startsWith("tool-") || type === "dynamic-tool"
 }
 
-function isReasoningPartStreaming(part: ThreadReasoningPart): boolean {
-  return part.state === "streaming"
+/**
+ * A reasoning part only counts as streaming while the run is actually live.
+ *
+ * When a stream dies mid-thought nothing ever flips `state` off `"streaming"`,
+ * so keying the shimmer on the part alone leaves a permanent "Thinking..."
+ * on a run that already failed. `isMessageStreaming` is false once the chat
+ * status leaves streaming/submitted, which is the authoritative signal.
+ */
+function isReasoningPartStreaming(
+  part: ThreadReasoningPart,
+  isMessageStreaming: boolean
+): boolean {
+  return part.state === "streaming" && isMessageStreaming
 }
 
 function isClusterableToolPart(part: ThreadMessagePart): boolean {
@@ -243,6 +258,35 @@ function getThreadToolName(part: ThreadToolPart): string {
 
 function asObject<T extends object>(value: unknown): T | undefined {
   return typeof value === "object" && value !== null ? (value as T) : undefined
+}
+
+/**
+ * Rewrite tool parts that never reached a terminal state on a run that is no
+ * longer live.
+ *
+ * A stream killed mid-tool-call leaves its part at `input-available` forever.
+ * Without this the row keeps claiming "Running command…" on a run that died
+ * minutes ago. Mirrors the persistence-side sanitizing in
+ * `electron/agent/orchestrator.ts` so live and reloaded threads agree.
+ */
+function resolveStalledParts(
+  parts: UIMessage["parts"],
+  isMessageStreaming: boolean
+): UIMessage["parts"] {
+  if (isMessageStreaming) return parts
+
+  let changed = false
+  const next = parts.map((part) => {
+    if (!isThreadToolPart(part) || !isPendingToolState(part.state)) return part
+    changed = true
+    return {
+      ...part,
+      state: "output-error",
+      errorText: "Interrupted — the run ended before this finished.",
+    }
+  })
+
+  return changed ? (next as UIMessage["parts"]) : parts
 }
 
 function isPendingToolState(state: ThreadToolState): boolean {
@@ -583,7 +627,9 @@ function AskUserToolCard({ part }: { part: ThreadToolPart }) {
         />
       )
     }
-    return <AskUserAnsweredCollapsible questions={questions} answers={answers} />
+    return (
+      <AskUserAnsweredCollapsible questions={questions} answers={answers} />
+    )
   }
 
   return null

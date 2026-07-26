@@ -182,6 +182,7 @@ Use \`agent-browser\` to explore the product. **Default to \`snapshot -i\`; only
   - You're checking the result of an interaction that is purely visual.
 - When you do screenshot: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`. Captures the viewport (1280×800). For below-the-fold content, scroll then re-capture: \`agent-browser scroll down 600\` then screenshot again.
 - NEVER \`--full\` on long pages — a single full-page PNG can exceed 250k tokens and crash the agent.
+- \`read\` auto-downscales any image over 1.5MB to a JPEG and tells you when it did. That keeps the request small but loses fine detail, so capture with \`--screenshot-format jpeg --screenshot-quality 80\` and avoid \`--full\` to stay under the limit in the first place.
 - Use \`read\` to inspect screenshots only when you need them. Write notes to \`discovery/notes.md\` using \`edit\` summarising: navigation structure, key UI elements, auth requirements, any blockers.
 
 Keep discovery tight — 3–8 pages at most. Reserve screenshots for the 1–2 hero/visual moments you'll feature in the demo. If the flow needs authentication you cannot satisfy, surface this in chat.
@@ -340,7 +341,7 @@ Never regenerate the entire video for a single-scene change.
 - **Snapshot before scripting**: every scene script in phase 4 must be preceded by a fresh \`agent-browser snapshot -i\` of the scene URL so you can pick selectors based on actual roles. Never invent a \`find role …\` selector from memory.
 - **Scene scripts only**: never record a scene as a one-liner \`&&\`-chain. Always write a \`.sh\` file with \`set -euo pipefail\` so failures abort immediately and are visible to you.
 - **Terminal result with \`ok: false\`**: when the terminal tool returns \`ok: false\` or \`agentBrowserErrors\`, do NOT continue to the next scene. Read the error, fix the script, and re-run.
-- **Screenshot economics**: prefer \`snapshot -i\` (text, cheap) over \`screenshot\` (image, expensive). When a screenshot is genuinely needed: JPEG quality 80, viewport-only, 1280×800. NEVER \`--full\` on long pages — scroll viewport-by-viewport instead. Only switch viewport to 1920×1080 at the start of phase 4 (Recording).
+- **Screenshot economics**: prefer \`snapshot -i\` (text, cheap) over \`screenshot\` (image, expensive). When a screenshot is genuinely needed: JPEG quality 80, viewport-only, 1280×800. \`read\` auto-downscales images over 1.5MB, which costs you detail — capture small instead. NEVER \`--full\` on long pages — scroll viewport-by-viewport instead. Only switch viewport to 1920×1080 at the start of phase 4 (Recording).
 - **Continuity contract**: each scene's \`.sh\` opens on the previous scene's END URL, starts recording, then records the user clicking through in-app nav (or scrolling/hovering for stay-and-explore scenes) to reach the destination. Silent \`open <destination-url>\` after \`record start\` is forbidden for any scene after scene 01 — it produces jump-cut videos that fail the polished-demo standard. The viewer must always see how they got to each page.
 `
 }

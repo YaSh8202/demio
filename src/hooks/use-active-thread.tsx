@@ -50,6 +50,10 @@ interface ActiveThreadContextValue {
   setInput: (value: string) => void
 
   sendMessage: (text: string) => Promise<void>
+  /** Re-run the last user message after a failed run. */
+  retryRun: () => void
+  /** Dismiss the current error without re-running. */
+  dismissError: () => void
   cancelRun: () => void
   createThread: (title?: string) => Promise<StoredThread>
   renameThread: (title: string) => Promise<void>
@@ -127,6 +131,8 @@ export function ActiveThreadProvider({
     status: chatStatus,
     stop,
     error: chatError,
+    regenerate,
+    clearError,
   } = useChat<UIMessage>({
     id: threadId ?? undefined,
     // Wait for persisted messages to load before resuming. Otherwise
@@ -281,6 +287,17 @@ export function ActiveThreadProvider({
     [projectId, threadId, navigate, chatSendMessage]
   )
 
+  // Re-issue the last user message. The failed assistant turn is already
+  // persisted (the orchestrator's `onFinish` runs even on a broken stream), so
+  // `regenerate` replaces it rather than appending a duplicate.
+  const retryRun = useCallback(() => {
+    void regenerate()
+  }, [regenerate])
+
+  const dismissError = useCallback(() => {
+    clearError()
+  }, [clearError])
+
   const cancelRun = useCallback(() => {
     stop()
     if (apis && threadId) {
@@ -363,6 +380,8 @@ export function ActiveThreadProvider({
       input,
       setInput,
       sendMessage,
+      retryRun,
+      dismissError,
       cancelRun,
       createThread,
       renameThread,
@@ -382,6 +401,8 @@ export function ActiveThreadProvider({
       meta,
       input,
       sendMessage,
+      retryRun,
+      dismissError,
       cancelRun,
       createThread,
       renameThread,

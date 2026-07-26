@@ -5,11 +5,18 @@ import * as fsPromises from "node:fs/promises"
 import * as path from "node:path"
 import { createInterface } from "node:readline"
 import { createReadStream } from "node:fs"
+import { downscaleImage } from "../../lib/ffmpeg"
 
 const DEFAULT_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
 const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
+// Ceiling on a single inlined image. `MAX_BYTES` only guards the text path.
+const MAX_IMAGE_BYTES = 1_500 * 1024
+
+function formatKb(bytes: number): string {
+  return `${Math.round(bytes / 1024)}KB`
+}
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
   ".png": "image/png",
@@ -70,7 +77,9 @@ export function createReadTool({ cwd }: ReadToolOptions) {
     description: `Read a file or directory from the filesystem.
 
 - Text files: returns content with line numbers (format: "N: line content")
-- Images (.png, .jpg, .gif, .webp, .bmp, .tiff): returns the image so you can see it
+- Images (.png, .jpg, .gif, .webp, .bmp, .tiff): returns the image so you can see it.
+  Images over 1.5MB are automatically downscaled to a JPEG before being returned —
+  fine for reading layout, not for inspecting exact pixels.
 - Directories: returns a listing of entries
 - Use offset/limit to paginate large files (offset is 1-indexed line number)
 
@@ -169,6 +178,34 @@ Paths can be workspace-relative or absolute.`,
       const ext = path.extname(absPath).toLowerCase()
       const imageMime = IMAGE_EXTENSIONS[ext]
       if (imageMime) {
+        // Base64 inflates by ~4/3, and the image stays in context for every
+        // subsequent step of the turn. A full-resolution screenshot read
+        // unguarded is enough to push request bodies into the megabytes and get
+        // the upstream connection reset mid-stream. Shrink rather than refuse —
+        // the agent wants to see the page, not inspect individual pixels.
+        if (stat.size > MAX_IMAGE_BYTES) {
+          const scaled = await downscaleImage(absPath, MAX_IMAGE_BYTES)
+          if (scaled) {
+            return [
+              {
+                type: "image" as const,
+                data: scaled.data.toString("base64"),
+                mimeType: scaled.mimeType,
+              },
+              { type: "text" as const, text: scaled.note },
+            ]
+          }
+
+          throw new Error(
+            `Image too large to read: ${absPath} is ${formatKb(stat.size)} ` +
+              `(limit ${formatKb(MAX_IMAGE_BYTES)}) and automatic downscaling ` +
+              `failed. Re-capture it smaller — e.g. ` +
+              `\`agent-browser screenshot --screenshot-format jpeg --screenshot-quality 80\` ` +
+              `without \`--full\` — or prefer \`agent-browser snapshot -i\` when you ` +
+              `only need page structure.`
+          )
+        }
+
         const data = await fsPromises.readFile(absPath)
         return [
           {

@@ -18,7 +18,7 @@ import path from "node:path"
 import { app } from "electron"
 import { tool } from "ai"
 import { z } from "zod"
-import ffmpegPath from "ffmpeg-static"
+import { resolveFfmpeg } from "../../lib/ffmpeg"
 import log from "../../lib/logger"
 import { resolveBinaryPath as resolveAgentBrowser } from "../../lib/agent-browser/exec"
 
@@ -50,15 +50,14 @@ function ensureShimDir(): string {
   }
 
   // ffmpeg
-  if (ffmpegPath) {
-    const ffTarget = app.isPackaged
-      ? path.join(process.resourcesPath, "ffmpeg")
-      : ffmpegPath
-    if (fs.existsSync(ffTarget)) {
-      linkExe(shimDir, "ffmpeg", ffTarget, isWin)
-    } else {
-      log.error(`[terminal] ffmpeg binary missing at ${ffTarget}`)
-    }
+  const ffTarget = resolveFfmpeg()
+  if (ffTarget) {
+    linkExe(shimDir, "ffmpeg", ffTarget, isWin)
+  } else {
+    log.error(
+      "[terminal] no ffmpeg binary found — video composition will fail. " +
+        "Expected node_modules/ffmpeg-static/ffmpeg (dev) or resources/ffmpeg (packaged)."
+    )
   }
 
   cachedShimDir = shimDir

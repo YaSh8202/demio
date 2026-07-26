@@ -27,6 +27,66 @@ import { MessageStatus } from "../store/types"
 import { isPhoenixEnabled } from "../observability/phoenix"
 import log from "../lib/logger"
 
+// How many extra `agent.stream()` attempts to make when the upstream transport
+// dies before a single chunk has reached the writer. Mastra's own `pRetry` only
+// wraps the `doStream()` *connect* — once the SSE body is open, a reset (undici
+// `TypeError: terminated` / `ECONNRESET`) is unrecoverable at its layer. Retrying
+// is only safe while nothing has been written, since emitted chunks cannot be
+// retracted from the UI stream.
+const MAX_TRANSPORT_RETRIES = 2
+
+/**
+ * True for connection-level failures that are worth re-issuing the request for
+ * (reset sockets, aborted bodies), as opposed to model/validation errors where
+ * a retry would just fail the same way.
+ */
+function isTransportError(err: unknown): boolean {
+  if (!err) return false
+
+  // ai-sdk marks upstream call errors it considers safe to retry.
+  if (
+    typeof err === "object" &&
+    "isRetryable" in err &&
+    (err as { isRetryable?: unknown }).isRetryable === true
+  ) {
+    return true
+  }
+
+  const parts: string[] = []
+  for (let cur: unknown = err, depth = 0; cur && depth < 5; depth++) {
+    if (typeof cur === "string") {
+      parts.push(cur)
+      break
+    }
+    if (typeof cur !== "object") break
+    const asErr = cur as { message?: unknown; code?: unknown; cause?: unknown }
+    if (typeof asErr.message === "string") parts.push(asErr.message)
+    if (typeof asErr.code === "string") parts.push(asErr.code)
+    cur = asErr.cause
+  }
+
+  const text = parts.join(" ")
+  return (
+    text.includes("ECONNRESET") ||
+    text.includes("ECONNREFUSED") ||
+    text.includes("ETIMEDOUT") ||
+    text.includes("EPIPE") ||
+    text.includes("terminated") ||
+    text.includes("fetch failed") ||
+    text.includes("socket hang up")
+  )
+}
+
+/**
+ * Structural chunks a stream emits before the model has produced anything.
+ *
+ * They carry no content, so holding them back costs nothing visually and buys
+ * a retry window for a connection that dies during the preamble.
+ */
+function isPreambleChunk(chunk: { type?: string }): boolean {
+  return chunk?.type === "start" || chunk?.type === "start-step"
+}
+
 export interface RunAgentOptions {
   projectId: string
   threadId: string
@@ -68,77 +128,156 @@ export async function runAgent({
       (voiceConfigured ? ` (voice: ${voiceName ?? voiceId})` : "")
   )
 
-  const mastraStream = await agent.stream(messages, {
-    abortSignal: signal,
-    stopWhen: [stepCountIs(50), hasToolCall("present_files")],
-    // Phoenix tracing: the global NodeTracerProvider from observability/phoenix.ts
-    // picks up OpenInference spans from the underlying ai-sdk model calls when
-    // PHOENIX_ENABLED=true. `tracingOptions.metadata` attaches our run metadata
-    // to Mastra's root span — Mastra's own observability layer is opt-in via
-    // @mastra/observability and not wired up here.
-    tracingOptions: isPhoenixEnabled()
-      ? {
-          metadata: {
-            "session.id": threadId,
-            "user.id": projectId,
-            projectId,
-            threadId,
-            modelId,
-            projectTitle: project?.project.name ?? "",
-            threadTitle: thread?.title ?? "",
-            functionId: "demio.agent.run",
-            voiceConfigured: String(voiceConfigured),
-            voiceId: voiceId ?? "",
-            voiceName: voiceName ?? "",
+  const startStream = () =>
+    agent.stream(messages, {
+      abortSignal: signal,
+      stopWhen: [stepCountIs(50), hasToolCall("present_files")],
+      // Mastra pulls `maxRetries` off `modelSettings` and feeds it to `pRetry` as
+      // `retries` around the `doStream()` call, so 4 => 5 connect attempts. It
+      // only covers establishing the stream; the mid-flight case is handled by
+      // the retry loop in `execute` below.
+      modelSettings: { maxRetries: 4 },
+      // Phoenix tracing: the global NodeTracerProvider from observability/phoenix.ts
+      // picks up OpenInference spans from the underlying ai-sdk model calls when
+      // PHOENIX_ENABLED=true. `tracingOptions.metadata` attaches our run metadata
+      // to Mastra's root span — Mastra's own observability layer is opt-in via
+      // @mastra/observability and not wired up here.
+      tracingOptions: isPhoenixEnabled()
+        ? {
+            metadata: {
+              "session.id": threadId,
+              "user.id": projectId,
+              projectId,
+              threadId,
+              modelId,
+              projectTitle: project?.project.name ?? "",
+              threadTitle: thread?.title ?? "",
+              functionId: "demio.agent.run",
+              voiceConfigured: String(voiceConfigured),
+              voiceId: voiceId ?? "",
+              voiceName: voiceName ?? "",
+            },
+          }
+        : undefined,
+      providerOptions: {
+        google: {
+          thinkingConfig: {
+            thinkingLevel: "high",
+            includeThoughts: true,
           },
-        }
-      : undefined,
-    providerOptions: {
-      google: {
-        thinkingConfig: {
-          thinkingLevel: "high",
-          includeThoughts: true,
+        },
+        anthropic: {
+          effort: "high",
+          thinking: {
+            type: "enabled",
+          },
+        },
+        openai: {
+          forceReasoning: true,
+          reasoningEffort: "high",
+        },
+        bedrock: {
+          reasoningConfig: { type: "enabled", budgetTokens: 4096 },
         },
       },
-      anthropic: {
-        effort: "high",
-        thinking: {
-          type: "enabled",
-        },
-      },
-      openai: {
-        forceReasoning: true,
-        reasoningEffort: "high",
-      },
-      bedrock: {
-        reasoningConfig: { type: "enabled", budgetTokens: 4096 },
-      },
-    },
-  })
+    })
+
+  // Kick off the first attempt eagerly so setup failures (missing API key,
+  // unsupported provider) still reject out of `runAgent` and reach the IPC
+  // handler's catch, rather than being swallowed into the UI stream.
+  const firstStream = await startStream()
 
   signal.addEventListener("abort", () => clearSession(projectId, threadId), {
     once: true,
   })
 
-  const uiMessageStream = createUIMessageStream<AISdkUIMessage<MessageMetadata>>({
+  const uiMessageStream = createUIMessageStream<
+    AISdkUIMessage<MessageMetadata>
+  >({
     originalMessages: messages,
     execute: async ({ writer }) => {
-      const aiStream = toAISdkStream(mastraStream, {
-        from: "agent",
-        version: "v6",
-        sendReasoning: true,
-      })
-      const reader = aiStream.getReader()
-      while (true) {
-        const { value, done } = await reader.read()
-        if (done) break
-        // Mastra emits default-typed V6 chunks (`messageMetadata: unknown`);
-        // our stream is parameterized with `MessageMetadata`. The runtime
-        // shape matches — metadata is attached in `onFinish`, not via the
-        // chunk stream — so cast to satisfy the writer's narrower generic.
-        writer.write(
-          value as InferUIMessageChunk<AISdkUIMessage<MessageMetadata>>
-        )
+      // Every stream opens with structural chunks (`start`, `start-step`)
+      // before the model says anything. Those are held back rather than
+      // forwarded, so a connection that dies during the preamble — run 1's
+      // failure mode — can still be retried with nothing yet on screen. Once
+      // real content arrives the buffer is flushed and retrying is off the
+      // table, since emitted chunks cannot be retracted from the renderer.
+      let committed = false
+      let mastraStream = firstStream
+
+      for (let attempt = 0; ; attempt++) {
+        const aiStream = toAISdkStream(mastraStream, {
+          from: "agent",
+          version: "v6",
+          sendReasoning: true,
+        })
+        const reader = aiStream.getReader()
+        let preamble: InferUIMessageChunk<AISdkUIMessage<MessageMetadata>>[] =
+          []
+
+        try {
+          while (true) {
+            const { value, done } = await reader.read()
+            if (done) return
+
+            // Mastra reports a failed `createStream` in-band as an error chunk
+            // instead of rejecting, so treat that identically to a throw.
+            if (!committed && (value as { type?: string })?.type === "error") {
+              throw (
+                (value as { error?: unknown }).error ??
+                new Error("stream error")
+              )
+            }
+
+            // Mastra emits default-typed V6 chunks (`messageMetadata: unknown`);
+            // our stream is parameterized with `MessageMetadata`. The runtime
+            // shape matches — metadata is attached in `onFinish`, not via the
+            // chunk stream — so cast to satisfy the writer's narrower generic.
+            const chunk = value as InferUIMessageChunk<
+              AISdkUIMessage<MessageMetadata>
+            >
+
+            if (committed) {
+              writer.write(chunk)
+              continue
+            }
+
+            if (isPreambleChunk(chunk)) {
+              preamble.push(chunk)
+              continue
+            }
+
+            // First real content — flush the held preamble in order, then
+            // switch to pass-through for the rest of the run.
+            committed = true
+            for (const held of preamble) writer.write(held)
+            preamble = []
+            writer.write(chunk)
+          }
+        } catch (err) {
+          const canRetry =
+            !committed &&
+            !signal.aborted &&
+            attempt < MAX_TRANSPORT_RETRIES &&
+            isTransportError(err)
+
+          if (!canRetry) {
+            // Nothing was forwarded yet, so replay the preamble to keep the UI
+            // stream well-formed before the error propagates.
+            for (const held of preamble) writer.write(held)
+            throw err
+          }
+
+          log.warn(
+            `[agent] transport error before any output (attempt ${
+              attempt + 1
+            }/${MAX_TRANSPORT_RETRIES + 1}), re-issuing request:`,
+            err
+          )
+          mastraStream = await startStream()
+        } finally {
+          reader.releaseLock()
+        }
       }
     },
     onFinish: ({ responseMessage, isAborted }) => {
@@ -155,6 +294,13 @@ export async function runAgent({
       // next turn's message conversion emits an orphan tool-call, throwing
       // MissingToolResultsError.
       const sanitizedParts = responseMessage.parts.map((part) => {
+        // A stream that dies mid-thought leaves its reasoning part at
+        // `state: "streaming"`. Persisting that makes the reloaded thread
+        // render a permanent "Thinking..." shimmer, so force it terminal.
+        if (part.type === "reasoning" && part.state === "streaming") {
+          return { ...part, state: "done" as const }
+        }
+
         if (!isToolUIPart(part)) return part
         if (
           part.state === "input-streaming" ||
