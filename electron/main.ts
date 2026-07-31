@@ -12,6 +12,7 @@ import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
 import { initStore } from "./store"
 import { initProviderKeys } from "./store/provider-keys"
+import { initPricing } from "./agent/usage"
 import { ensureDaemon, stopDaemon } from "./lib/agent-browser/daemon"
 import { enableStream, disableStream } from "./lib/agent-browser/stream"
 import { registerSecurityRestrictions } from "./security/restrictions"
@@ -141,6 +142,9 @@ app.on("ready", () => {
 
   // Initialize encrypted provider key storage
   initProviderKeys()
+
+  // Warm the models.dev pricing cache so the first run doesn't wait on a fetch
+  initPricing()
 
   // Register the single-channel IPC handler before any windows exist
   registerHandlers()

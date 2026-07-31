@@ -72,6 +72,11 @@ export function workspaceDir(threadId: string): string {
   return path.join(storeRoot(), "workspaces", threadId)
 }
 
+/** Cached models.dev pricing catalog: ~/.demio/model-pricing.json */
+export function modelPricingCachePath(): string {
+  return path.join(storeRoot(), "model-pricing.json")
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 /** Ensure a directory exists (recursive). No-op if it already does. */

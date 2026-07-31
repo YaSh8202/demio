@@ -15,9 +15,14 @@ import {
   isToolUIPart,
   stepCountIs,
 } from "ai"
-import type { InferUIMessageChunk, UIMessage as AISdkUIMessage } from "ai"
+import type {
+  InferUIMessageChunk,
+  LanguageModelUsage,
+  UIMessage as AISdkUIMessage,
+} from "ai"
 import { toAISdkStream } from "@mastra/ai-sdk"
 import { createDemioAgent } from "./mastra"
+import { buildLiveUsageMetadata, buildUsageMetadata } from "./usage"
 import { clearSession } from "./sessions"
 import { ensureWorkspace } from "./workspace"
 import { appendMessage, getThread, getProject } from "../store"
@@ -34,6 +39,9 @@ import log from "../lib/logger"
 // is only safe while nothing has been written, since emitted chunks cannot be
 // retracted from the UI stream.
 const MAX_TRANSPORT_RETRIES = 2
+
+/** How long `onFinish` will wait on the run's usage totals before giving up. */
+const USAGE_TIMEOUT_MS = 5_000
 
 /**
  * True for connection-level failures that are worth re-issuing the request for
@@ -187,6 +195,11 @@ export async function runAgent({
   // handler's catch, rather than being swallowed into the UI stream.
   const firstStream = await startStream()
 
+  // Tracks whichever attempt actually produced the output, so `onFinish` can
+  // read usage off the right stream — a transport retry replaces this reference
+  // and the discarded attempt's usage would be empty.
+  let finalStream = firstStream
+
   signal.addEventListener("abort", () => clearSession(projectId, threadId), {
     once: true,
   })
@@ -203,13 +216,26 @@ export async function runAgent({
       // real content arrives the buffer is flushed and retrying is off the
       // table, since emitted chunks cannot be retracted from the renderer.
       let committed = false
-      let mastraStream = firstStream
 
       for (let attempt = 0; ; attempt++) {
-        const aiStream = toAISdkStream(mastraStream, {
+        const aiStream = toAISdkStream(finalStream, {
           from: "agent",
           version: "v6",
           sendReasoning: true,
+          // Attach usage + cost to the `finish` chunk so the renderer can show
+          // them as the run lands. Mastra has already normalized `totalUsage`
+          // to ai-sdk v6's nested shape by this point. `onFinish` recomputes
+          // the same numbers for persistence — this copy is for the live UI.
+          //
+          // Cast: Mastra's vendored v6 types leave message metadata as
+          // `unknown`, the same mismatch documented at the chunk cast below.
+          messageMetadata: (({ part }: { part: { type?: string } }) =>
+            part?.type === "finish"
+              ? buildLiveUsageMetadata(
+                  modelId,
+                  (part as { totalUsage?: LanguageModelUsage }).totalUsage
+                )
+              : undefined) as never,
         })
         const reader = aiStream.getReader()
         let preamble: InferUIMessageChunk<AISdkUIMessage<MessageMetadata>>[] =
@@ -274,13 +300,13 @@ export async function runAgent({
             }/${MAX_TRANSPORT_RETRIES + 1}), re-issuing request:`,
             err
           )
-          mastraStream = await startStream()
+          finalStream = await startStream()
         } finally {
           reader.releaseLock()
         }
       }
     },
-    onFinish: ({ responseMessage, isAborted }) => {
+    onFinish: async ({ responseMessage, isAborted }) => {
       if (!responseMessage || responseMessage.role !== "assistant") return
       // If the user cancelled before the model produced anything, skip
       // persisting an empty assistant message — it would clutter the thread
@@ -358,12 +384,31 @@ export async function runAgent({
         return part
       }) as typeof responseMessage.parts
 
+      // `totalUsage` resolves once the stream is fully consumed, which it is by
+      // the time `onFinish` runs — an aborted run included, reporting whatever
+      // was billed before the cancel.
+      //
+      // Raced against a deadline regardless: persisting the message matters far
+      // more than costing it, and an unsettled promise here would strand the
+      // whole assistant turn instead of just its usage numbers.
+      const usage = await Promise.race([
+        finalStream.totalUsage.catch((err: unknown) => {
+          log.warn("[agent] could not read usage for finished run:", err)
+          return undefined
+        }),
+        new Promise<undefined>((resolve) => {
+          const timer = setTimeout(() => {
+            log.warn("[agent] timed out reading usage for finished run")
+            resolve(undefined)
+          }, USAGE_TIMEOUT_MS)
+          timer.unref?.()
+        }),
+      ])
+
       const metadata: MessageMetadata = {
         modelId,
-        totalUsage: null,
-        cost: null,
         status: isAborted ? MessageStatus.CANCELLED : MessageStatus.COMPLETE,
-        messageTokens: 0,
+        ...(await buildUsageMetadata(modelId, usage)),
       }
 
       appendMessage(projectId, threadId, {

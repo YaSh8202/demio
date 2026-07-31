@@ -60,6 +60,7 @@ import {
   PromptQuestionCard,
   useActiveQuestion,
 } from "@/components/thread/prompt-question-card"
+import { hasUsage, MessageUsage } from "@/components/thread/message-usage"
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
@@ -94,6 +95,11 @@ function ThreadMessage({
   const isThinking =
     message.role === "assistant" && isMessageStreaming && !hasAnyContent
 
+  const showCopy = !isMessageStreaming && Boolean(getMessageText(message))
+  // Usage arrives on the stream's `finish` chunk, so the badge can appear while
+  // `isMessageStreaming` is still true — gate it on the data, not the status.
+  const showUsage = hasUsage(message.metadata)
+
   return (
     <Message from={message.role}>
       <MessageContent>
@@ -110,17 +116,18 @@ function ThreadMessage({
           />
         )}
       </MessageContent>
-      {message.role === "assistant" &&
-        !isMessageStreaming &&
-        getMessageText(message) && (
-          <MessageToolbar>
-            <MessageActions>
+      {message.role === "assistant" && (showCopy || showUsage) && (
+        <MessageToolbar>
+          <MessageActions>
+            {showCopy && (
               <MessageAction tooltip="Copy" onClick={handleCopy}>
                 <CopyIcon />
               </MessageAction>
-            </MessageActions>
-          </MessageToolbar>
-        )}
+            )}
+          </MessageActions>
+          {showUsage && <MessageUsage metadata={message.metadata} />}
+        </MessageToolbar>
+      )}
     </Message>
   )
 }

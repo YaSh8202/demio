@@ -11,25 +11,8 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { getDecryptedKey, getProviderKeyMetadata } from "../store/provider-keys"
+import { parseModelId } from "./types"
 import log from "../lib/logger"
-
-/**
- * Parse a full model ID into provider + model parts.
- */
-function parseModelId(fullModelId: string): {
-  provider: string
-  modelId: string
-} {
-  const colonIndex = fullModelId.indexOf(":")
-  if (colonIndex === -1) {
-    // Legacy bare model ID — assume Anthropic
-    return { provider: "anthropic", modelId: fullModelId }
-  }
-  return {
-    provider: fullModelId.slice(0, colonIndex),
-    modelId: fullModelId.slice(colonIndex + 1),
-  }
-}
 
 // ── Instrumented fetch ──────────────────────────────────────────────────────
 //
