@@ -60,7 +60,14 @@ async function handleSend(
   init: RequestInit | undefined
 ): Promise<Response> {
   const body = init?.body ? JSON.parse(init.body as string) : {}
-  const { runId } = await apis!.agent.sendMessage(projectId, threadId, body)
+  // TODO(task-6): the controller-backed `agent.sendMessage` now returns
+  // `{ ok: true }`, not `{ runId }` — progress arrives via
+  // `events.agent.onEvent`, not per-run SSE chunks keyed by runId. This
+  // whole chunk-replay transport is dead until Task 6 rewires the renderer
+  // onto the controller event stream; a local id keeps this path
+  // type-checking (and harmlessly non-functional) in the meantime.
+  await apis!.agent.sendMessage(projectId, threadId, body)
+  const runId = crypto.randomUUID()
 
   return buildLiveResponse(runId, init?.signal)
 }

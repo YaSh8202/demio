@@ -1,30 +1,30 @@
 // ── Agent IPC Handlers ───────────────────────────────────────────────────────
 //
-// `sendMessage` persists the incoming user message, starts the orchestrator,
-// and pipes the resulting UIMessage SSE byte stream over IPC to the renderer
-// using a per-run `runId`. The renderer's custom chat fetch reassembles the
-// bytes into a Response that DefaultChatTransport consumes.
+// Controller-backed surface. Every AgentController event for a session is
+// broadcast as `agent:onEvent` keyed by `${projectId}:${threadId}`; the
+// renderer rebuilds message + progress state from events and can re-hydrate
+// after refresh via `getDisplayState`.
+//
+// `sendMessage`/`reconnect`/`cancel` used to drive the hand-rolled
+// orchestrator/runs/sessions SSE-byte-pump (see electron/agent/orchestrator.ts,
+// runs.ts, sessions.ts) — that path stays importable elsewhere until Task 7
+// deletes it, but this handler no longer calls into it. `reconnect` is kept
+// as a deprecated no-op stub purely so src/lib/ipc-chat-transport.ts (still
+// on the old useChat/SSE transport until Task 6) keeps compiling; it no
+// longer does anything useful.
 
+import fs from "node:fs"
+import path from "node:path"
 import { BrowserWindow } from "electron"
-import { randomUUID } from "node:crypto"
 import log from "../lib/logger"
 import { DEMIO_EVENT_CHANNEL } from "../constants"
 import type { NamespaceHandlers } from "../constants"
-import { getMessages, getProject, appendMessage } from "../store"
-import { runAgent } from "../agent/orchestrator"
-import { startSession, cancelSession } from "../agent/sessions"
-import {
-  appendChunk,
-  clearRun,
-  endRun,
-  errorRun,
-  getActiveRunSnapshot,
-  runKey,
-  startRun,
-} from "../agent/runs"
+import { getProject } from "../store"
+import { getOrCreateSession } from "../agent/controller"
 import { DEFAULT_MODEL_ID } from "../agent/types"
-import type { UIMessage, MessageMetadata } from "../store/types"
-import { MessageStatus } from "../store/types"
+import { ensureWorkspace } from "../agent/workspace"
+import type { UIMessage } from "../store/types"
+import type { SubmitPlanSuspendPayload } from "@mastra/core/tools"
 
 function broadcast(channel: string, ...args: unknown[]) {
   BrowserWindow.getAllWindows().forEach((win) => {
@@ -34,109 +34,172 @@ function broadcast(channel: string, ...args: unknown[]) {
   })
 }
 
-interface SendMessageBody {
-  message: UIMessage
-  modelId?: string
+const subscribed = new Set<string>()
+
+// Maps inside events/displayState do not survive the preload JSON boundary —
+// convert to plain objects/arrays before broadcast.
+function serializeEvent(event: unknown): unknown {
+  return JSON.parse(
+    JSON.stringify(event, (_k, v) =>
+      v instanceof Map ? Object.fromEntries(v) : v
+    )
+  )
+}
+
+/**
+ * For a `submit_plan` `tool_suspended` event, read the plan file content off
+ * disk and attach it as `planContent` on the (already plain-object)
+ * serialized event so the renderer can display the plan without a separate
+ * round trip. `suspendPayload.path` is validated to resolve inside the
+ * thread's own workspace directory before being read — the path comes from
+ * inside a suspended tool call, so it is untrusted input from the model.
+ */
+function attachPlanContent(
+  serialized: Record<string, unknown>,
+  threadId: string
+): Record<string, unknown> {
+  if (serialized["toolName"] !== "submit_plan") return serialized
+
+  const suspendPayload = serialized["suspendPayload"] as
+    | Partial<SubmitPlanSuspendPayload>
+    | undefined
+  const rawPath = suspendPayload?.path
+  if (typeof rawPath !== "string" || rawPath.length === 0) return serialized
+
+  const cwd = ensureWorkspace(threadId)
+  const resolved = path.resolve(cwd, rawPath)
+  const isInsideWorkspace =
+    resolved === cwd || resolved.startsWith(cwd + path.sep)
+  if (!isInsideWorkspace) {
+    log.error(
+      `[agent] submit_plan path escapes workspace, refusing to read: ${rawPath}`
+    )
+    return serialized
+  }
+
+  try {
+    return {
+      ...serialized,
+      planContent: fs.readFileSync(resolved, "utf8"),
+    }
+  } catch (error) {
+    log.error("[agent] failed to read submit_plan file:", error)
+    return serialized
+  }
+}
+
+async function ensureSubscribed(projectId: string, threadId: string) {
+  const key = `${projectId}:${threadId}`
+  if (subscribed.has(key)) return
+  subscribed.add(key)
+  const session = await getOrCreateSession(projectId, threadId)
+  // Promise-chain serialization: async handlers must not interleave
+  // (mastracode:tui/src/tui/setup.ts:571-590). Broadcast is sync today, but
+  // keep the chain — persistence hooks land here later.
+  let queue = Promise.resolve()
+  session.subscribe((event: unknown) => {
+    queue = queue.then(() => {
+      try {
+        let serialized = serializeEvent(event) as Record<string, unknown>
+        if (serialized["type"] === "tool_suspended") {
+          serialized = attachPlanContent(serialized, threadId)
+        }
+        broadcast("agent:onEvent", key, serialized)
+      } catch (error) {
+        log.error("[agent] event broadcast failed:", error)
+      }
+    })
+  })
+}
+
+function extractText(message: UIMessage): string {
+  return (message.parts ?? [])
+    .map((p) => (p.type === "text" ? (p as { text: string }).text : ""))
+    .filter(Boolean)
+    .join("\n")
 }
 
 export const agentHandlers = {
-  /**
-   * Persist the user message, start the agent, and stream UIMessage SSE
-   * bytes back over `agent:onChunk` keyed by the returned `runId`.
-   */
   sendMessage: async (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
     threadId: string,
-    body: SendMessageBody
+    body: { message: UIMessage; modelId?: string }
   ) => {
-    const runId = randomUUID()
-
-    const userMessage: UIMessage = {
-      ...body.message,
-      metadata: {
-        modelId: null,
-        totalUsage: null,
-        cost: null,
-        status: MessageStatus.COMPLETE,
-        messageTokens: 0,
-        ...(body.message.metadata as Partial<MessageMetadata> | undefined),
-      },
-    }
-    appendMessage(projectId, threadId, userMessage)
-
-    const projectData = getProject(projectId)
+    await ensureSubscribed(projectId, threadId)
+    const session = await getOrCreateSession(projectId, threadId)
     const modelId =
-      body.modelId || projectData?.meta?.selectedModel || DEFAULT_MODEL_ID
-
-    const signal = startSession(projectId, threadId)
-    const messages = getMessages(projectId, threadId)
-
-    // Buffer this run in main so a refreshed renderer can reattach via
-    // `agent.reconnect`. Replaces any prior buffered entry for this thread.
-    const key = runKey(projectId, threadId)
-    clearRun(key)
-    startRun(key, runId)
-
-    const decoder = new TextDecoder()
-
-    const emitChunk = (decoded: string) => {
-      const seq = appendChunk(key, runId, decoded)
-      broadcast("agent:onChunk", runId, decoded, seq)
-    }
-
-    const pump = async () => {
-      try {
-        const response = await runAgent({
-          projectId,
-          threadId,
-          messages,
-          modelId,
-          signal,
+      body.modelId ||
+      getProject(projectId)?.meta?.selectedModel ||
+      DEFAULT_MODEL_ID
+    // `session.model.set` only updates the in-memory selection (no thread
+    // persistence, no `model_changed` event) — SessionModel.set docstring,
+    // agent-controller/session.d.ts:630-633. That's the right call here: we
+    // want THIS run to use the requested/default model without silently
+    // persisting it as the thread's remembered model (that's a distinct,
+    // explicit "switch model" action `session.model.switch(...)` would own).
+    session.model.set({ modelId })
+    // Fire and forget — progress arrives via agent:onEvent. While a run is
+    // active this becomes a follow-up/steer decision internally; Session's
+    // own `sendMessage` queues/streams as appropriate.
+    void session
+      .sendMessage({ content: extractText(body.message) })
+      .catch((error: unknown) => {
+        log.error("[agent] sendMessage failed:", error)
+        broadcast("agent:onEvent", `${projectId}:${threadId}`, {
+          type: "error",
+          error: error instanceof Error ? error.message : String(error),
         })
-
-        const reader = response.body?.getReader()
-        if (!reader) {
-          endRun(key, runId)
-          broadcast("agent:onEnd", runId)
-          return
-        }
-
-        while (true) {
-          const { value, done } = await reader.read()
-          if (done) break
-          if (value && value.byteLength > 0) {
-            emitChunk(decoder.decode(value, { stream: true }))
-          }
-        }
-        const tail = decoder.decode()
-        if (tail) emitChunk(tail)
-        endRun(key, runId)
-        broadcast("agent:onEnd", runId)
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error)
-        log.error("[agent] run failed:", error)
-        errorRun(key, runId, msg)
-        broadcast("agent:onError", runId, msg)
-      }
-    }
-
-    pump()
-
-    return { runId }
+      })
+    return { ok: true }
   },
 
-  /**
-   * Return a snapshot of the in-flight (or recently-finished) run for this
-   * thread, or null if there is none. The renderer uses this on mount to
-   * resume an interrupted stream after a refresh.
-   */
-  reconnect: async (
+  respondSuspension: async (
     _event: Electron.IpcMainInvokeEvent,
     projectId: string,
-    threadId: string
+    threadId: string,
+    body: { toolCallId: string; resumeData: unknown }
   ) => {
-    return getActiveRunSnapshot(runKey(projectId, threadId))
+    await ensureSubscribed(projectId, threadId)
+    const session = await getOrCreateSession(projectId, threadId)
+
+    const pending = session.suspensions.get({ toolCallId: body.toolCallId })
+    const isSubmitPlan = pending?.toolName === "submit_plan"
+    const resumeData = body.resumeData as
+      | { action?: "approved" | "rejected"; title?: string; plan?: string }
+      | undefined
+
+    // `session.respondToToolSuspension` already routes submit_plan resumes
+    // through its own plan-approval path (mode switch on approve) — see
+    // agent-controller/session.d.ts:1276-1286. Demio layers its own
+    // `activePlan` controller-state field on top (execute mode's
+    // instructions read it), which the built-in tool knows nothing about,
+    // so we set it ourselves before resuming.
+    if (isSubmitPlan && resumeData?.action === "approved") {
+      await session.state.set({
+        activePlan: {
+          title: resumeData.title ?? "",
+          plan: resumeData.plan ?? "",
+          approvedAt: new Date().toISOString(),
+        },
+      })
+    }
+
+    await session.respondToToolSuspension({
+      toolCallId: body.toolCallId,
+      resumeData: body.resumeData,
+    })
+
+    // On rejection we don't want the built-in tool's auto-continue (it just
+    // re-feeds the model the rejection + feedback and lets it keep
+    // streaming in the same turn) — Demio wants a hard stop so the
+    // rejection + feedback becomes context for the user's NEXT message
+    // rather than an in-turn auto-revision.
+    if (isSubmitPlan && resumeData?.action === "rejected") {
+      session.abort()
+    }
+
+    return { ok: true }
   },
 
   cancel: async (
@@ -144,13 +207,58 @@ export const agentHandlers = {
     projectId: string,
     threadId: string
   ) => {
-    cancelSession(projectId, threadId)
-    // Don't clearRun here — the agent's stream takes a few seconds to
-    // actually drain after abort, and we want a refresh during that
-    // window to still pick up the partial via reconnect. The pump's
-    // own end/errorRun keeps the buffer for the 60s grace, and the
-    // orchestrator's onFinish persists the partial to disk for the
-    // post-drain refresh path.
+    const session = await getOrCreateSession(projectId, threadId)
+    // Abort guard must cover BOTH states: isRunning() is false while a tool
+    // sits in suspend() (mastracode:tui/src/tui/setup.ts:70) — abort anyway
+    // so a parked ask_user/submit_plan also cancels.
+    session.abort()
     return { cancelled: true }
+  },
+
+  getDisplayState: async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    threadId: string
+  ) => {
+    await ensureSubscribed(projectId, threadId)
+    const session = await getOrCreateSession(projectId, threadId)
+    // SessionDisplayState.get() is non-nullable (session.d.ts:941) — it
+    // always returns a snapshot, defaulted/idle when nothing has run yet.
+    // The `| null` in this method's documented return type is for callers
+    // that haven't mounted a session at all; that's not a state this
+    // handler can observe once ensureSubscribed has run.
+    return serializeEvent(session.displayState.get())
+  },
+
+  // History for thread mount / refresh-reattach. Controller storage is the
+  // source of truth for controller-era conversations (ADR-007 amended);
+  // mirrors mastracode renderExistingMessages (tui/src/tui/render-messages.ts:843).
+  listMessages: async (
+    _event: Electron.IpcMainInvokeEvent,
+    projectId: string,
+    threadId: string,
+    limit?: number
+  ) => {
+    await ensureSubscribed(projectId, threadId)
+    const session = await getOrCreateSession(projectId, threadId)
+    const messages = await session.thread.listActiveMessages({
+      limit: limit ?? 200,
+    })
+    return serializeEvent(messages)
+  },
+
+  /**
+   * @deprecated Dead stub kept only so src/lib/ipc-chat-transport.ts (old
+   * useChat/SSE renderer path, replaced in Task 6) still type-checks —
+   * `apis.agent.reconnect` no longer has a backing run buffer to read from
+   * (runs.ts is no longer wired up by this handler). Always returns null,
+   * which ipc-chat-transport.ts already treats as "no active run".
+   */
+  reconnect: async (
+    _event: Electron.IpcMainInvokeEvent,
+    _projectId: string,
+    _threadId: string
+  ) => {
+    return null
   },
 } satisfies NamespaceHandlers

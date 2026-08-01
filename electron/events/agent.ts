@@ -1,25 +1,38 @@
 // ── Agent IPC Events ─────────────────────────────────────────────────────────
 //
 // Namespace: "agent"
-// Forwards UIMessage stream bytes (and lifecycle signals) from a running
-// agent run to the renderer's custom fetch transport.
 //
 // These are "virtual" — the actual broadcasting happens in
 // handlers/agent.ts, which calls webContents.send() directly against the
-// same channel format the preload subscribes to.
+// same channel format the preload subscribes to. This file exists purely so
+// the preload/renderer typed wrappers (events.agent.*) get generated.
 
 import type { NamespaceEvents, EventCallback } from "../constants"
 
 export const agentEvents = {
-  /** Fired with (runId: string, chunk: string, seq: number) for each SSE chunk. */
+  /**
+   * Fired with (threadKey: string, event: DemioControllerEvent) for every
+   * AgentController event on a session (`${projectId}:${threadId}` key).
+   * Maps inside the event are serialized to plain objects before broadcast.
+   */
+  onEvent: (_callback: EventCallback) => {
+    return () => {}
+  },
+  /**
+   * @deprecated Old hand-rolled SSE-byte-pump path (orchestrator/runs.ts),
+   * superseded by `onEvent`. Never broadcast by the controller-backed
+   * handler — kept declared only so src/lib/ipc-chat-transport.ts (replaced
+   * in Task 6) still compiles against `events.agent.onChunk`. Removed
+   * outright once that transport is deleted.
+   */
   onChunk: (_callback: EventCallback) => {
     return () => {}
   },
-  /** Fired with (runId: string) when the run finishes cleanly. */
+  /** @deprecated See `onChunk`. */
   onEnd: (_callback: EventCallback) => {
     return () => {}
   },
-  /** Fired with (runId: string, message: string) on error. */
+  /** @deprecated See `onChunk`. */
   onError: (_callback: EventCallback) => {
     return () => {}
   },
