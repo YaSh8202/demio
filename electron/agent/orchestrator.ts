@@ -139,7 +139,12 @@ export async function runAgent({
   const startStream = () =>
     agent.stream(messages, {
       abortSignal: signal,
-      stopWhen: [stepCountIs(50), hasToolCall("present_files")],
+      // Cast: Mastra's `stopWhen` still vendors ai-sdk v5/v6-shaped
+      // `StopCondition` snapshots (see `@mastra/core/dist/loop/types.d.ts`),
+      // not yet updated for ai v7's `StopCondition<TOOLS, RUNTIME_CONTEXT>`.
+      // Both are the same runtime shape — `(options: { steps }) => boolean`
+      // — so this is a type-only mismatch.
+      stopWhen: [stepCountIs(50), hasToolCall("present_files")] as never,
       // Mastra pulls `maxRetries` off `modelSettings` and feeds it to `pRetry` as
       // `retries` around the `doStream()` call, so 4 => 5 connect attempts. It
       // only covers establishing the stream; the mid-flight case is handled by

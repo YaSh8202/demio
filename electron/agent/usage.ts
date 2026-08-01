@@ -168,18 +168,17 @@ export function toV6Usage(usage: MastraUsage | undefined): LanguageModelUsage {
       reasoningTokens: usage?.reasoningTokens,
     },
     totalTokens: usage?.totalTokens,
-    reasoningTokens: usage?.reasoningTokens,
-    cachedInputTokens: usage?.cachedInputTokens,
   }
 }
 
 /**
- * ai-sdk v6's nested usage → Mastra's flat shape.
+ * ai-sdk v7's nested usage → Mastra's flat shape.
  *
  * The inverse of `toV6Usage`, needed because the live stream hands us usage
- * that Mastra has *already* normalized to v6 while pricing works off the flat
- * counters. Prefers the nested details and falls back to v6's deprecated
- * top-level aliases.
+ * that Mastra has *already* normalized to v7 while pricing works off the flat
+ * counters. v7 dropped the deprecated top-level `reasoningTokens` /
+ * `cachedInputTokens` aliases `toV6Usage` used to also write — read the
+ * nested details only.
  */
 export function fromV6Usage(
   usage: LanguageModelUsage | undefined
@@ -188,10 +187,8 @@ export function fromV6Usage(
     inputTokens: usage?.inputTokens,
     outputTokens: usage?.outputTokens,
     totalTokens: usage?.totalTokens,
-    reasoningTokens:
-      usage?.outputTokenDetails?.reasoningTokens ?? usage?.reasoningTokens,
-    cachedInputTokens:
-      usage?.inputTokenDetails?.cacheReadTokens ?? usage?.cachedInputTokens,
+    reasoningTokens: usage?.outputTokenDetails?.reasoningTokens,
+    cachedInputTokens: usage?.inputTokenDetails?.cacheReadTokens,
     cacheCreationInputTokens: usage?.inputTokenDetails?.cacheWriteTokens,
   }
 }

@@ -11,6 +11,7 @@
 
 import { Mastra } from "@mastra/core"
 import { Agent } from "@mastra/core/agent"
+import type { ToolsInput } from "@mastra/core/agent"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
 import { createTerminalTool } from "./tools/terminal"
@@ -57,6 +58,12 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
     // Keys here become the streamed `toolName` — they must match the names
     // referenced in the system prompt and in the `hasToolCall(...)` stop
     // condition in the orchestrator.
+    //
+    // Cast: ai-sdk v7's `tool()` widened `description` to
+    // `string | ((options) => string)` (dynamic per-call descriptions).
+    // Mastra's vendored `VercelToolV5` type hasn't caught up and still expects
+    // a plain string — our tools only ever pass string literals, so this is a
+    // type-level mismatch only.
     tools: {
       terminal: createTerminalTool({ cwd: opts.workspace, signal: opts.signal }),
       present_files: createPresentFilesTool({ cwd: opts.workspace }),
@@ -73,6 +80,6 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
             }),
           }
         : {}),
-    },
+    } as ToolsInput,
   })
 }
