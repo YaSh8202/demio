@@ -5,10 +5,14 @@
 // exported hook API the old ai-sdk `useChat`-backed version had — thread-shell
 // consumes the same field names (`messages`, `status`, `sendMessage`,
 // `cancelRun`, ...) — with two additions Task 6 needs: `suspension` and
-// `respondSuspension`, and one behavior drop: this no longer merges the
-// JSON-store's persisted message history into the live view. Controller
-// storage (`agent.listMessages`, folded in by `useAgentEvents`) is the source
-// of truth for controller-era conversations now — see task-6-report.md.
+// `respondSuspension`.
+//
+// Controller storage (`agent.listMessages`, folded in by `useAgentEvents`) is
+// the source of truth for controller-era conversations. It is NOT merged with
+// the JSON-store's persisted history for those threads (no live cross-window
+// sync of store messages either) — but ADR-007 requires legacy (pre-controller)
+// threads to remain readable, and the controller's LibSQLStore has no history
+// for a thread that predates it. See the `legacyMessages` fallback below.
 
 import {
   createContext,
@@ -88,6 +92,70 @@ function mapToolState(state: string): DynamicToolUIPart["state"] {
   return state as DynamicToolUIPart["state"]
 }
 
+/**
+ * Controller tool names -> legacy short names.
+ * `src/components/thread/tool-usage.tsx`'s `ThreadToolUsage`/`getClusterKind`
+ * dispatch on "read"/"edit"/"terminal" by exact string, inherited from the
+ * old (deleted) orchestrator's own hand-rolled tool registration. The
+ * controller instead hands the backing `Agent` a Mastra `Workspace`
+ * (`electron/agent/workspace-factory.ts`'s `createDemioWorkspace`, wired in
+ * via `AgentControllerConfig.workspace` in `electron/agent/controller.ts`),
+ * which registers Mastra's generic Workspace tool set under
+ * `mastra_workspace_*` names instead. Map the ones the renderer treats
+ * specially back to their legacy short names so the compact Read/Edit/
+ * Terminal cards and cluster summaries ("read 3 files", "ran 2 commands")
+ * fire instead of falling through to the generic `<Tool>` card for every
+ * single filesystem/shell call; the rest get a shorter display name too,
+ * though they only ever render through the generic card either way (only
+ * "read"/"edit"/"terminal" get bespoke treatment in tool-usage.tsx).
+ *
+ * `present_files` and `ask_user`/`submit_plan`/`task_*` are NOT remapped —
+ * those are registered under their own short names already (present_files:
+ * the top-level `tools` callback in controller.ts, available in every mode,
+ * including execute mode where the instructions explicitly call it after
+ * `generate_demo`; ask_user/submit_plan/task_*: Mastra's built-in tools,
+ * which already use short names).
+ */
+export const WORKSPACE_TOOL_NAME_MAP: Record<string, string> = {
+  mastra_workspace_read_file: "read",
+  mastra_workspace_edit_file: "edit",
+  mastra_workspace_write_file: "write",
+  mastra_workspace_execute_command: "terminal",
+  mastra_workspace_grep: "grep",
+  mastra_workspace_list_files: "list_files",
+  mastra_workspace_mkdir: "mkdir",
+  mastra_workspace_delete: "delete",
+  mastra_workspace_file_stat: "file_stat",
+  mastra_workspace_search: "search",
+}
+
+/**
+ * `mastra_workspace_read_file`/`edit_file`/`write_file` take `{path, ...}`
+ * (`node_modules/@mastra/core/dist/workspace/tools/{read,edit,write}-file.d.ts`);
+ * the legacy compact Read/Edit rows this maps onto
+ * (`ReadToolRow`/`EditToolRow` in tool-usage.tsx) read `input.filePath`.
+ * Alias it onto the mapped input rather than editing that renderer (out of
+ * this task's file list) — otherwise the cards fire (right icon, right
+ * clustering) but show an empty "filesystem"/"file" fallback subtitle
+ * instead of the real path.
+ */
+function withLegacyFilePathAlias(
+  legacyToolName: string,
+  input: unknown
+): unknown {
+  if (
+    legacyToolName !== "read" &&
+    legacyToolName !== "edit" &&
+    legacyToolName !== "write"
+  ) {
+    return input
+  }
+  if (typeof input !== "object" || input === null) return input
+  const path = (input as { path?: unknown }).path
+  if (typeof path !== "string") return input
+  return { ...input, filePath: path }
+}
+
 function mapPart(
   raw: SerializedAgentMessage["content"]["parts"][number]
 ): UIMessage["parts"][number] | null {
@@ -107,6 +175,7 @@ function mapPart(
 
   if (part.type === "tool-invocation" && part.toolInvocation) {
     const inv = part.toolInvocation
+    const toolName = WORKSPACE_TOOL_NAME_MAP[inv.toolName] ?? inv.toolName
     // Double cast: the v4 `toolInvocation` fields don't structurally satisfy
     // v5's per-state discriminated `DynamicToolUIPart` union (e.g. `output`
     // typed `never` while `state` is `"input-streaming"`). This data only
@@ -114,10 +183,10 @@ function mapPart(
     // API, so trusting the runtime shape here is safe.
     return {
       type: "dynamic-tool",
-      toolName: inv.toolName,
+      toolName,
       toolCallId: inv.toolCallId,
       state: mapToolState(inv.state),
-      input: inv.args,
+      input: withLegacyFilePathAlias(toolName, inv.args),
       output: inv.result,
       errorText: inv.errorText,
     } as unknown as UIMessage["parts"][number]
@@ -219,13 +288,51 @@ export function ActiveThreadProvider({
 
   const agentEvents = useAgentEvents(projectId, threadId)
 
-  const messages = useMemo(
+  const controllerMessages = useMemo(
     () =>
       agentEvents.messages
         .filter((m) => m.role === "user" || m.role === "assistant")
         .map(toUIMessage),
     [agentEvents.messages]
   )
+
+  // ── Legacy JSON-store fallback (ADR-007: legacy threads stay readable) ──
+  //
+  // The controller's LibSQLStore has no history for a thread that predates
+  // it — `agent.listMessages` (folded into `agentEvents.messages` by
+  // `useAgentEvents`) resolves to zero messages for those threads, and
+  // stays at zero forever (nothing in the controller pipeline ever touches
+  // that thread id, so no live event populates it either). Fetch the old
+  // JSON-store's messages in parallel and fall back to them — read-only,
+  // no live updates — whenever the controller has nothing to show. They're
+  // already `UIMessage`-shaped (the pre-controller pipeline persisted them
+  // in exactly this ai-sdk v6 format via `apis.store.appendMessage`), so no
+  // adapter is needed, unlike `controllerMessages` above. A thread with any
+  // controller-era message history switches to (and stays on) the
+  // controller's own messages once hydration resolves.
+  // No explicit "reset to []" branch for the `!threadId` case: both routes
+  // that render `ActiveThreadProvider` key it by `${projectId}:${threadId}`
+  // (`src/pages/projects/projectId/{index,thread/index}.tsx`), so a threadId
+  // change always remounts this component fresh (initial state `[]`) rather
+  // than re-running this effect with a new `threadId` prop on the same
+  // instance — there's no live case where a stale non-empty array would
+  // leak across threads. (Calling `setState` synchronously in an effect body
+  // to cover a case that structurally can't occur trips this repo's
+  // `react-hooks/set-state-in-effect` lint rule for no real benefit.)
+  const [legacyMessages, setLegacyMessages] = useState<UIMessage[]>([])
+  useEffect(() => {
+    if (!apis || !threadId) return
+    let cancelled = false
+    void apis.store.getMessages(projectId, threadId).then((msgs) => {
+      if (!cancelled) setLegacyMessages(msgs)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [projectId, threadId])
+
+  const messages =
+    controllerMessages.length > 0 ? controllerMessages : legacyMessages
 
   // The reducer backing `useAgentEvents` only replaces `error` with a new
   // object on a genuine `error`/`hydrate_error` dispatch (untouched by e.g.
@@ -434,6 +541,19 @@ export function ActiveThreadProvider({
 
   const error = dismissedError ? null : (agentEvents.error?.message ?? null)
 
+  // Dismissing the error clears the banner (`error` above) but must also
+  // stop the prompt-input submit button (thread-shell.tsx's `chatStatus`)
+  // from staying error-styled — otherwise dismiss only removes the banner
+  // text while the button still looks broken. Only overridden while the run
+  // is still resting on the SAME dismissed error: a genuinely new run starts
+  // with `agent_start` (status "running"), and any new error resets
+  // `dismissedError` via the `lastSeenError` comparison above, so this can't
+  // mask real, current error state.
+  const status: ThreadStatus =
+    dismissedError && agentEvents.status === "error"
+      ? "idle"
+      : agentEvents.status
+
   const value = useMemo<ActiveThreadContextValue>(
     () => ({
       projectId,
@@ -442,7 +562,7 @@ export function ActiveThreadProvider({
       thread,
       threads,
       messages,
-      status: agentEvents.status,
+      status,
       error,
       suspension: agentEvents.suspension,
       selectedModel: meta?.selectedModel ?? "",
@@ -468,7 +588,7 @@ export function ActiveThreadProvider({
       thread,
       threads,
       messages,
-      agentEvents.status,
+      status,
       agentEvents.suspension,
       error,
       meta,

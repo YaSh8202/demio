@@ -584,7 +584,128 @@ interface AskUserToolOutput {
   message?: string
 }
 
+/**
+ * `ask_user` renders one of two shapes depending on where the message came
+ * from:
+ *   - legacy: the old (deleted) orchestrator's own `ask_user` tool —
+ *     `{questions: [{question, header, options, multiple?, secret?}]}` in
+ *     `output: {ok?, answers: string[][], reason?, message?}` out. Only
+ *     reachable via a pre-controller thread rendered through
+ *     `use-active-thread.tsx`'s legacy-JSON-store fallback (ADR-007) — the
+ *     controller pipeline never produces this shape.
+ *   - controller: Mastra's built-in `ask_user` tool
+ *     (`node_modules/@mastra/core/dist/tools/builtin/ask-user.d.ts`) —
+ *     `{question, options?, selectionMode?}` in, `string | string[]` out.
+ *
+ * Dispatch on the input shape (`questions` array present -> legacy) rather
+ * than on thread provenance, since both can theoretically appear in the same
+ * render pass (mixed legacy + controller messages while a legacy thread's
+ * fallback view is still resolving).
+ */
 function AskUserToolCard({ part }: { part: ThreadToolPart }) {
+  const input = asObject<AskUserToolInput>(part.input)
+  if (Array.isArray(input?.questions)) {
+    return <LegacyAskUserToolCard part={part} />
+  }
+  return <ControllerAskUserToolCard part={part} />
+}
+
+interface ControllerAskUserOption {
+  label: string
+  description?: string
+}
+
+interface ControllerAskUserToolInput {
+  question?: string
+  options?: ControllerAskUserOption[]
+  selectionMode?: "single_select" | "multi_select"
+  /** Not part of the installed `AskUserSuspendPayload` schema as of this
+   * writing (see `suspension-card.tsx`'s file header) — read defensively in
+   * case a future tool version adds it. */
+  secret?: boolean
+}
+
+/** `askUserTool`'s resolved output — a bare string (free text/single-select)
+ * or `string[]` (multi-select). `"(skipped)"` is `suspension-card.tsx`'s own
+ * sentinel for its "Skip question" action, not a value the tool itself
+ * defines — rendered specially here for readability. */
+function ControllerAskUserToolCard({ part }: { part: ThreadToolPart }) {
+  const input = asObject<ControllerAskUserToolInput>(part.input)
+  const question = input?.question ?? ""
+  const isSecret = Boolean(input?.secret)
+
+  if (part.state === "input-streaming" || part.state === "input-available") {
+    return (
+      <div className="flex w-full items-center gap-2 rounded-lg border border-dashed border-border/70 bg-muted/20 px-3 py-2">
+        <MessageSquareIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-[13px] leading-5 text-muted-foreground">
+          {question
+            ? `Waiting for your answer — ${question}`
+            : "Waiting for your answer…"}
+        </span>
+        <span className="pulse-dot size-1.5 rounded-full bg-amber-400" />
+      </div>
+    )
+  }
+
+  if (part.state === "output-error") {
+    return (
+      <CompactToolSummary
+        label="Ask"
+        subtitle={part.errorText ?? "Question dismissed"}
+        error={part.errorText}
+      />
+    )
+  }
+
+  if (part.state === "output-available") {
+    const output = part.output
+    const answerText = Array.isArray(output)
+      ? output.join(", ")
+      : typeof output === "string"
+        ? output
+        : ""
+    const skipped = answerText === "(skipped)"
+    const hasAnswer = answerText.length > 0 && !skipped
+
+    return (
+      <div className="overflow-hidden rounded-lg border border-border/70 bg-muted/20">
+        <div className="px-3 py-2">
+          <p className="text-[12px] leading-5 text-muted-foreground">
+            {question}
+          </p>
+          <div className="mt-1 flex items-center gap-1.5">
+            {isSecret && (
+              <LockIcon className="size-3 shrink-0 text-muted-foreground" />
+            )}
+            <p
+              className={cn(
+                "text-[13px] leading-5",
+                hasAnswer || isSecret
+                  ? "font-medium text-foreground"
+                  : "text-muted-foreground italic"
+              )}
+            >
+              {skipped
+                ? "Skipped"
+                : isSecret
+                  ? hasAnswer
+                    ? "•••••••"
+                    : "(no answer)"
+                  : hasAnswer
+                    ? answerText
+                    : "(no answer)"}
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return null
+}
+
+function LegacyAskUserToolCard({ part }: { part: ThreadToolPart }) {
   const input = asObject<AskUserToolInput>(part.input)
   const output = asObject<AskUserToolOutput>(part.output)
   const questions = input?.questions ?? []

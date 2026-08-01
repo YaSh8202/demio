@@ -95,6 +95,13 @@ function ThreadMessage({
   const showCopy = !isMessageStreaming && Boolean(getMessageText(message))
   // Usage arrives on the stream's `finish` chunk, so the badge can appear while
   // `isMessageStreaming` is still true — gate it on the data, not the status.
+  // TODO(task-6 follow-up): dead on the controller path — mapped messages
+  // (use-active-thread.tsx's `toUIMessage`) never set `metadata`, since
+  // `MastraDBMessage` carries no per-message usage/cost equivalent to the old
+  // orchestrator's `MessageMetadata`. `useAgentEvents().usage: TokenUsage |
+  // null` has thread/run-level usage (from `usage_update`/
+  // `displayState.tokenUsage`) if a later task wants to surface it — likely
+  // as a thread-level display rather than per-message.
   const showUsage = hasUsage(message.metadata)
 
   return (

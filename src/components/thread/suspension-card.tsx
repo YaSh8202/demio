@@ -62,11 +62,32 @@ export function SuspensionCard({
   payload,
   onRespond,
 }: SuspensionCardProps) {
+  // In-flight guard: `onRespond` triggers an IPC round-trip
+  // (`respondSuspension`) that only resolves once the main process's
+  // `respondToToolSuspension`/`handlePlanApprovalResume` call settles —
+  // there is no optimistic local removal of the suspension in between (it
+  // stays rendered until the next `display_state_changed`/
+  // `tool_suspension_cancelled` event clears it). Without this, a second
+  // click before that round-trip lands calls `respondSuspension` again for
+  // an already-resolved `toolCallId`, which the main handler surfaces as a
+  // spurious `error` broadcast (`electron/handlers/agent.ts`'s
+  // `broadcastError` on the `.catch()` of the second, now-invalid call).
+  // `responded` freezes every control after the first click; it's local
+  // state keyed by the card's own `key={toolCallId}` remount (thread-shell.tsx),
+  // so a genuinely new suspension always starts unguarded.
+  const [responded, setResponded] = useState(false)
+  const guardedRespond = (resumeData: unknown) => {
+    if (responded) return
+    setResponded(true)
+    onRespond(resumeData)
+  }
+
   if (toolName === "submit_plan") {
     return (
       <SubmitPlanCard
         payload={(payload as SubmitPlanPayload) ?? {}}
-        onRespond={onRespond}
+        onRespond={guardedRespond}
+        disabled={responded}
       />
     )
   }
@@ -74,7 +95,8 @@ export function SuspensionCard({
   return (
     <AskUserCard
       payload={(payload as AskUserPayload) ?? {}}
-      onRespond={onRespond}
+      onRespond={guardedRespond}
+      disabled={responded}
     />
   )
 }
@@ -84,9 +106,11 @@ export function SuspensionCard({
 function SubmitPlanCard({
   payload,
   onRespond,
+  disabled,
 }: {
   payload: SubmitPlanPayload
   onRespond: (resumeData: unknown) => void
+  disabled: boolean
 }) {
   const [requestingChanges, setRequestingChanges] = useState(false)
   const [feedback, setFeedback] = useState("")
@@ -117,6 +141,7 @@ function SubmitPlanCard({
         <div className="mt-3 flex flex-col gap-2">
           <Textarea
             autoFocus
+            disabled={disabled}
             placeholder="What should change?"
             value={feedback}
             onChange={(e) => setFeedback(e.target.value)}
@@ -125,12 +150,14 @@ function SubmitPlanCard({
             <Button
               size="sm"
               variant="ghost"
+              disabled={disabled}
               onClick={() => setRequestingChanges(false)}
             >
               Cancel
             </Button>
             <Button
               size="sm"
+              disabled={disabled}
               onClick={() =>
                 onRespond({
                   action: "rejected",
@@ -147,11 +174,16 @@ function SubmitPlanCard({
           <Button
             size="sm"
             variant="outline"
+            disabled={disabled}
             onClick={() => setRequestingChanges(true)}
           >
             Request changes
           </Button>
-          <Button size="sm" onClick={() => onRespond({ action: "approved" })}>
+          <Button
+            size="sm"
+            disabled={disabled}
+            onClick={() => onRespond({ action: "approved" })}
+          >
             Approve plan
           </Button>
         </div>
@@ -165,9 +197,11 @@ function SubmitPlanCard({
 function AskUserCard({
   payload,
   onRespond,
+  disabled,
 }: {
   payload: AskUserPayload
   onRespond: (resumeData: unknown) => void
+  disabled: boolean
 }) {
   const question = payload.question ?? ""
   const options = payload.options ?? []
@@ -220,9 +254,10 @@ function AskUserCard({
               <button
                 key={option.label}
                 type="button"
+                disabled={disabled}
                 onClick={() => toggleOption(option.label)}
                 className={cn(
-                  "flex items-start gap-2 rounded-lg border border-border/70 px-3 py-2 text-left transition-colors hover:bg-muted/40",
+                  "flex items-start gap-2 rounded-lg border border-border/70 px-3 py-2 text-left transition-colors hover:bg-muted/40 disabled:pointer-events-none disabled:opacity-50",
                   checked && "border-primary bg-primary/5"
                 )}
               >
@@ -255,7 +290,7 @@ function AskUserCard({
             <Button
               size="sm"
               className="mt-1 self-end"
-              disabled={selected.size === 0}
+              disabled={disabled || selected.size === 0}
               onClick={submitMulti}
             >
               Submit selection
@@ -267,6 +302,7 @@ function AskUserCard({
       <div className="mt-3 flex items-center gap-2">
         <Input
           type={isSecret ? "password" : "text"}
+          disabled={disabled}
           placeholder={
             options.length > 0
               ? isSecret
@@ -286,15 +322,20 @@ function AskUserCard({
           }}
           autoComplete="off"
         />
-        <Button size="sm" onClick={submitFreeText} disabled={!freeText.trim()}>
+        <Button
+          size="sm"
+          onClick={submitFreeText}
+          disabled={disabled || !freeText.trim()}
+        >
           Send
         </Button>
       </div>
 
       <button
         type="button"
+        disabled={disabled}
         onClick={() => onRespond("(skipped)")}
-        className="mt-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+        className="mt-2 text-[12px] text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
       >
         Skip question
       </button>
