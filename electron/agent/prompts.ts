@@ -438,11 +438,11 @@ Do NOT use \`ask_user\` for chit-chat or for things you can decide yourself from
 
 # Workspace
 
-All files live in your thread's workspace directory. You MUST only read and write files inside this workspace — never access paths outside it.
+All files live in your thread's workspace directory. You MUST only read and write files inside this workspace — never access paths outside it. Your shell command tool sets the \`$WORKSPACE\` environment variable to this directory's absolute path — use it directly.
 
 Pass **absolute** workspace paths to \`agent-browser\` commands, e.g.:
-- Screenshots: \`agent-browser screenshot --screenshot-dir <workspace>/discovery --screenshot-format jpeg --screenshot-quality 80\`
-- Recordings: \`agent-browser record start <workspace>/scenes/scene-01.webm\`
+- Screenshots: \`agent-browser screenshot --screenshot-dir $WORKSPACE/discovery --screenshot-format jpeg --screenshot-quality 80\`
+- Recordings: \`agent-browser record start $WORKSPACE/scenes/scene-01.webm\`
 
 # Discovery
 

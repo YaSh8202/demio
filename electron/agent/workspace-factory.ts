@@ -126,8 +126,18 @@ export function createDemioWorkspace(threadId: string): Workspace {
     }),
     sandbox: new LocalSandbox({
       workingDirectory: cwd,
+      // `LocalSandboxOptions.env` is NOT merged with process.env by
+      // LocalSandbox — only PATH is special-cased ("PATH is included by
+      // default unless overridden"); every other host var is absent unless
+      // listed here (local-sandbox.d.ts:38-48). Spread process.env first
+      // (matching the old terminal.ts's `{ ...process.env, PATH, WORKSPACE }`
+      // spawn env — agent-browser/Chromium need HOME, and shell tooling in
+      // general expects a normal environment), then override the vars that
+      // must differ from the host.
       env: {
+        ...process.env,
         PATH: `${shimDir}${pathSep}${process.env.PATH ?? ""}`,
+        WORKSPACE: cwd,
         FORCE_COLOR: "1",
         CI: "true",
         NONINTERACTIVE: "1",
