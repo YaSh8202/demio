@@ -13,10 +13,6 @@ A smaller scope reduces implementation risk and delivers working controller inte
 
 ## Consequences
 
-- Tasks 1–11 implement the vertical slice
-- Task 12 (demo-video narration and composition) is future work
-- Vision judge verification is explicitly deferred (mechanical checks only)
-- Brand kits (intros/outros) are deferred
-- Typed browser tools (vision-based locators) are deferred
-- These decisions remain reviewable and can be revisited in subsequent planning
-- Milestone 2 planning will prioritize the deferred items based on user feedback
+- Tasks 1–11 implement the vertical slice; narration, composition (Task 12), vision judge, brand kits, and typed browser tools deferred
+- Deferred decisions remain reviewable for Milestone 2 planning
+- Milestone 2 will prioritize deferred items based on user feedback

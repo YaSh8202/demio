@@ -13,9 +13,7 @@ Today's system allows the agent to proceed directly to execution. Intermediate u
 
 ## Consequences
 
-- In plan mode, the agent creates a plan file (zod-validated `ScenePlan[]`) and calls `submit_plan({path})`
-- The IPC handler surfaces the plan for user review in the UI
-- User responds with approval or rejection via `respondToToolSuspension`
-- On approval, the controller transitions to execute mode
-- On rejection, the user can iterate (ask agent to refine, adjust parameters, etc.)
-- The suspension can be toggled off for non-interactive scenarios
+- Agent creates zod-validated plan file in plan mode and calls `submit_plan({path})`
+- IPC handler surfaces plan for user review; user responds via `respondToToolSuspension` for approval or rejection
+- On approval, controller transitions to execute mode; on rejection, user can iterate before resubmitting
+- Suspension toggled off for non-interactive scenarios (optional, deferred configuration)

@@ -13,9 +13,6 @@ Today's implementation in `electron/agent/tools/terminal.ts` (367 lines), `read.
 
 ## Consequences
 
-- `electron/agent/tools/terminal.ts`, `read.ts`, and `edit.ts` are deleted
-- `electron/agent/workspace-factory.ts` creates a Workspace with cwd = thread workspace dir and env with PATH shim
-- Tools are registered from the Workspace primitive; Mastra documents them automatically
-- Workspace enforces allowed paths (thread workspace + global temp dirs)
-- Custom tools (`present_files`, `synthesize_voiceover`) remain hand-rolled in `electron/agent/tools/`
-- Future tool additions (e.g., web search, API calls) use Workspace as the base or stay custom depending on scope
+- Custom tool files (`terminal.ts`, `read.ts`, `edit.ts`) deleted; workspace-factory creates Workspace with thread cwd and PATH shim
+- Core tools registered from Workspace primitive with auto-documentation and allowed-paths enforcement
+- Custom tools (`present_files`, `synthesize_voiceover`) remain hand-rolled; new tools use Workspace or stay custom as needed

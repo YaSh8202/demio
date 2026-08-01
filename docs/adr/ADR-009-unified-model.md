@@ -13,8 +13,6 @@ Supporting role-specific models requires additional configuration, training data
 
 ## Consequences
 
-- `electron/agent/providers.ts` exports `getModel(modelId)` which the controller and workflow steps use
-- No per-step model override logic in this phase
-- The "auto mode" feature (per-provider, per-role selection) is tracked as a separate Milestone 2 initiative
-- Usage tracking is simpler: one model per thread
-- Future work may add `availableModels` mode configuration to let users pick from a list at conversation start
+- `electron/agent/providers.ts` exports `getModel(modelId)` for controller and workflow steps; no per-step model overrides
+- Usage tracking simplified: one model per thread
+- Auto-mode per-provider per-role selection and `availableModels` mode config deferred to Milestone 2

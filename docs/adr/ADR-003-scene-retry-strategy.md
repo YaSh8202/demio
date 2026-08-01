@@ -13,8 +13,6 @@ Current generation lacks explicit retry logic; failures in recording or verifica
 
 ## Consequences
 
-- Each scene encapsulates a retry loop within the workflow (max 3 attempts)
-- Verification happens after every recording attempt, before declaring success or retry
-- If all retries fail, the workflow suspends (not errors out) and presents the user with guidance
-- The scene step records attempt count and failure reason for debugging
-- User can gather more information (logs, browser state) before deciding to retry or skip
+- Each scene encapsulates a max-3-attempt retry loop; verification runs after every attempt
+- On retry exhaustion, workflow suspends (not errors) and presents user guidance to retry, skip, or abort
+- Attempt count and failure reason recorded for debugging and user context

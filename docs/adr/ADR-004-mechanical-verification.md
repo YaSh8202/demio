@@ -13,8 +13,6 @@ Asking the agent to verify its own output requires another LLM call and introduc
 
 ## Consequences
 
-- `electron/agent/workflows/verify.ts` contains pure Node code (testable via `node --test`)
-- Verification runs synchronously after every recording attempt
-- A scene passes verification only if all mechanical checks pass
-- Vision judge verification is tracked as a separate Milestone 2 feature request
-- Future mechanical checks can be added (e.g., screenshot content hash) without architectural changes
+- Pure Node verification code in `electron/agent/workflows/verify.ts` (testable via `node --test`, deterministic)
+- Verification runs synchronously after every recording attempt; scene passes only if all checks pass
+- Vision judge verification deferred to Milestone 2; architecture allows adding mechanical checks without redesign

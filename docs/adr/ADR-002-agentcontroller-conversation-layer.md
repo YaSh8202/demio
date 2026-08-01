@@ -13,8 +13,6 @@ Today's implementation maintains sessions manually in `electron/agent/sessions.t
 
 ## Consequences
 
-- `electron/agent/sessions.ts`, `electron/agent/runs.ts`, and `electron/agent/questions.ts` are deleted
-- Chat messages stream through controller events on a unified IPC broadcast channel
-- Plan approval uses the controller's built-in `submit_plan` suspension (skippable, default ON)
-- Renderer switches from `ipc-chat-transport` reassembling SSE chunks to listening for controller events
-- Session/thread reattachment and persistence come from LibSQL storage in the controller
+- Hand-rolled sessions, runs, and questions files deleted; controller handles all state and mode transitions
+- Chat messages stream through controller events on IPC broadcast; plan approval uses built-in `submit_plan` suspension
+- Renderer switches from SSE-chunk parsing to controller event listening; session reattachment and persistence managed by LibSQL storage

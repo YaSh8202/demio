@@ -15,9 +15,7 @@ Controller threads and workflow snapshots are persisted in `~/.demio/mastra.db` 
 
 ## Consequences
 
-- `electron/store/paths.ts` adds `mastraDbPath()` helper returning `~/.demio/mastra.db`
-- AgentController is initialized with LibSQL storage (via `@mastra/libsql` adapter)
-- Controller sessions can be reattached across app restarts
-- Workflow snapshots are stored alongside thread state in the same database
-- Existing project metadata and old thread JSON files are not migrated; new threads created in controller are not exported to JSON
-- Migration tooling (if needed) is deferred to a future phase
+- `electron/store/paths.ts` adds `mastraDbPath()` helper; controller initialized with LibSQL storage via `@mastra/libsql`
+- Controller sessions reattach across restarts; workflow snapshots coexist with thread state in same DB
+- Existing project metadata and old thread JSON remain unmigrated; new conversations live in controller storage
+- Migration tooling deferred to future phase

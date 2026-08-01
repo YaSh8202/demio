@@ -15,9 +15,6 @@ Progress updates from both conversation and workflow layers reach the renderer a
 
 ## Consequences
 
-- `src/hooks/use-agent-events.ts` replaces `src/lib/ipc-chat-transport.ts` as the renderer's event consumer
-- Controller events are broadcast over `"demio-ipc-event"` (same channel as today)
-- Each tool call includes metadata about the step (e.g., scene number, retry count)
-- Workflow suspension events (retry/skip/abort) integrate with the same event stream
-- No SSE parsing on the renderer; all progress is structured event data
-- The IPC handler serializes controller events to JSON for transport (same as today)
+- `use-agent-events.ts` hook replaces SSE-based `ipc-chat-transport.ts`; listens to controller events on `"demio-ipc-event"`
+- Tool calls include step metadata (scene, retry count); workflow suspension events integrate with same stream
+- All progress is structured event data (no SSE parsing on renderer); IPC handler serializes to JSON for transport

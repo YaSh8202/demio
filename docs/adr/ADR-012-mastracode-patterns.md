@@ -13,10 +13,6 @@ MastraCode is the proven reference for AgentController patterns. Rather than inv
 
 ## Consequences
 
-- Controller modes use `availableTools` to filter tool visibility at LLM-call time (distinct from the full toolset)
-- Plans are zod-validated objects written to disk, submitted via `submit_plan({path})`
-- Session and owner IDs are stable (projectId/threadId) for reattachment and resumption
-- Renderer event subscription uses promise chains to ensure event ordering (not array subscriptions)
-- The renderer re-renders only on `display_state_changed` events, not on every message
-- Future custom features adopt the same patterns for consistency
-- Deviations from MastraCode are explicitly documented in code comments
+- Controller modes use `availableTools` visibility allowlists; plans are zod-validated objects submitted via `submit_plan({path})`
+- Session/owner IDs are stable (projectId/threadId); renderer uses promise-chain event subscriptions and re-renders only on `display_state_changed`
+- Deviations from MastraCode patterns documented in code comments; future features adopt same patterns for consistency
