@@ -110,12 +110,27 @@ function derivePlanTitle(content: string, rawPath: string): string {
   return base.length > 0 ? base : "Plan"
 }
 
+// Cache the last successfully-read plan file content per toolCallId. The
+// framework fans `display_state_changed` after every single controller
+// event — constantly during a run — and each one carries the same
+// `pendingSuspensions` entries, so without this a parked `submit_plan`
+// would trigger a `readFileSync` on every fanned event for however long it
+// stays suspended. Invalidated (deleted) at the two moments a suspension
+// actually disappears: cancelled by the framework (`tool_suspension_cancelled`,
+// handled in `subscribeSession` below) or resumed by us (`respondSuspension`).
+// Keyed by toolCallId alone (globally unique per suspension, not scoped per
+// thread) — self-heals against a stale hit via the `path` equality check
+// below, in case a toolCallId were ever reused with a different plan file.
+const planContentCache = new Map<string, { path: string; content: string }>()
+
 /**
- * For a `submit_plan`-suspended entry (a `tool_suspended` event, or one
- * `pendingSuspensions` map entry off display state), read the plan file
+ * For a `submit_plan`-suspended entry (a `tool_suspended` event, one
+ * `pendingSuspensions` map entry off display state, or a fanned
+ * `display_state_changed`'s `pendingSuspensions`), read the plan file
  * content off disk and attach it as a sibling `planContent` field so the
  * renderer can display the plan without a separate round trip. No-ops for
- * any other tool / an unreadable path.
+ * any other tool / an unreadable path. Reads are cached per toolCallId —
+ * see {@link planContentCache}.
  */
 function attachPlanContent(
   serialized: Record<string, unknown>,
@@ -123,19 +138,34 @@ function attachPlanContent(
 ): Record<string, unknown> {
   if (serialized["toolName"] !== "submit_plan") return serialized
 
+  const toolCallId = serialized["toolCallId"]
   const suspendPayload = serialized["suspendPayload"] as
     | Partial<SubmitPlanSuspendPayload>
     | undefined
-  const content = readValidatedPlanFile(threadId, suspendPayload?.path)
+  const rawPath = suspendPayload?.path
+
+  if (typeof toolCallId === "string" && typeof rawPath === "string") {
+    const cached = planContentCache.get(toolCallId)
+    if (cached && cached.path === rawPath) {
+      return { ...serialized, planContent: cached.content }
+    }
+  }
+
+  const content = readValidatedPlanFile(threadId, rawPath)
   if (content === null) return serialized
+
+  if (typeof toolCallId === "string" && typeof rawPath === "string") {
+    planContentCache.set(toolCallId, { path: rawPath, content })
+  }
 
   return { ...serialized, planContent: content }
 }
 
 /** Apply {@link attachPlanContent} to every `pendingSuspensions` entry of an
  * already-`serializeEvent`d display-state snapshot (used by `getDisplayState`
- * on reconnect, and by the first-subscribe resync — see `ensureSubscribed`).
- * A refresh mid plan-approval must see the same `planContent` a live
+ * on reconnect, the first-subscribe resync, and every live `display_state_changed`
+ * broadcast — see `subscribeSession`). A refresh — or any fanned progress
+ * event — mid plan-approval must see the same `planContent` a live
  * `tool_suspended` broadcast would have carried. */
 function enrichPendingSuspensions(
   serializedDisplayState: Record<string, unknown>,
@@ -196,8 +226,32 @@ async function subscribeSession(
     queue = queue.then(() => {
       try {
         let serialized = serializeEvent(event) as Record<string, unknown>
-        if (serialized["type"] === "tool_suspended") {
+        const type = serialized["type"]
+        if (type === "tool_suspended") {
           serialized = attachPlanContent(serialized, threadId)
+        } else if (type === "display_state_changed") {
+          // The framework fans this after EVERY event (types.d.ts
+          // `display_state_changed` variant), carrying the same
+          // `pendingSuspensions` a `tool_suspended` broadcast carries — a
+          // Task 5 reducer that treats display_state_changed as the
+          // authoritative full-state resync must see `planContent` here
+          // too, or it drops what tool_suspended just delivered on the
+          // very next fanned event.
+          const displayState = serialized["displayState"]
+          if (displayState && typeof displayState === "object") {
+            serialized = {
+              ...serialized,
+              displayState: enrichPendingSuspensions(
+                displayState as Record<string, unknown>,
+                threadId
+              ),
+            }
+          }
+        } else if (type === "tool_suspension_cancelled") {
+          const toolCallId = serialized["toolCallId"]
+          if (typeof toolCallId === "string") {
+            planContentCache.delete(toolCallId)
+          }
         }
         broadcast("agent:onEvent", key, serialized)
       } catch (error) {
@@ -357,6 +411,9 @@ export const agentHandlers = {
       toolCallId: body.toolCallId,
       resumeData: body.resumeData,
     })
+    // The suspension is resolved — drop its cached plan-file read (see
+    // planContentCache) so a later resubmit with a revised plan re-reads.
+    planContentCache.delete(body.toolCallId)
 
     // On rejection we don't want the built-in tool's auto-continue (it just
     // re-feeds the model the rejection + feedback and lets it keep
