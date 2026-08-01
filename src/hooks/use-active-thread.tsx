@@ -1,9 +1,14 @@
 // ── Active Thread Provider ───────────────────────────────────────────────────
 //
-// Wraps ai-sdk's `useChat` with thread/project loading + persistence. Mirrors
-// the chatbot repo's `useActiveChat` pattern: transport via
-// DefaultChatTransport, messages/status owned by useChat, IPC plumbing hidden
-// behind a custom fetch.
+// Wraps `useAgentEvents` (AgentController events over IPC) with thread/project
+// metadata loading (title, sidebar list, selected model, voice). Mirrors the
+// exported hook API the old ai-sdk `useChat`-backed version had — thread-shell
+// consumes the same field names (`messages`, `status`, `sendMessage`,
+// `cancelRun`, ...) — with two additions Task 6 needs: `suspension` and
+// `respondSuspension`, and one behavior drop: this no longer merges the
+// JSON-store's persisted message history into the live view. Controller
+// storage (`agent.listMessages`, folded in by `useAgentEvents`) is the source
+// of truth for controller-era conversations now — see task-6-report.md.
 
 import {
   createContext,
@@ -11,13 +16,10 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react"
 import type { ReactNode } from "react"
 import { useNavigate } from "react-router-dom"
-import { generateId, DefaultChatTransport } from "ai"
-import { useChat } from "@ai-sdk/react"
 import { apis, events } from "@/types/electron-api"
 import type {
   UIMessage,
@@ -25,11 +27,132 @@ import type {
   StoredProject,
   ProjectMeta,
 } from "@electron/store/types"
-import { createIpcChatFetch } from "@/lib/ipc-chat-transport"
+import type { DynamicToolUIPart } from "ai"
+import {
+  useAgentEvents,
+  type SerializedAgentMessage,
+  type AgentSuspension,
+} from "@/hooks/use-agent-events"
+
+// ── Message shape adapter ────────────────────────────────────────────────────
+//
+// `SerializedAgentMessage.content.parts` is `MastraMessagePart[]` — an ai-sdk
+// *v4*-shaped legacy format (`MastraMessageContentV2`, `format: 2`; see
+// `node_modules/@mastra/core/dist/agent/message-list/state/types.d.ts`), not
+// the ai-sdk *v5* `UIMessage["parts"]` shape `src/components/thread/
+// tool-usage.tsx` (and the `ai` v6 package this app is on) renders. The two
+// diverge in exactly the ways the task brief called out:
+//   - reasoning: v4 carries the text under a `reasoning` field, v5 under `text`.
+//   - tool calls: v4 nests `{toolCallId, toolName, args, state, result?}`
+//     under a `type: "tool-invocation"` part's `toolInvocation` field; v5
+//     flattens those directly onto a `type: "tool-<name>"` (or
+//     `"dynamic-tool"`, used here since the controller's tool set isn't a
+//     compile-time union) part, and uses a different state vocabulary for
+//     its three "core" states (`partial-call`/`call`/`result` vs
+//     `input-streaming`/`input-available`/`output-available`) — the four
+//     suspend/approval states (`approval-requested`, `approval-responded`,
+//     `output-error`, `output-denied`) are spelled identically in both.
+//
+// Mapping onto `UIMessage["parts"]` here (rather than teaching
+// tool-usage.tsx a second part vocabulary) keeps the existing renderer —
+// text/reasoning/tool-* clustering, read/edit/terminal/ask_user/present_files
+// special-casing — visually unchanged, per the brief.
+
+/** Loosely-typed escape hatch for the part fields this mapper reads. The
+ * precise nested Mastra union types (`MastraMessagePart`) don't narrow
+ * cleanly through `Omit`/intersection combinators for a switch-on-`type`
+ * mapper; this is a deliberate "trust the wire shape" boundary — the same
+ * kind of cast already used at other IPC-serialization boundaries in this
+ * codebase (see `electron/agent/controller.ts`'s `ToolsInput` cast comment). */
+interface LooseMastraPart {
+  type: string
+  text?: string
+  reasoning?: string
+  toolInvocation?: {
+    toolCallId: string
+    toolName: string
+    args?: unknown
+    state: string
+    result?: unknown
+    errorText?: string
+  }
+}
+
+/** `partial-call`/`call`/`result` (v4) -> `input-streaming`/`input-available`/
+ * `output-available` (v5). The other four legacy states already spell the
+ * same as their v5 counterparts, so they pass through unchanged. */
+function mapToolState(state: string): DynamicToolUIPart["state"] {
+  if (state === "partial-call") return "input-streaming"
+  if (state === "call") return "input-available"
+  if (state === "result") return "output-available"
+  return state as DynamicToolUIPart["state"]
+}
+
+function mapPart(
+  raw: SerializedAgentMessage["content"]["parts"][number]
+): UIMessage["parts"][number] | null {
+  const part = raw as unknown as LooseMastraPart
+
+  if (part.type === "text") {
+    return { type: "text", text: part.text ?? "" }
+  }
+
+  if (part.type === "reasoning") {
+    // Always "streaming" — the render layer (`isReasoningPartStreaming` in
+    // tool-usage.tsx) ANDs this with `isMessageStreaming`, which is the
+    // actually-authoritative signal; there's no reliable per-part
+    // streaming flag in the v4 shape to carry instead.
+    return { type: "reasoning", text: part.reasoning ?? "", state: "streaming" }
+  }
+
+  if (part.type === "tool-invocation" && part.toolInvocation) {
+    const inv = part.toolInvocation
+    // Double cast: the v4 `toolInvocation` fields don't structurally satisfy
+    // v5's per-state discriminated `DynamicToolUIPart` union (e.g. `output`
+    // typed `never` while `state` is `"input-streaming"`). This data only
+    // ever flows into read-only rendering, never back through a provider
+    // API, so trusting the runtime shape here is safe.
+    return {
+      type: "dynamic-tool",
+      toolName: inv.toolName,
+      toolCallId: inv.toolCallId,
+      state: mapToolState(inv.state),
+      input: inv.args,
+      output: inv.result,
+      errorText: inv.errorText,
+    } as unknown as UIMessage["parts"][number]
+  }
+
+  if (part.type === "step-start") {
+    return { type: "step-start" }
+  }
+
+  // source-url / source-document / file / data-* parts: no renderer for
+  // these in tool-usage.tsx (same as the old ai-sdk pipeline) — dropped
+  // rather than mis-rendered.
+  return null
+}
+
+function toUIMessage(message: SerializedAgentMessage): UIMessage {
+  return {
+    id: message.id,
+    role: message.role as "user" | "assistant",
+    parts: message.content.parts
+      .map(mapPart)
+      .filter((p): p is UIMessage["parts"][number] => p !== null),
+  }
+}
+
+function getMessageText(message: UIMessage): string {
+  return message.parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("")
+}
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type ThreadStatus = "idle" | "submitted" | "streaming" | "error"
+export type ThreadStatus = "idle" | "running" | "error"
 
 interface ActiveThreadContextValue {
   projectId: string
@@ -41,6 +164,8 @@ interface ActiveThreadContextValue {
   messages: UIMessage[]
   status: ThreadStatus
   error: string | null
+  /** Active `ask_user`/`submit_plan` suspension awaiting a response, or null. */
+  suspension: AgentSuspension | null
 
   selectedModel: string
   voiceId: string | null
@@ -50,11 +175,16 @@ interface ActiveThreadContextValue {
   setInput: (value: string) => void
 
   sendMessage: (text: string) => Promise<void>
-  /** Re-run the last user message after a failed run. */
+  /** Re-issue the last user message as a new message. Unlike the old
+   * ai-sdk `regenerate()`, this does not replace the failed assistant turn
+   * in place — the controller exposes no regenerate-in-place primitive, so
+   * this appends a new user turn instead (see task-6-report.md). */
   retryRun: () => void
   /** Dismiss the current error without re-running. */
   dismissError: () => void
   cancelRun: () => void
+  /** Resolve the active suspension (`ask_user`/`submit_plan`). */
+  respondSuspension: (toolCallId: string, resumeData: unknown) => Promise<void>
   createThread: (title?: string) => Promise<StoredThread>
   renameThread: (title: string) => Promise<void>
   deleteThread: () => Promise<void>
@@ -84,69 +214,34 @@ export function ActiveThreadProvider({
   const [meta, setMeta] = useState<ProjectMeta | null>(null)
   const [thread, setThread] = useState<StoredThread | null>(null)
   const [threads, setThreads] = useState<StoredThread[]>([])
-  const [initialMessages, setInitialMessages] = useState<UIMessage[]>([])
   const [input, setInput] = useState("")
   const [isLoaded, setIsLoaded] = useState(false)
 
-  // Mutable refs so the transport (created once per thread) always reads
-  // the latest values without re-instantiating.
-  const threadIdRef = useRef<string | null>(threadId)
-  useEffect(() => {
-    threadIdRef.current = threadId
-  }, [threadId])
+  const agentEvents = useAgentEvents(projectId, threadId)
 
-  const selectedModelRef = useRef<string>(meta?.selectedModel ?? "")
-  useEffect(() => {
-    selectedModelRef.current = meta?.selectedModel ?? ""
-  }, [meta])
-
-  // Build the transport once per project. The refs are passed by reference
-  // and only read later when ai-sdk invokes the fetch/prepare callbacks
-  // (event-handler-like context), so the lint rule against ref-during-render
-  // doesn't apply here.
-  const transport = useMemo(
+  const messages = useMemo(
     () =>
-      // eslint-disable-next-line react-hooks/refs
-      new DefaultChatTransport<UIMessage>({
-        api: "ipc://agent",
-        // eslint-disable-next-line react-hooks/refs
-        fetch: createIpcChatFetch(projectId, threadIdRef),
-        prepareSendMessagesRequest: ({ messages }) => ({
-          body: {
-            message: messages.at(-1),
-            modelId: selectedModelRef.current || undefined,
-          },
-        }),
-        prepareReconnectToStreamRequest: ({ id }) => ({
-          api: `ipc://agent/${id}/stream`,
-        }),
-      }),
-    [projectId]
+      agentEvents.messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map(toUIMessage),
+    [agentEvents.messages]
   )
 
-  const {
-    messages,
-    setMessages,
-    sendMessage: chatSendMessage,
-    status: chatStatus,
-    stop,
-    error: chatError,
-    regenerate,
-    clearError,
-  } = useChat<UIMessage>({
-    id: threadId ?? undefined,
-    // Wait for persisted messages to load before resuming. Otherwise
-    // resumeStream races with `setMessages(loaded)` from the load effect
-    // and any in-flight assistant content streamed in via reconnect gets
-    // wiped when we replay disk messages.
-    resume: isLoaded,
-    messages: initialMessages,
-    generateId,
-    transport,
-    experimental_throttle: 50,
-  })
+  // The reducer backing `useAgentEvents` only replaces `error` with a new
+  // object on a genuine `error`/`hydrate_error` dispatch (untouched by e.g.
+  // `display_state_changed`), so keying off it here correctly un-dismisses
+  // only on a new error, not on unrelated state churn. "Adjusting state
+  // during render" (react.dev/learn/you-might-not-need-an-effect#adjusting-
+  // some-state-when-a-prop-changes) rather than an effect — avoids the extra
+  // render-then-effect-then-render cascade an effect-based reset would cause.
+  const [dismissedError, setDismissedError] = useState(false)
+  const [lastSeenError, setLastSeenError] = useState(agentEvents.error)
+  if (agentEvents.error !== lastSeenError) {
+    setLastSeenError(agentEvents.error)
+    setDismissedError(false)
+  }
 
-  // ── Load data on mount / threadId change ───────────────────────────────
+  // ── Load project/thread metadata on mount / threadId change ────────────
   useEffect(() => {
     if (!apis) return
 
@@ -167,10 +262,7 @@ export function ActiveThreadProvider({
       setThreads(threadList)
 
       if (threadId) {
-        const [t, msgs] = await Promise.all([
-          storeApi.getThread(projectId, threadId),
-          storeApi.getMessages(projectId, threadId),
-        ])
+        const t = await storeApi.getThread(projectId, threadId)
 
         if (cancelled) return
 
@@ -183,9 +275,6 @@ export function ActiveThreadProvider({
         }
 
         setThread(t)
-        const loaded = msgs as UIMessage[]
-        setInitialMessages(loaded)
-        setMessages(loaded)
 
         // Keep the project's "last opened" pointer in sync for any
         // navigation path (sidebar click, deep link, back/forward).
@@ -194,8 +283,6 @@ export function ActiveThreadProvider({
         }
       } else {
         setThread(null)
-        setInitialMessages([])
-        setMessages([])
       }
 
       setIsLoaded(true)
@@ -206,7 +293,7 @@ export function ActiveThreadProvider({
     return () => {
       cancelled = true
     }
-  }, [projectId, threadId, navigate, setMessages])
+  }, [projectId, threadId, navigate])
 
   // ── Subscribe to thread list changes ───────────────────────────────────
   useEffect(() => {
@@ -242,22 +329,6 @@ export function ActiveThreadProvider({
     return () => unsub?.()
   }, [projectId])
 
-  // ── Multi-window sync for persisted messages ───────────────────────────
-  useEffect(() => {
-    if (!threadId) return
-
-    const unsub = events?.store.onMessageAppended(
-      (evtProjectId: string, evtThreadId: string, message: UIMessage) => {
-        if (evtProjectId !== projectId || evtThreadId !== threadId) return
-        setMessages((prev) => {
-          if (prev.some((m) => m.id === message.id)) return prev
-          return [...prev, message]
-        })
-      }
-    )
-    return () => unsub?.()
-  }, [projectId, threadId, setMessages])
-
   // ── Actions ────────────────────────────────────────────────────────────
 
   const sendMessage = useCallback(
@@ -265,45 +336,53 @@ export function ActiveThreadProvider({
       const trimmed = text.trim()
       if (!trimmed || !apis) return
 
-      let activeThreadId = threadId
-
-      if (!activeThreadId) {
+      if (!threadId) {
+        // No thread yet: create the sidebar record and hand off to the
+        // freshly-mounted ThreadPage's own ActiveThreadProvider (routed by
+        // the `key={projectId:threadId}` remount in thread/index.tsx) via
+        // the same `location.state.pendingPrompt` mechanism thread-shell.tsx
+        // already uses for the dashboard's "new thread" flow. This provider
+        // instance's `agentEvents.send` is bound to `threadId === null` for
+        // its whole lifetime (useAgentEvents closes over its own params) —
+        // calling it here would silently no-op, so the message must be sent
+        // by the instance that actually owns the new thread's session.
         const newThread = await apis.store.createThread(projectId)
-        activeThreadId = newThread.id
-        threadIdRef.current = activeThreadId
-
         await apis.store.updateProject(projectId, {
-          lastThreadId: activeThreadId,
+          lastThreadId: newThread.id,
         })
-
-        navigate(`/projects/${projectId}/threads/${activeThreadId}`, {
+        setInput("")
+        navigate(`/projects/${projectId}/threads/${newThread.id}`, {
           replace: true,
+          state: { pendingPrompt: trimmed },
         })
+        return
       }
 
       setInput("")
-      await chatSendMessage({ text: trimmed })
+      await agentEvents.send(trimmed)
     },
-    [projectId, threadId, navigate, chatSendMessage]
+    [projectId, threadId, navigate, agentEvents]
   )
 
-  // Re-issue the last user message. The failed assistant turn is already
-  // persisted (the orchestrator's `onFinish` runs even on a broken stream), so
-  // `regenerate` replaces it rather than appending a duplicate.
   const retryRun = useCallback(() => {
-    void regenerate()
-  }, [regenerate])
+    const lastUser = [...messages].reverse().find((m) => m.role === "user")
+    if (!lastUser) return
+    void agentEvents.send(getMessageText(lastUser))
+  }, [messages, agentEvents])
 
   const dismissError = useCallback(() => {
-    clearError()
-  }, [clearError])
+    setDismissedError(true)
+  }, [])
 
   const cancelRun = useCallback(() => {
-    stop()
-    if (apis && threadId) {
-      apis.agent.cancel(projectId, threadId)
-    }
-  }, [projectId, threadId, stop])
+    void agentEvents.cancel()
+  }, [agentEvents])
+
+  const respondSuspension = useCallback(
+    (toolCallId: string, resumeData: unknown) =>
+      agentEvents.respond(toolCallId, resumeData),
+    [agentEvents]
+  )
 
   const createThread = useCallback(
     async (title?: string) => {
@@ -351,18 +430,9 @@ export function ActiveThreadProvider({
     }
   }, [projectId, threadId, threads, navigate])
 
-  // ── Derived status ─────────────────────────────────────────────────────
-
-  const status: ThreadStatus =
-    chatStatus === "submitted"
-      ? "submitted"
-      : chatStatus === "streaming"
-        ? "streaming"
-        : chatStatus === "error"
-          ? "error"
-          : "idle"
-
   // ── Context value ──────────────────────────────────────────────────────
+
+  const error = dismissedError ? null : (agentEvents.error?.message ?? null)
 
   const value = useMemo<ActiveThreadContextValue>(
     () => ({
@@ -371,9 +441,10 @@ export function ActiveThreadProvider({
       project,
       thread,
       threads,
-      messages: messages as UIMessage[],
-      status,
-      error: chatError?.message ?? null,
+      messages,
+      status: agentEvents.status,
+      error,
+      suspension: agentEvents.suspension,
       selectedModel: meta?.selectedModel ?? "",
       voiceId: meta?.voiceId ?? null,
       voiceName: meta?.voiceName ?? null,
@@ -383,6 +454,7 @@ export function ActiveThreadProvider({
       retryRun,
       dismissError,
       cancelRun,
+      respondSuspension,
       createThread,
       renameThread,
       deleteThread,
@@ -396,14 +468,16 @@ export function ActiveThreadProvider({
       thread,
       threads,
       messages,
-      status,
-      chatError,
+      agentEvents.status,
+      agentEvents.suspension,
+      error,
       meta,
       input,
       sendMessage,
       retryRun,
       dismissError,
       cancelRun,
+      respondSuspension,
       createThread,
       renameThread,
       deleteThread,

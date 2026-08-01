@@ -56,10 +56,7 @@ import {
   hasRenderableAssistantParts,
   ThreadAssistantPartRenderer,
 } from "@/components/thread/tool-usage"
-import {
-  PromptQuestionCard,
-  useActiveQuestion,
-} from "@/components/thread/prompt-question-card"
+import { SuspensionCard } from "@/components/thread/suspension-card"
 import { hasUsage, MessageUsage } from "@/components/thread/message-usage"
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { useActiveThread } from "@/hooks/use-active-thread"
@@ -144,6 +141,8 @@ export function ThreadShell() {
     messages,
     status,
     error,
+    suspension,
+    respondSuspension,
     input,
     setInput,
     sendMessage,
@@ -162,7 +161,6 @@ export function ThreadShell() {
 
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const pendingQuestion = useActiveQuestion()
 
   // Sync Zustand model store → project meta
   const zustandModel = useModelStore((s) => s.selectedModel)
@@ -227,16 +225,14 @@ export function ThreadShell() {
     await createThread()
   }, [createThread])
 
-  const isStreaming = status === "streaming"
-  const isSubmitted = status === "submitted"
+  // `useAgentEvents` only distinguishes idle/running/error — the old
+  // submitted-vs-streaming split doesn't exist on the controller path (an
+  // `agent_start` event fires as soon as the run is accepted, with no
+  // separate "queued, no token yet" state). `isRunning` covers both of the
+  // old `isStreaming || isSubmitted` call sites.
+  const isRunning = status === "running"
   const chatStatus =
-    status === "streaming"
-      ? "streaming"
-      : status === "submitted"
-        ? "submitted"
-        : status === "error"
-          ? "error"
-          : "ready"
+    status === "running" ? "streaming" : status === "error" ? "error" : "ready"
 
   return (
     <SidebarProvider>
@@ -252,7 +248,7 @@ export function ThreadShell() {
           project={project}
           voiceId={voiceId}
           voiceName={voiceName}
-          isStreaming={isStreaming || isSubmitted}
+          isStreaming={isRunning}
           onNewThread={handleNewThread}
         />
       </Sidebar>
@@ -316,7 +312,7 @@ export function ThreadShell() {
                           key={msg.id}
                           message={msg}
                           isMessageStreaming={
-                            (isStreaming || isSubmitted) &&
+                            isRunning &&
                             msg.role === "assistant" &&
                             index === messages.length - 1
                           }
@@ -324,8 +320,8 @@ export function ThreadShell() {
                         />
                       ))}
 
-                      {/* Thinking indicator when submitted but no assistant message yet */}
-                      {isSubmitted && messages.at(-1)?.role !== "assistant" && (
+                      {/* Thinking indicator while running but no assistant message yet */}
+                      {isRunning && messages.at(-1)?.role !== "assistant" && (
                         <Message from="assistant">
                           <MessageContent>
                             <Shimmer>Thinking...</Shimmer>
@@ -334,7 +330,7 @@ export function ThreadShell() {
                       )}
 
                       {/* Live status pill while streaming */}
-                      {/* {(isStreaming || isSubmitted) && (
+                      {/* {isRunning && (
                         <div className="inline-flex w-fit items-center gap-2 self-start rounded-full px-2.5 py-1 font-mono text-[10.5px] text-muted-foreground">
                           <span className="pulse-dot size-1.5 rounded-full bg-amber-400" />
                           recording agent · live
@@ -386,10 +382,14 @@ export function ThreadShell() {
                   </div>
                 )}
 
-                {pendingQuestion ? (
-                  <PromptQuestionCard
-                    key={pendingQuestion.id}
-                    request={pendingQuestion}
+                {suspension ? (
+                  <SuspensionCard
+                    key={suspension.toolCallId}
+                    toolName={suspension.toolName}
+                    payload={suspension.payload}
+                    onRespond={(resumeData) =>
+                      respondSuspension(suspension.toolCallId, resumeData)
+                    }
                   />
                 ) : (
                   <PromptInput
@@ -405,9 +405,7 @@ export function ThreadShell() {
                     </PromptInputBody>
                     <PromptInputFooter>
                       <PromptInputTools>
-                        <ModelSelectorPopover
-                          disabled={isStreaming || isSubmitted}
-                        />
+                        <ModelSelectorPopover disabled={isRunning} />
                       </PromptInputTools>
                       <PromptInputSubmit
                         disabled={!input.trim() && chatStatus === "ready"}
