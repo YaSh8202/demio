@@ -77,6 +77,11 @@ export function modelPricingCachePath(): string {
   return path.join(storeRoot(), "model-pricing.json")
 }
 
+/** LibSQL database backing AgentController threads + workflow snapshots. */
+export function mastraDbPath(): string {
+  return path.join(storeRoot(), "mastra.db")
+}
+
 // ── Utilities ────────────────────────────────────────────────────────────────
 
 /** Ensure a directory exists (recursive). No-op if it already does. */

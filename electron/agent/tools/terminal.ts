@@ -15,87 +15,10 @@
 import { spawn, type ChildProcess } from "node:child_process"
 import fs from "node:fs"
 import path from "node:path"
-import { app } from "electron"
 import { tool } from "ai"
 import { z } from "zod"
-import { resolveFfmpeg } from "../../lib/ffmpeg"
 import log from "../../lib/logger"
-import { resolveBinaryPath as resolveAgentBrowser } from "../../lib/agent-browser/exec"
-
-// ── Shim directory (PATH prepend target) ────────────────────────────────────
-
-let cachedShimDir: string | null = null
-
-/**
- * Create a directory containing executable aliases for `agent-browser` and
- * `ffmpeg`, then prepend it to PATH when spawning child shells.
- *
- * We use hardlinks on POSIX (falling back to symlinks, then file copies) and
- * `.cmd` stub files on Windows.
- */
-function ensureShimDir(): string {
-  if (cachedShimDir) return cachedShimDir
-
-  const shimDir = path.join(app.getPath("userData"), "bin")
-  fs.mkdirSync(shimDir, { recursive: true })
-
-  const isWin = process.platform === "win32"
-
-  // agent-browser
-  try {
-    const abTarget = resolveAgentBrowser()
-    linkExe(shimDir, "agent-browser", abTarget, isWin)
-  } catch (err) {
-    log.error("[terminal] Failed to shim agent-browser:", err)
-  }
-
-  // ffmpeg
-  const ffTarget = resolveFfmpeg()
-  if (ffTarget) {
-    linkExe(shimDir, "ffmpeg", ffTarget, isWin)
-  } else {
-    log.error(
-      "[terminal] no ffmpeg binary found — video composition will fail. " +
-        "Expected node_modules/ffmpeg-static/ffmpeg (dev) or resources/ffmpeg (packaged)."
-    )
-  }
-
-  cachedShimDir = shimDir
-  return shimDir
-}
-
-function linkExe(
-  shimDir: string,
-  name: string,
-  target: string,
-  isWin: boolean
-): void {
-  const dest = path.join(shimDir, isWin ? `${name}.cmd` : name)
-  try {
-    if (fs.existsSync(dest)) fs.unlinkSync(dest)
-  } catch {
-    /* ignore */
-  }
-  try {
-    if (isWin) {
-      fs.writeFileSync(dest, `@echo off\r\n"${target}" %*\r\n`)
-    } else {
-      // Prefer symlink for transparency; fall back to hardlink then copy.
-      try {
-        fs.symlinkSync(target, dest)
-      } catch {
-        try {
-          fs.linkSync(target, dest)
-        } catch {
-          fs.copyFileSync(target, dest)
-        }
-      }
-      fs.chmodSync(dest, 0o755)
-    }
-  } catch (err) {
-    log.error(`[terminal] Failed to create shim ${dest}:`, err)
-  }
-}
+import { buildShimPath } from "../workspace-factory"
 
 // ── Action-log path extraction ──────────────────────────────────────────────
 
@@ -175,7 +98,7 @@ Use this tool for THREE kinds of work:
 Stdout is capped at 20KB — if output is truncated, narrow your query or pipe to a file.`
 
 export function createTerminalTool({ cwd, signal }: TerminalToolOptions) {
-  const shimDir = ensureShimDir()
+  const shimDir = buildShimPath()
   const pathSep = process.platform === "win32" ? ";" : ":"
   const injectedPath = `${shimDir}${pathSep}${process.env.PATH ?? ""}`
 
