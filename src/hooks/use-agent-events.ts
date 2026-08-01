@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useReducer } from "react"
 import { apis, events } from "@/types/electron-api"
+import log from "@/lib/logger"
 import type { UIMessage } from "../../electron/store/types"
 import type {
   MastraDBMessage,
@@ -129,6 +130,24 @@ type ControllerEvent =
   | { type: "mode_changed"; modeId: string; previousModeId: string }
   | { type: "model_changed"; modelId: string }
 
+/** Internal reducer actions beyond the raw controller event union — never
+ * broadcast over IPC, only dispatched locally by the effect below. */
+type HookAction =
+  | ControllerEvent
+  // Fired at the start of every (projectId, threadId)-keyed effect run so
+  // switching threads doesn't leak the previous thread's messages,
+  // suspension, displayState, usage, or shellOutput into the new one.
+  | { type: "reset" }
+  // `listMessages` hydration result, one dispatch per message. Distinct
+  // from `message_update` so hydration can never clobber a live-streamed
+  // message that already landed (insert-only-if-absent — see
+  // `insertIfAbsent`), whereas a live `message_update` always replaces.
+  | { type: "hydrate_message"; message: SerializedAgentMessage }
+  // `listMessages`/`getDisplayState` hydration rejected. Surfaced the same
+  // way a live controller `error` event is, so a broken IPC call on mount
+  // doesn't silently present as an empty idle thread.
+  | { type: "hydrate_error"; error: AgentEventError }
+
 // ── Public state shape (Task 6 relies on these field names exactly) ────────
 
 export interface AgentSuspension {
@@ -209,6 +228,19 @@ function upsertMessage(
   return next
 }
 
+/** Insert a hydrated (`listMessages`) message only if no message with that
+ * id is already present — a `listMessages` snapshot is a point-in-time read
+ * that can resolve after live `message_update` events for the same id have
+ * already streamed in newer content; hydration must never regress that. */
+function insertIfAbsent(
+  messages: SerializedAgentMessage[],
+  message: SerializedAgentMessage
+): SerializedAgentMessage[] {
+  return messages.some((m) => m.id === message.id)
+    ? messages
+    : [...messages, message]
+}
+
 function appendShellOutput(
   shellOutput: Record<string, string>,
   toolCallId: string,
@@ -222,11 +254,20 @@ function appendShellOutput(
   return { ...shellOutput, [toolCallId]: capped }
 }
 
-function reducer(
-  state: AgentEventState,
-  event: ControllerEvent
-): AgentEventState {
+function reducer(state: AgentEventState, event: HookAction): AgentEventState {
   switch (event.type) {
+    case "reset":
+      return initial
+
+    case "hydrate_message":
+      return {
+        ...state,
+        messages: insertIfAbsent(state.messages, event.message),
+      }
+
+    case "hydrate_error":
+      return { ...state, status: "error", error: event.error }
+
     case "agent_start":
       return { ...state, status: "running", error: null }
 
@@ -320,8 +361,22 @@ export function useAgentEvents(
   const [state, dispatch] = useReducer(reducer, initial)
 
   useEffect(() => {
+    // Every (projectId, threadId) change starts from a clean slate — without
+    // this, switching threads appends the new thread's hydrated messages
+    // onto the previous thread's `messages` array (upsert-by-id never
+    // collides across threads), and `suspension`/`displayState`/`usage`/
+    // `shellOutput` all carry over too.
+    dispatch({ type: "reset" })
+
     if (!threadId || !apis || !events) return
     const key = `${projectId}:${threadId}`
+
+    // Guards the hydration .then()/.catch() bodies below (and the live
+    // listener above the `cancelled` check wouldn't help, so it's unsub'd
+    // instead): an in-flight `listMessages`/`getDisplayState` call started
+    // for thread A must not dispatch into thread B's state if the effect
+    // re-ran (thread switch) before that promise settled. Set in cleanup.
+    let cancelled = false
 
     // Subscribe first — nothing landing between the subscription and the
     // hydration calls below is lost, and replay is safe (message dedupe by
@@ -331,32 +386,49 @@ export function useAgentEvents(
       dispatch(event as ControllerEvent)
     })
 
-    apis.agent
-      .listMessages(projectId, threadId)
-      .then((messages) => {
+    async function hydrate() {
+      try {
+        // Sequential, per spec: listMessages before getDisplayState.
+        const messages = await apis!.agent.listMessages(projectId, threadId!)
+        if (cancelled) return
         for (const message of messages as SerializedAgentMessage[]) {
-          dispatch({ type: "message_update", message })
+          dispatch({ type: "hydrate_message", message })
         }
-      })
-      .catch(() => {})
 
-    // Belt and braces: main also broadcasts a synthetic display_state_changed
-    // on subscribe attach (first-mount resync), so this is usually
-    // redundant — but idempotent, and covers the case where subscribe
-    // resolves after this call already landed.
-    apis.agent
-      .getDisplayState(projectId, threadId)
-      .then((displayState) => {
+        // Belt and braces: main also broadcasts a synthetic
+        // display_state_changed on subscribe attach (first-mount resync),
+        // so this is usually redundant — but idempotent, and covers the
+        // case where subscribe resolves after this call already landed.
+        const displayState = await apis!.agent.getDisplayState(
+          projectId,
+          threadId!
+        )
+        if (cancelled) return
         if (displayState) {
           dispatch({
             type: "display_state_changed",
             displayState: displayState as SerializedDisplayState,
           })
         }
-      })
-      .catch(() => {})
+      } catch (error) {
+        if (cancelled) return
+        log.error("[useAgentEvents] hydration failed:", error)
+        dispatch({
+          type: "hydrate_error",
+          error:
+            error instanceof Error
+              ? { name: error.name, message: error.message }
+              : { name: "Error", message: String(error) },
+        })
+      }
+    }
 
-    return unsub
+    void hydrate()
+
+    return () => {
+      cancelled = true
+      unsub()
+    }
   }, [projectId, threadId])
 
   const send = useCallback(
