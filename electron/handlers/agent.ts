@@ -34,25 +34,88 @@ function broadcast(channel: string, ...args: unknown[]) {
   })
 }
 
-const subscribed = new Set<string>()
-
-// Maps inside events/displayState do not survive the preload JSON boundary —
-// convert to plain objects/arrays before broadcast.
+// Maps AND Errors inside events/displayState do not survive the preload JSON
+// boundary as anything useful on their own: `JSON.stringify` drops Maps
+// entirely, and Error's `message`/`stack` are non-enumerable so a bare Error
+// serializes to `{}`. The real `error` controller event carries `error:
+// Error` (types.d.ts `type: 'error'` variant) — without this replacer every
+// error the renderer receives over IPC is an empty object.
 function serializeEvent(event: unknown): unknown {
   return JSON.parse(
-    JSON.stringify(event, (_k, v) =>
-      v instanceof Map ? Object.fromEntries(v) : v
-    )
+    JSON.stringify(event, (_k, v) => {
+      if (v instanceof Map) return Object.fromEntries(v)
+      if (v instanceof Error) {
+        return { name: v.name, message: v.message, stack: v.stack }
+      }
+      return v
+    })
+  )
+}
+
+/** Wrap an unknown catch value as an Error so it serializes via the same
+ * `serializeEvent` Error branch as real controller `error` events — one
+ * code path, one shape (`{name, message, stack}`), instead of the old
+ * bug where synthetic broadcasts sent a bare string while real events sent
+ * an (accidentally blanked) Error. */
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
+
+function broadcastError(key: string, error: unknown) {
+  broadcast(
+    "agent:onEvent",
+    key,
+    serializeEvent({ type: "error", error: toError(error) })
   )
 }
 
 /**
- * For a `submit_plan` `tool_suspended` event, read the plan file content off
- * disk and attach it as `planContent` on the (already plain-object)
- * serialized event so the renderer can display the plan without a separate
- * round trip. `suspendPayload.path` is validated to resolve inside the
- * thread's own workspace directory before being read — the path comes from
- * inside a suspended tool call, so it is untrusted input from the model.
+ * Read a `submit_plan` plan file off disk, validating that `rawPath`
+ * resolves inside the thread's own workspace directory before reading it —
+ * the path comes from inside a (suspended) tool call, so it's untrusted
+ * input from the model. Returns `null` (and logs) on any invalid/unreadable
+ * path rather than throwing, so callers can degrade gracefully instead of
+ * persisting placeholder content.
+ */
+function readValidatedPlanFile(
+  threadId: string,
+  rawPath: unknown
+): string | null {
+  if (typeof rawPath !== "string" || rawPath.length === 0) return null
+
+  const cwd = ensureWorkspace(threadId)
+  const resolved = path.resolve(cwd, rawPath)
+  const isInsideWorkspace =
+    resolved === cwd || resolved.startsWith(cwd + path.sep)
+  if (!isInsideWorkspace) {
+    log.error(
+      `[agent] submit_plan path escapes workspace, refusing to read: ${rawPath}`
+    )
+    return null
+  }
+
+  try {
+    return fs.readFileSync(resolved, "utf8")
+  } catch (error) {
+    log.error("[agent] failed to read submit_plan file:", error)
+    return null
+  }
+}
+
+/** First `# Heading` line in the plan markdown, else the file's basename, else a fallback. */
+function derivePlanTitle(content: string, rawPath: string): string {
+  const heading = content.match(/^#\s+(.+)$/m)
+  if (heading) return heading[1].trim()
+  const base = path.basename(rawPath)
+  return base.length > 0 ? base : "Plan"
+}
+
+/**
+ * For a `submit_plan`-suspended entry (a `tool_suspended` event, or one
+ * `pendingSuspensions` map entry off display state), read the plan file
+ * content off disk and attach it as a sibling `planContent` field so the
+ * renderer can display the plan without a separate round trip. No-ops for
+ * any other tool / an unreadable path.
  */
 function attachPlanContent(
   serialized: Record<string, unknown>,
@@ -63,36 +126,68 @@ function attachPlanContent(
   const suspendPayload = serialized["suspendPayload"] as
     | Partial<SubmitPlanSuspendPayload>
     | undefined
-  const rawPath = suspendPayload?.path
-  if (typeof rawPath !== "string" || rawPath.length === 0) return serialized
+  const content = readValidatedPlanFile(threadId, suspendPayload?.path)
+  if (content === null) return serialized
 
-  const cwd = ensureWorkspace(threadId)
-  const resolved = path.resolve(cwd, rawPath)
-  const isInsideWorkspace =
-    resolved === cwd || resolved.startsWith(cwd + path.sep)
-  if (!isInsideWorkspace) {
-    log.error(
-      `[agent] submit_plan path escapes workspace, refusing to read: ${rawPath}`
-    )
-    return serialized
-  }
-
-  try {
-    return {
-      ...serialized,
-      planContent: fs.readFileSync(resolved, "utf8"),
-    }
-  } catch (error) {
-    log.error("[agent] failed to read submit_plan file:", error)
-    return serialized
-  }
+  return { ...serialized, planContent: content }
 }
 
-async function ensureSubscribed(projectId: string, threadId: string) {
+/** Apply {@link attachPlanContent} to every `pendingSuspensions` entry of an
+ * already-`serializeEvent`d display-state snapshot (used by `getDisplayState`
+ * on reconnect, and by the first-subscribe resync — see `ensureSubscribed`).
+ * A refresh mid plan-approval must see the same `planContent` a live
+ * `tool_suspended` broadcast would have carried. */
+function enrichPendingSuspensions(
+  serializedDisplayState: Record<string, unknown>,
+  threadId: string
+): Record<string, unknown> {
+  const pendingSuspensions = serializedDisplayState["pendingSuspensions"]
+  if (!pendingSuspensions || typeof pendingSuspensions !== "object") {
+    return serializedDisplayState
+  }
+  const enriched: Record<string, unknown> = {}
+  for (const [toolCallId, entry] of Object.entries(
+    pendingSuspensions as Record<string, unknown>
+  )) {
+    enriched[toolCallId] = attachPlanContent(
+      entry as Record<string, unknown>,
+      threadId
+    )
+  }
+  return { ...serializedDisplayState, pendingSuspensions: enriched }
+}
+
+// In-flight/complete subscribe promises, keyed by `${projectId}:${threadId}`.
+// A Map<string, Promise<void>> (rather than a Set flagged before the await)
+// so concurrent callers all await the SAME subscribe sequence instead of a
+// second caller racing ahead of `session.subscribe(...)` attaching — and so
+// a rejected attempt (e.g. getOrCreateSession throwing) is removed from the
+// cache instead of permanently marking the key "subscribed" with no listener
+// ever attached.
+const ensureSubscriptions = new Map<string, Promise<void>>()
+
+function ensureSubscribed(projectId: string, threadId: string): Promise<void> {
   const key = `${projectId}:${threadId}`
-  if (subscribed.has(key)) return
-  subscribed.add(key)
+  const inFlight = ensureSubscriptions.get(key)
+  if (inFlight) return inFlight
+
+  const promise = subscribeSession(projectId, threadId, key).catch(
+    (error: unknown) => {
+      ensureSubscriptions.delete(key)
+      throw error
+    }
+  )
+  ensureSubscriptions.set(key, promise)
+  return promise
+}
+
+async function subscribeSession(
+  projectId: string,
+  threadId: string,
+  key: string
+): Promise<void> {
   const session = await getOrCreateSession(projectId, threadId)
+
   // Promise-chain serialization: async handlers must not interleave
   // (mastracode:tui/src/tui/setup.ts:571-590). Broadcast is sync today, but
   // keep the chain — persistence hooks land here later.
@@ -109,6 +204,30 @@ async function ensureSubscribed(projectId: string, threadId: string) {
         log.error("[agent] event broadcast failed:", error)
       }
     })
+  })
+
+  // Subscribe-after-thread-selection gap: by the time `getOrCreateSession`
+  // above resolves, its underlying `AgentController.createSession(...)` has
+  // already run to completion — workspace init, thread bind/create,
+  // mode/model selection all happened and any events they emitted
+  // (workspace_ready, thread_created/thread_changed, mode_changed, ...) went
+  // out with zero listeners attached (agent-controller-ByW51eCC.js:4351-4519
+  // is one atomic async call; there's no public "construct unbound, let the
+  // caller subscribe, then bind thread/workspace" seam on
+  // `AgentController.createSession` to sequence around instead). Falling
+  // back to MastraCode's own pattern for this
+  // (tui/src/tui/mastra-tui.ts:637-656): stay subscribe-after, but
+  // immediately resync a `display_state_changed` built from the CURRENT
+  // snapshot right after subscribing, so first-mount never loses state —
+  // `displayState.get()` already folds in everything those missed events
+  // would have produced (isRunning, pendingSuspensions, tasks, etc).
+  const displayState = enrichPendingSuspensions(
+    serializeEvent(session.displayState.get()) as Record<string, unknown>,
+    threadId
+  )
+  broadcast("agent:onEvent", key, {
+    type: "display_state_changed",
+    displayState,
   })
 }
 
@@ -128,6 +247,7 @@ export const agentHandlers = {
   ) => {
     await ensureSubscribed(projectId, threadId)
     const session = await getOrCreateSession(projectId, threadId)
+    const key = `${projectId}:${threadId}`
     const modelId =
       body.modelId ||
       getProject(projectId)?.meta?.selectedModel ||
@@ -146,10 +266,7 @@ export const agentHandlers = {
       .sendMessage({ content: extractText(body.message) })
       .catch((error: unknown) => {
         log.error("[agent] sendMessage failed:", error)
-        broadcast("agent:onEvent", `${projectId}:${threadId}`, {
-          type: "error",
-          error: error instanceof Error ? error.message : String(error),
-        })
+        broadcastError(key, error)
       })
     return { ok: true }
   },
@@ -162,27 +279,78 @@ export const agentHandlers = {
   ) => {
     await ensureSubscribed(projectId, threadId)
     const session = await getOrCreateSession(projectId, threadId)
+    const key = `${projectId}:${threadId}`
 
     const pending = session.suspensions.get({ toolCallId: body.toolCallId })
     const isSubmitPlan = pending?.toolName === "submit_plan"
     const resumeData = body.resumeData as
-      | { action?: "approved" | "rejected"; title?: string; plan?: string }
+      | { action?: "approved" | "rejected" }
       | undefined
+
+    if (!isSubmitPlan) {
+      // Session's general resume path (`resumeToolCall`, driving the
+      // subscribed-thread "resume boundary waiter" —
+      // session.d.ts:1314-1331) only resolves once the resumed run reaches
+      // its next boundary; for e.g. an `ask_user` answer that's however
+      // long the model keeps running afterward — potentially minutes. Only
+      // `submit_plan` gets a dedicated, promptly-resolving path
+      // (`handlePlanApprovalResume`, session.d.ts:1276-1293). So: for
+      // everything else, fire-and-forget — progress still arrives via
+      // agent:onEvent, and the IPC call itself must not pend for the
+      // remainder of the turn. submit_plan below keeps the awaited
+      // semantics because the reject-then-abort ordering needs it.
+      void session
+        .respondToToolSuspension({
+          toolCallId: body.toolCallId,
+          resumeData: body.resumeData,
+        })
+        .catch((error: unknown) => {
+          log.error("[agent] respondToToolSuspension failed:", error)
+          broadcastError(key, error)
+        })
+      return { ok: true }
+    }
 
     // `session.respondToToolSuspension` already routes submit_plan resumes
     // through its own plan-approval path (mode switch on approve) — see
     // agent-controller/session.d.ts:1276-1286. Demio layers its own
     // `activePlan` controller-state field on top (execute mode's
     // instructions read it), which the built-in tool knows nothing about,
-    // so we set it ourselves before resuming.
-    if (isSubmitPlan && resumeData?.action === "approved") {
-      await session.state.set({
-        activePlan: {
-          title: resumeData.title ?? "",
-          plan: resumeData.plan ?? "",
-          approvedAt: new Date().toISOString(),
-        },
-      })
+    // so we set it ourselves before resuming — reading the plan file back
+    // off disk (re-validated) rather than trusting whatever `title`/`plan`
+    // the renderer echoes back in `resumeData`: nothing guarantees the
+    // renderer actually sends them, and silently persisting
+    // `{title: "", plan: ""}` would poison execute mode's context with a
+    // plan that doesn't exist.
+    if (resumeData?.action === "approved") {
+      const pendingEntry = session.displayState
+        .get()
+        .pendingSuspensions.get(body.toolCallId)
+      const suspendPayload = pendingEntry?.suspendPayload as
+        | Partial<SubmitPlanSuspendPayload>
+        | undefined
+      const rawPath = suspendPayload?.path
+      const content = readValidatedPlanFile(threadId, rawPath)
+
+      if (content === null) {
+        log.error(
+          `[agent] submit_plan approval for toolCallId=${body.toolCallId} has no readable plan file (path=${String(rawPath)}) — proceeding without activePlan state`
+        )
+        broadcastError(
+          key,
+          new Error(
+            "Plan approval could not read the plan file from disk; activePlan state was not set."
+          )
+        )
+      } else {
+        await session.state.set({
+          activePlan: {
+            title: derivePlanTitle(content, rawPath ?? ""),
+            plan: content,
+            approvedAt: new Date().toISOString(),
+          },
+        })
+      }
     }
 
     await session.respondToToolSuspension({
@@ -195,7 +363,7 @@ export const agentHandlers = {
     // streaming in the same turn) — Demio wants a hard stop so the
     // rejection + feedback becomes context for the user's NEXT message
     // rather than an in-turn auto-revision.
-    if (isSubmitPlan && resumeData?.action === "rejected") {
+    if (resumeData?.action === "rejected") {
       session.abort()
     }
 
@@ -227,7 +395,14 @@ export const agentHandlers = {
     // The `| null` in this method's documented return type is for callers
     // that haven't mounted a session at all; that's not a state this
     // handler can observe once ensureSubscribed has run.
-    return serializeEvent(session.displayState.get())
+    const serialized = serializeEvent(session.displayState.get()) as Record<
+      string,
+      unknown
+    >
+    // A refresh mid plan-approval must see the same `planContent` a live
+    // `tool_suspended` broadcast would have carried — a bare path with no
+    // plan body otherwise.
+    return enrichPendingSuspensions(serialized, threadId)
   },
 
   // History for thread mount / refresh-reattach. Controller storage is the
