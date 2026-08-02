@@ -58,6 +58,13 @@ export type DemioControllerEvent = AgentControllerEvent
 
 const stateSchema = z.object({
   currentModelId: z.string().optional(),
+  // Session-wide tool auto-approval. The controller's approval resolution
+  // falls back to "ask" for every tool when no yolo/policy/category matches
+  // (resolveToolApproval in @mastra/core agent-controller), which parks the
+  // run on a tool_approval_required gate demio has no UI for — the very first
+  // tool call would hang forever. Local single-user app: default allow, same
+  // as MastraCode's shipped default. Revisit when an approval UI lands.
+  yolo: z.boolean().optional(),
   activePlan: z
     .object({
       title: z.string(),
@@ -426,6 +433,9 @@ async function buildAndInitController(): Promise<
     // fix wave, finding #3) — same id/url semantics, one client instance.
     storage: mastraStore,
     stateSchema,
+    // yolo: auto-approve tool calls — see stateSchema comment. Without this
+    // every tool parks on an unanswerable tool_approval_required gate.
+    initialState: { yolo: true },
     agent,
     // Layered above `agent.instructions` at call time (see
     // resolveCurrentModeInstructions / buildAgentMessageStreamOptions in
@@ -516,6 +526,12 @@ export async function getOrCreateSession(
     tags: { projectId, threadId },
     workspace: createDemioWorkspace(threadId),
   })
+  // config.initialState seeds NEW sessions only; a reattached session restores
+  // its persisted state, and sessions persisted before the yolo default landed
+  // would park every tool call on an unanswerable approval gate. Backfill.
+  if (session.state.get()?.yolo !== true) {
+    await session.state.set({ yolo: true })
+  }
   sessions.set(key, session)
   return session
 }

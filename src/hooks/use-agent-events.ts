@@ -120,6 +120,7 @@ type ControllerEvent =
       toolName: string
       reason: string
     }
+  | { type: "tool_approval_required"; toolCallId: string; toolName: string }
   | { type: "display_state_changed"; displayState: SerializedDisplayState }
   | { type: "error"; error: SerializedError }
   | { type: "usage_update"; usage: TokenUsage }
@@ -389,6 +390,22 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
         ...state,
         status: "error",
         error: { name: event.error.name, message: event.error.message },
+      }
+
+    // Safety net: demio runs with session-wide yolo (auto-approve), so this
+    // should never fire. If a future policy change re-enables approval gates
+    // without shipping an approval UI, surface a visible error instead of the
+    // run silently hanging on an unanswerable gate.
+    case "tool_approval_required":
+      return {
+        ...state,
+        status: "error",
+        error: {
+          name: "ToolApprovalRequired",
+          message:
+            "A tool call is waiting for approval, but demio has no approval UI. " +
+            "This is a configuration bug (yolo should be enabled) — cancel the run and report it.",
+        },
       }
 
     case "usage_update":
