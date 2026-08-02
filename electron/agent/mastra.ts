@@ -24,8 +24,21 @@ import { demoVideoWorkflow } from "./workflows/demo-video"
 export { createDemioAgent } from "./demio-agent"
 export type { CreateDemioAgentOpts } from "./demio-agent"
 
+// Single shared LibSQLStore for `~/.demio/mastra.db` (final-review fix wave,
+// finding #3): `controller.ts`'s `AgentController` used to construct its own
+// second `LibSQLStore` with the same `id`/`url` instead of reusing this one —
+// two separate client instances pointed at the same on-disk SQLite file.
+// `controller.ts` already imports this module (for `mastra.getWorkflow(...)`
+// in `generateDemoTool`), so importing `mastraStore` from here too is not a
+// new/circular dependency — just export the instance and have both call
+// sites share it.
+export const mastraStore = new LibSQLStore({
+  id: "demio-storage",
+  url: `file:${mastraDbPath()}`,
+})
+
 export const mastra = new Mastra({
   agents: {},
   workflows: { "demo-video": demoVideoWorkflow },
-  storage: new LibSQLStore({ id: "demio-storage", url: `file:${mastraDbPath()}` }),
+  storage: mastraStore,
 })

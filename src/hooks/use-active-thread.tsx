@@ -80,17 +80,65 @@ interface LooseMastraPart {
     state: string
     result?: unknown
     errorText?: string
+    /** Sibling of `result` when `state === "result"` — set by
+     * `AgentController.processStreamChunk`'s `"tool-result"` case
+     * (compiled: `node_modules/@mastra/core/dist/agent-controller-
+     * ByW51eCC.js` ~line 407-436): `existing.toolInvocation =
+     * Object.assign(existing.toolInvocation, { state: "result", result,
+     * isError })`, where `isError = getBoolean(toolResult.isError, false)`.
+     * A thrown tool error (e.g. `generateDemoTool`'s workflow-failure
+     * throws) surfaces to the controller as a `"tool-result"` chunk with
+     * `isError: true`, NOT as a `state: "output-error"` toolInvocation —
+     * there is no separate `errorText` written alongside it in this path,
+     * only `result` (holding the error payload). Not part of the public
+     * `MastraToolInvocation` `.d.ts` (`node_modules/@mastra/core/dist/agent/
+     * message-list/state/types.d.ts`), but present on the actual persisted/
+     * serialized wire shape — hence read defensively here rather than typed
+     * as required. */
+    isError?: boolean
   }
 }
 
 /** `partial-call`/`call`/`result` (v4) -> `input-streaming`/`input-available`/
  * `output-available` (v5). The other four legacy states already spell the
- * same as their v5 counterparts, so they pass through unchanged. */
-function mapToolState(state: string): DynamicToolUIPart["state"] {
+ * same as their v5 counterparts, so they pass through unchanged.
+ *
+ * `result` needs a second look before mapping straight to
+ * `"output-available"`: the controller persists a *failed* tool call
+ * (thrown error) as `state: "result"` with a sibling `isError: true` field
+ * (see `LooseMastraPart.toolInvocation.isError`'s doc comment) rather than
+ * as a distinct `"output-error"` state. Ignoring that flag is exactly what
+ * let a failed `generate_demo` rehydrate as a green "Video ready" footer —
+ * `workflow-progress.tsx` keys its success/error styling off
+ * `toolState === "output-error"` vs `"output-available"`. */
+function mapToolState(
+  state: string,
+  isError: boolean | undefined
+): DynamicToolUIPart["state"] {
   if (state === "partial-call") return "input-streaming"
   if (state === "call") return "input-available"
-  if (state === "result") return "output-available"
+  if (state === "result") return isError ? "output-error" : "output-available"
   return state as DynamicToolUIPart["state"]
+}
+
+/** Best-effort error message extraction for the `state: "result", isError:
+ * true` shape (see `mapToolState`'s doc comment) — that path has no
+ * `errorText` field of its own, only `result` holding whatever the thrown
+ * error's display-transformed payload was (a string, or an object carrying
+ * `.message`). Falls back to `undefined` so callers can supply their own
+ * generic copy (`workflow-progress.tsx` already does: `errorText ||
+ * "Demo generation failed."`). */
+function errorTextFromResult(result: unknown): string | undefined {
+  if (typeof result === "string") return result
+  if (
+    result &&
+    typeof result === "object" &&
+    "message" in result &&
+    typeof (result as { message?: unknown }).message === "string"
+  ) {
+    return (result as { message: string }).message
+  }
+  return undefined
 }
 
 /**
@@ -177,6 +225,7 @@ function mapPart(
   if (part.type === "tool-invocation" && part.toolInvocation) {
     const inv = part.toolInvocation
     const toolName = WORKSPACE_TOOL_NAME_MAP[inv.toolName] ?? inv.toolName
+    const isResultError = inv.state === "result" && inv.isError === true
     // Double cast: the v4 `toolInvocation` fields don't structurally satisfy
     // v5's per-state discriminated `DynamicToolUIPart` union (e.g. `output`
     // typed `never` while `state` is `"input-streaming"`). This data only
@@ -186,10 +235,12 @@ function mapPart(
       type: "dynamic-tool",
       toolName,
       toolCallId: inv.toolCallId,
-      state: mapToolState(inv.state),
+      state: mapToolState(inv.state, inv.isError),
       input: withLegacyFilePathAlias(toolName, inv.args),
       output: inv.result,
-      errorText: inv.errorText,
+      errorText: isResultError
+        ? (inv.errorText ?? errorTextFromResult(inv.result))
+        : inv.errorText,
     } as unknown as UIMessage["parts"][number]
   }
 

@@ -8,6 +8,17 @@
 import agentBrowserSkill from "./agent-browser-skill.md?raw"
 import type { Scene } from "./workflows/schemas"
 
+/**
+ * @deprecated No runtime caller since Task 7/12 — kept as reference for
+ * future recorder prompt work. Only called from `systemPrompt()` below,
+ * which is itself dead (see its own `@deprecated` note): both
+ * `createDemioAgent` call sites (`workflows/record-scene.ts`,
+ * `workflows/demo-video.ts`) always pass `instructionsOverride`, so the
+ * `opts.instructionsOverride ?? systemPrompt(...)` fallback in
+ * `demio-agent.ts` never evaluates the `systemPrompt(...)` branch. Do not
+ * edit this believing it's live; the live chat instructions are
+ * `chatInstructions()` below.
+ */
 function rolePrompt(opts: {
   voiceConfigured: boolean
   voiceName: string | null
@@ -278,6 +289,16 @@ Never regenerate the entire video for a single-scene change.
 
 /**
  * Compose the system prompt for an agent run.
+ *
+ * @deprecated No runtime caller since Task 7/12 — kept as reference for
+ * future recorder prompt work. `demio-agent.ts`'s `createDemioAgent` only
+ * falls back to `systemPrompt(...)` when `opts.instructionsOverride` is
+ * unset, and both of its call sites (`workflows/record-scene.ts`'s recorder,
+ * `workflows/demo-video.ts`'s narrator) always pass `instructionsOverride`
+ * — so this branch never executes today. Neither caller passes
+ * `voiceId`/`elevenLabsKey`/`projectTitle` either (see those fields'
+ * `@deprecated` note on `CreateDemioAgentOpts` in `demio-agent.ts`). The
+ * live chat instructions are `chatInstructions()` below.
  */
 export interface SystemPromptContext {
   workspace: string
@@ -343,7 +364,7 @@ Present completed files to the user in the chat UI.
 - Do NOT read a file's raw content just to show it to the user — call \`present_files\` instead.
 
 ## \`ask_user\`
-Ask the user one or more questions and WAIT for their answer. Execution blocks until they reply — your turn does NOT end, the run continues in the same step budget.
+Ask the user a question and WAIT for their answer. Execution blocks until they reply — your turn does NOT end, the run continues in the same step budget.
 
 Use it when you need:
 - **Approval** before an irreversible or destructive step (e.g. starting a recording).
@@ -351,18 +372,17 @@ Use it when you need:
 - **Disambiguation** when the request is genuinely ambiguous and the choice changes the work.
 - **Choice** between concrete directions.
 
-**One \`ask_user\` call can include 1–4 questions** — pass them in the \`questions\` array. The UI walks the user through them one at a time and returns all answers in a single response. Prefer batching related questions (e.g. email + password) over multiple back-to-back calls.
+**One \`ask_user\` call asks exactly ONE question.** The installed tool takes \`{ question, options?, selectionMode? }\` (\`node_modules/@mastra/core/dist/tools/builtin/ask-user.d.ts\`) — there is no \`questions\` array and no \`header\`/\`multiple\`/\`custom\`/\`secret\` field; those belonged to the old orchestrator's own \`ask_user\` tool, which no longer exists. Need several answers? Call it again, once per question, in sequence.
 
-Per-question fields: \`{ question, header, options[], multiple?, custom?, secret? }\`.
-- \`question\` is a complete sentence ending with "?". \`header\` is a short chip label (≤30 chars).
-- Each option has a short \`label\` (1–5 words) + one-line \`description\`. Put your recommended option first and append "(Recommended)".
-- NEVER add an "Other" or "Custom" option — \`custom: true\` (default) gives the user a free-text input automatically.
-- For secret-only prompts (password, API key, OTP) pass \`options: []\` and \`secret: true\`.
+- \`question\` is a complete sentence ending with "?".
+- \`options\`, if given, is an array of \`{ label, description? }\` objects — a short \`label\` (1–5 words) plus a one-line \`description\`. Put your recommended option first and append "(Recommended)". Omit \`options\` entirely for an open-ended free-text question.
+- \`selectionMode: "multi_select"\` lets the user pick more than one option (the call resumes with a \`string[]\`); leave it unset (defaults to single-select) for one answer. Never add your own "Other"/"Custom" option — the UI always shows a free-text field alongside any options you provide.
+- There is no field to mark a question as secret/masked — the tool has no \`secret\` option and the UI renders every answer as plain text. Do NOT promise or imply the input will be masked; just ask for the value plainly.
 
-### Credentials — one question per field
-NEVER ask for "email and password" as a single combined question. ONE field per question, ALWAYS. Email/username is NOT a secret; only passwords, OTPs, and API keys are.
+### Credentials — one question per field, one call per question
+NEVER ask for "email and password" as a single combined question. ONE field per \`ask_user\` call, ALWAYS — call it once per field, in order (e.g. email, then password).
 
-For 2FA, ask the OTP as a separate \`secret: true\` question AFTER the password is submitted — once the OTP prompt actually appears in the browser, since codes expire fast.
+For 2FA, ask for the OTP with its own \`ask_user\` call AFTER the password has been submitted — once the OTP prompt actually appears in the browser, since codes expire fast.
 
 Do NOT use \`ask_user\` for chit-chat or for things you can decide yourself from context. Save it for blocking decisions and required inputs.
 

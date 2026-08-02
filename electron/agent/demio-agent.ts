@@ -61,14 +61,39 @@ export interface CreateDemioAgentOpts {
   workspace: string
   signal: AbortSignal
   modelId: string
+  /**
+   * @deprecated No runtime caller since Task 7/12 — kept as reference for
+   * future recorder prompt work. Only consumed by `systemPrompt(...)` (see
+   * its own `@deprecated` note in `prompts.ts`), which neither of
+   * `createDemioAgent`'s two call sites reaches — both always pass
+   * `instructionsOverride`, so this field is never read at runtime.
+   */
   projectTitle?: string
   threadTitle?: string
   domain?: string | null
-  /** ElevenLabs voice id selected for this project. Null = no voiceover. */
+  /**
+   * @deprecated No runtime caller since Task 7/12 — kept as reference for
+   * future recorder prompt work. Only feeds `voiceConfigured`/`systemPrompt`
+   * below (dead per the same note) and the `synthesize_voiceover` tool
+   * registration further down (also dead — see that block's comment); both
+   * `createDemioAgent` call sites leave this unset.
+   * ElevenLabs voice id selected for this project. Null = no voiceover.
+   */
   voiceId?: string | null
-  /** Human-readable voice name surfaced in the system prompt for tone cues. */
+  /**
+   * @deprecated No runtime caller since Task 7/12 — kept as reference for
+   * future recorder prompt work. Only reaches the dead `systemPrompt(...)`
+   * fallback branch. Human-readable voice name surfaced in the system
+   * prompt for tone cues.
+   */
   voiceName?: string | null
-  /** Decrypted ElevenLabs API key. Null = no voiceover. */
+  /**
+   * @deprecated No runtime caller since Task 7/12 — kept as reference for
+   * future recorder prompt work. Only feeds `voiceConfigured` and the dead
+   * `synthesize_voiceover` tool registration further down; both
+   * `createDemioAgent` call sites leave this unset.
+   * Decrypted ElevenLabs API key. Null = no voiceover.
+   */
   elevenLabsKey?: string | null
   /**
    * Replace the composed `systemPrompt(...)` entirely. Used by the recorder
@@ -89,6 +114,14 @@ export interface CreateDemioAgentOpts {
 }
 
 export function createDemioAgent(opts: CreateDemioAgentOpts) {
+  // @deprecated No runtime caller since Task 7/12 — kept as reference for
+  // future recorder prompt work. `voiceConfigured` (and therefore the whole
+  // `synthesize_voiceover` tool registration below) is always `false` in
+  // practice: neither `createDemioAgent` call site (`workflows/
+  // record-scene.ts`'s recorder, `workflows/demo-video.ts`'s narrator)
+  // passes `voiceId`/`elevenLabsKey` — see those fields' `@deprecated`
+  // notes above. Voiceover in the live pipeline is synthesized directly by
+  // the `demo-video` workflow's own `ttsStep`, not via an agent tool call.
   const voiceConfigured = Boolean(opts.voiceId && opts.elevenLabsKey)
 
   const customTools: Record<string, unknown> = {

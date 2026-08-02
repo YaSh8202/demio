@@ -41,7 +41,6 @@ import type {
 import { Agent } from "@mastra/core/agent"
 import type { ToolsInput } from "@mastra/core/agent"
 import { createTool } from "@mastra/core/tools"
-import { LibSQLStore } from "@mastra/libsql"
 import { z } from "zod"
 import { getModel } from "./providers"
 import { DEFAULT_MODEL_ID } from "./types"
@@ -49,9 +48,8 @@ import { chatInstructions } from "./prompts"
 import { createDemioWorkspace } from "./workspace-factory"
 import { createPresentFilesTool } from "./tools/present-files"
 import { ensureWorkspace } from "./workspace"
-import { mastraDbPath } from "../store/paths"
 import { scenePlanSchema } from "./workflows/schemas"
-import { mastra } from "./mastra"
+import { mastra, mastraStore } from "./mastra"
 import { getProject } from "../store"
 import log from "../lib/logger"
 
@@ -423,10 +421,10 @@ async function buildAndInitController(): Promise<
 
   const instance = new AgentController<DemioControllerState>({
     id: "demio",
-    storage: new LibSQLStore({
-      id: "demio-storage",
-      url: `file:${mastraDbPath()}`,
-    }),
+    // Reuse `mastra.ts`'s shared store rather than constructing a second
+    // `LibSQLStore` against the same `~/.demio/mastra.db` file (final-review
+    // fix wave, finding #3) — same id/url semantics, one client instance.
+    storage: mastraStore,
     stateSchema,
     agent,
     // Layered above `agent.instructions` at call time (see
