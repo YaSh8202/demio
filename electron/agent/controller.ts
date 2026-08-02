@@ -53,6 +53,7 @@ import { mastraDbPath } from "../store/paths"
 import { scenePlanSchema } from "./workflows/schemas"
 import { mastra } from "./mastra"
 import { getProject } from "../store"
+import log from "../lib/logger"
 
 /** Re-exported for the IPC handler/preload typing (Task 4). */
 export type DemioControllerEvent = AgentControllerEvent
@@ -216,17 +217,53 @@ const generateDemoTool = createTool({
     const workflow = mastra.getWorkflow("demo-video")
 
     const resumeData = context.agent?.resumeData
+    const toolCallId = context.agent?.toolCallId
 
-    // Code review fix #2: `sceneStep`'s `writer.write({type:"scene-progress",...})`
-    // is a no-op unless the run's `outputWriter` is wired — `ToolStream._write`
-    // only calls its `writeFn` if one was passed to the `Run.start`/`resume`
-    // call (workflows/types.d.ts `WorkflowRunStartOptions.outputWriter`,
-    // same field on `resume()`). Forward every chunk into the TOOL's own
-    // writer via `.custom()` (raw passthrough, no re-wrapping —
-    // `ToolStream.custom`, tools/stream.d.ts) so it reaches whatever
-    // consumes `generate_demo`'s tool-call stream.
+    // Code review fix #2 (round 2): the round-1 fix forwarded the RAW
+    // `ToolStream`-wrapped chunk, which is wrong two ways, both confirmed in
+    // compiled source:
+    //  (a) `ToolStream._write` (types-C59tsW89.js:21-36) wraps whatever
+    //      `sceneStep`'s `writer.write(data)` is given as
+    //      `{ type: "workflow-step-output", runId: <workflow runId>, from:
+    //      "USER", payload: { output: data, runId, stepName } }` — NOT the
+    //      `{type:"scene-progress",...}` object itself. Forwarding that
+    //      wrapper raw hits `AgentController.processStreamChunk`'s `default:
+    //      break` (agent-controller-ByW51eCC.js:872) — no case recognizes
+    //      `"workflow-step-output"` — so the chunk is silently dropped.
+    //  (b) Worse: `processStreamChunk`'s very first line, run for EVERY
+    //      chunk regardless of type (agent-controller-ByW51eCC.js:279):
+    //      `if ("runId" in chunk && chunk.runId) this.#session.run.setRunId({
+    //      runId: chunk.runId })`. The wrapped chunk's top-level `runId` is
+    //      the WORKFLOW run's id — forwarding it stomps the session's own
+    //      agent-run id on every single scene-progress write, corrupting
+    //      suspension registration / active-run bookkeeping until the next
+    //      real agent chunk overwrites it back.
+    // Fixed: unwrap `payload.output` to recover the real scene-progress
+    // object, and re-shape into the ONE chunk shape the controller actually
+    // recognizes for arbitrary tool progress —
+    // `case "data-mastracode-tool-progress"` (agent-controller-ByW51eCC.js:
+    // 831-846): `{ type: "data-mastracode-tool-progress", data: {
+    // toolCallId, progress } }`, converted there into a `tool_update` event
+    // (`partialResult: d.progress`) the renderer can read. This new chunk
+    // has no top-level `runId` key at all, so the stomp in (b) cannot
+    // happen. Filtered to `record-scene`'s own writes only (`stepName`
+    // check) — forwarding any OTHER raw engine-internal chunk here would
+    // reintroduce the same stomp risk for whatever `runId` IT happens to
+    // carry, so nothing else is passed through.
     const outputWriter = async (chunk: unknown) => {
-      await context.writer?.custom(chunk as { type: string })
+      const c = chunk as {
+        type?: string
+        payload?: { output?: unknown; stepName?: string }
+      }
+      if (c?.type !== "workflow-step-output" || c.payload?.stepName !== "record-scene") {
+        return
+      }
+      const progress = c.payload?.output
+      if (!toolCallId || progress === undefined) return
+      await context.writer?.custom({
+        type: "data-mastracode-tool-progress",
+        data: { toolCallId, progress },
+      })
     }
 
     let run: Awaited<ReturnType<typeof workflow.createRun>>
@@ -249,11 +286,27 @@ const generateDemoTool = createTool({
       // never reached the workflow run otherwise — `Run` gets its own
       // internal AbortController, so cancelling the chat session did
       // nothing to an in-flight `demo-video` run. Cancel the run explicitly
-      // (`Run.cancel()`, workflow.d.ts) when the session aborts.
-      const onAbort = () => void run.cancel()
-      context.abortSignal?.addEventListener("abort", onAbort)
+      // (`Run.cancel()`, workflow.d.ts) when the session aborts. Round 2:
+      // `.catch()` the cancel call (a bare `void run.cancel()` is a floating
+      // promise — an unhandled rejection there crashes the Electron main
+      // process), and check `abortSignal.aborted` up front — an
+      // already-aborted signal never fires a fresh `"abort"` event, so
+      // `addEventListener` alone would silently never cancel a run started
+      // after the session was already cancelled.
+      const onAbort = () => {
+        run.cancel().catch((err: unknown) => log.error("[generate_demo] run.cancel failed:", err))
+      }
+      if (context.abortSignal?.aborted) onAbort()
+      else context.abortSignal?.addEventListener("abort", onAbort)
       try {
         result = await run.resume({ step: "record-scene", resumeData, outputWriter })
+      } catch (err) {
+        // Code review fix #4: without this, a throw here left `activeDemoRuns`
+        // pointing at a runId whose run is now in an unknown/broken state —
+        // a later resume could reconnect to a dead run instead of failing
+        // clearly.
+        activeDemoRuns.delete(threadId)
+        throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
       }
@@ -264,17 +317,24 @@ const generateDemoTool = createTool({
       run = await workflow.createRun()
       activeDemoRuns.set(threadId, run.runId)
 
-      const onAbort = () => void run.cancel()
-      context.abortSignal?.addEventListener("abort", onAbort)
+      const onAbort = () => {
+        run.cancel().catch((err: unknown) => log.error("[generate_demo] run.cancel failed:", err))
+      }
+      if (context.abortSignal?.aborted) onAbort()
+      else context.abortSignal?.addEventListener("abort", onAbort)
       try {
         // `elevenLabsKey` is intentionally NOT included here (code review
         // fix #4) — see the workflow's `inputSchema` comment: it would
         // otherwise be persisted in plaintext into the workflow's LibSQL
-        // snapshot. `ttsStep` re-reads it itself at execution time.
+        // snapshot. `ttsStep`/`narrateStep` re-read it themselves at
+        // execution time.
         result = await run.start({
           inputData: { plan: input.plan, workspace, modelId, voiceId },
           outputWriter,
         })
+      } catch (err) {
+        activeDemoRuns.delete(threadId)
+        throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
       }

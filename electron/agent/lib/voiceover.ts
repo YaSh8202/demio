@@ -203,6 +203,18 @@ function buildFfmpegMixArgs(
     "30",
     "-c:a",
     "aac",
+    // Pin the audio format explicitly (code review round-2 #5, Task 12)
+    // rather than relying on `amix`'s implicit output format (which follows
+    // its first input — normally 44100/mono-or-stereo per segment, but not
+    // guaranteed if a future caller feeds it something else). The
+    // demo-video workflow's `composeStep` concatenates this output via
+    // stream copy (`-c copy`) alongside other parts pinned to the same
+    // 44100/stereo format — any divergence here would only surface as a
+    // broken/silent-audio concat downstream, not as an error at this step.
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
     outputPath
   )
   return args

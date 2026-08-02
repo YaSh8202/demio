@@ -72,11 +72,31 @@ const inputSchema = z.object({
  * `getInitData()` instead of being threaded through the array. */
 type DemoVideoInit = z.infer<typeof inputSchema>
 
+// `sceneSchema.id` only carries a `.describe()` hint ("Stable slug, e.g.
+// scene-01") — no `.regex()` — so a malformed/adversarial plan could smuggle
+// path-traversal characters (`../`, `/`) or shell-unsafe characters into a
+// sceneId. Every downstream sceneId use ends up in a `path.join(...)` (this
+// file's `composeStep` normalization, and internally inside
+// `synthesizeSegments` for the voiced-segment paths) — validate once, here,
+// at the earliest choke point, so every one of those sites is safe by
+// construction rather than needing its own guard (code review round-2 #6).
+const SAFE_SCENE_ID = /^[a-zA-Z0-9._-]+$/
+
 const toScenesStep = createStep({
   id: "to-scenes",
   inputSchema,
   outputSchema: z.array(sceneSchema),
-  execute: async ({ inputData }) => inputData.plan.scenes,
+  execute: async ({ inputData }) => {
+    for (const scene of inputData.plan.scenes) {
+      if (!SAFE_SCENE_ID.test(scene.id)) {
+        throw new Error(
+          `generate_demo: scene id "${scene.id}" is not a safe filename slug ` +
+            `(must match ${SAFE_SCENE_ID})`
+        )
+      }
+    }
+    return inputData.plan.scenes
+  },
 })
 
 const sceneResumeSchema = z.object({
@@ -194,7 +214,14 @@ const narrateStep = createStep({
   inputSchema: collectedSchema,
   outputSchema: narratedSchema,
   execute: async ({ inputData, abortSignal }) => {
-    if (!inputData.voiceId) {
+    // Code review round-2 #2: gate on key AVAILABILITY too, not just
+    // `voiceId` — the key itself still never enters workflow input/state
+    // (see `inputSchema`'s comment), only this boolean check does. Without
+    // this, a voice configured with a missing/revoked key used to record
+    // every scene and only THEN hard-fail in `ttsStep` — degrading to an
+    // unvoiced video (the pre-fix-round-1 behavior) here instead skips the
+    // wasted narration call and matches what `ttsStep` now also degrades to.
+    if (!inputData.voiceId || !getDecryptedKey("elevenlabs")) {
       return { ...inputData, narration: null }
     }
     // Narrator needs no tools — action logs are inlined into the prompt.
@@ -246,13 +273,17 @@ const ttsStep = createStep({
 
     // Re-read the decrypted key here rather than threading it through
     // `inputData` (code review fix #4) — see the `inputSchema` comment for
-    // why it must not ride the persisted workflow snapshot.
+    // why it must not ride the persisted workflow snapshot. `narrateStep`
+    // already gates on the same check before generating narration, so this
+    // should always be present by the time `ttsStep` runs — but the key
+    // could theoretically be deleted/revoked in the window between the two
+    // steps. Degrade to unvoiced (round-2 #2) rather than hard-failing the
+    // whole run after every scene has already been recorded: a video the
+    // user can still watch beats no video at all over a key that went away
+    // mid-run.
     const elevenLabsKey = getDecryptedKey("elevenlabs")
     if (!elevenLabsKey) {
-      throw new Error(
-        `generate_demo: project has voiceId "${inputData.voiceId}" configured but no ` +
-          "ElevenLabs API key is stored — cannot synthesize voiceover."
-      )
+      return { ...inputData, voicedPaths: null }
     }
 
     const ffmpeg = resolveFfmpeg()
@@ -364,6 +395,16 @@ const composeStep = createStep({
         "30",
         "-c:a",
         "aac",
+        // Pin the audio format explicitly (code review round-2 #5) rather
+        // than relying on the AAC encoder inferring it from the `anullsrc`
+        // source — the final concat is a stream COPY (`-c copy` below), so
+        // every part's audio must already match exactly; an implicit
+        // sample-rate/channel mismatch against `ttsStep`'s voiced output
+        // would only surface as a broken/silent-audio concat downstream.
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
         normalizedPath,
       ])
       parts.push(normalizedPath)
