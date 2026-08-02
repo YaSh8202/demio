@@ -343,7 +343,40 @@ export async function synthesizeSegments(opts: {
     onSegment?.(detail)
   }
 
-  // Overlap check (after all durations are known)
+  // Scene-end clamp (after all durations are known): the narrator places
+  // segments against its own duration estimate, and the mix truncates audio
+  // at the video's end — a segment whose tail crosses scene end gets cut
+  // mid-word (observed live: "no later than durationSec - 2" placement vs
+  // 2.5-3.8s segments). Walk backwards shifting late segments earlier so
+  // every tail lands ≥ TAIL_MARGIN before the video ends, cascading so a
+  // shifted segment cannot collide with the one before it. `onSegment` has
+  // already fired with pre-clamp times; shifts are logged and the returned
+  // mix args use the clamped times.
+  const sceneVideoAbs = path.isAbsolute(sceneVideoPath)
+    ? sceneVideoPath
+    : path.join(cwd, sceneVideoPath)
+  const sceneDur = await probeDurationSec(sceneVideoAbs)
+  if (sceneDur !== null) {
+    const TAIL_MARGIN = 0.3
+    const GAP = 0.15
+    let latestAllowedEnd = sceneDur - TAIL_MARGIN
+    for (let i = synthesized.length - 1; i >= 0; i--) {
+      const s = synthesized[i]
+      const end = s.startTimeSec + s.durationSec
+      if (end > latestAllowedEnd) {
+        const newStart = Math.max(0, latestAllowedEnd - s.durationSec)
+        log.warn(
+          `[voiceover] segment ${i + 1} would end at ${end.toFixed(2)}s past scene end ` +
+            `${sceneDur.toFixed(2)}s — shifted start ${s.startTimeSec.toFixed(2)}s → ${newStart.toFixed(2)}s`
+        )
+        s.startTimeSec = Number(newStart.toFixed(3))
+      }
+      latestAllowedEnd = s.startTimeSec - GAP
+    }
+  }
+
+  // Overlap check (after all durations are known and ends are clamped) —
+  // still throws when total speech simply cannot fit inside the scene.
   for (let i = 0; i < synthesized.length - 1; i++) {
     const cur = synthesized[i]
     const next = synthesized[i + 1]
