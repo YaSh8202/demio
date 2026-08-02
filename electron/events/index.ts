@@ -6,7 +6,6 @@ import { agentBrowserEvents } from "./agent-browser"
 import { storeEvents } from "./store"
 import { agentEvents } from "./agent"
 import { providerKeysEvents } from "./provider-keys"
-import { questionsEvents } from "./questions"
 
 /**
  * All event namespaces.
@@ -22,7 +21,6 @@ export const allEvents = {
   store: storeEvents,
   agent: agentEvents,
   providerKeys: providerKeysEvents,
-  questions: questionsEvents,
 } satisfies Record<string, NamespaceEvents>
 
 /** Type-level export for the renderer type wrapper. */

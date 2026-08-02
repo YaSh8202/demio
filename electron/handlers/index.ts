@@ -11,7 +11,6 @@ import { storeHandlers } from "./store"
 import { agentHandlers } from "./agent"
 import { providerKeysHandlers } from "./provider-keys"
 import { voiceoverHandlers } from "./voiceover"
-import { questionsHandlers } from "./questions"
 
 /**
  * All handler namespaces.
@@ -31,7 +30,6 @@ export const allHandlers = {
   agent: agentHandlers,
   providerKeys: providerKeysHandlers,
   voiceover: voiceoverHandlers,
-  questions: questionsHandlers,
 } satisfies Record<string, NamespaceHandlers>
 
 /** Type-level export for the renderer type wrapper. */

@@ -2,24 +2,28 @@
 //
 // Exports a singleton `mastra` instance for future Studio / API CLI use, and a
 // `createDemioAgent` factory that builds a per-run Agent. Tools depend on the
-// per-run workspace `cwd` (and the terminal tool on the per-run `AbortSignal`),
-// so the demio agent itself isn't statically registered on `mastra` — the
-// factory mirrors the current per-run construction pattern.
+// per-run workspace `cwd` (and the voiceover tool on the per-run
+// `AbortSignal`), so the demio agent itself isn't statically registered on
+// `mastra` — the factory mirrors the current per-run construction pattern.
 //
 // Tools are passed through as-is: ai-sdk's `tool({...})` shape is accepted by
 // Mastra's `ToolsInput` (the type union includes `VercelTool | VercelToolV5`).
+//
+// Task 7 deleted the hand-rolled orchestrator that used to call this factory
+// directly with a full terminal/read/edit/ask_user toolset — the live
+// conversation path now runs entirely through AgentController (see
+// controller.ts), which brings its own Workspace primitives. `createDemioAgent`
+// survives lean (present_files + synthesize_voiceover only) as the seam for
+// the Phase 2 recorder/narrator agents (Task 11), which will get Workspace
+// tools via a `toolFilter` mechanism rather than these ad-hoc tool factories.
 
 import { Mastra } from "@mastra/core"
 import { Agent } from "@mastra/core/agent"
 import type { ToolsInput } from "@mastra/core/agent"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
-import { createTerminalTool } from "./tools/terminal"
 import { createPresentFilesTool } from "./tools/present-files"
-import { createReadTool } from "./tools/read"
-import { createEditTool } from "./tools/edit"
 import { createVoiceoverTool } from "./tools/voiceover"
-import { createAskUserTool } from "./tools/ask-user"
 
 export const mastra = new Mastra({
   agents: {},
@@ -56,8 +60,7 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
     }),
     model: getModel(opts.modelId),
     // Keys here become the streamed `toolName` — they must match the names
-    // referenced in the system prompt and in the `hasToolCall(...)` stop
-    // condition in the orchestrator.
+    // referenced in the system prompt.
     //
     // Cast: ai-sdk v7's `tool()` widened `description` to
     // `string | ((options) => string)` (dynamic per-call descriptions).
@@ -65,11 +68,7 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
     // a plain string — our tools only ever pass string literals, so this is a
     // type-level mismatch only.
     tools: {
-      terminal: createTerminalTool({ cwd: opts.workspace, signal: opts.signal }),
       present_files: createPresentFilesTool({ cwd: opts.workspace }),
-      read: createReadTool({ cwd: opts.workspace }),
-      edit: createEditTool({ cwd: opts.workspace }),
-      ask_user: createAskUserTool({ signal: opts.signal }),
       ...(voiceConfigured
         ? {
             synthesize_voiceover: createVoiceoverTool({

@@ -5,13 +5,10 @@
 // renderer rebuilds message + progress state from events and can re-hydrate
 // after refresh via `getDisplayState`.
 //
-// `sendMessage`/`reconnect`/`cancel` used to drive the hand-rolled
-// orchestrator/runs/sessions SSE-byte-pump (see electron/agent/orchestrator.ts,
-// runs.ts, sessions.ts) — that path stays importable elsewhere until Task 7
-// deletes it, but this handler no longer calls into it. `reconnect` is kept
-// as a deprecated no-op stub purely so src/lib/ipc-chat-transport.ts (still
-// on the old useChat/SSE transport until Task 6) keeps compiling; it no
-// longer does anything useful.
+// The old hand-rolled orchestrator/runs/sessions SSE-byte-pump (and its
+// `reconnect` IPC method, plus the src/lib/ipc-chat-transport.ts renderer
+// transport that called it) were deleted in Task 7 — this handler is the
+// only conversation code path now.
 
 import fs from "node:fs"
 import path from "node:path"
@@ -477,20 +474,5 @@ export const agentHandlers = {
       limit: limit ?? 200,
     })
     return serializeEvent(messages)
-  },
-
-  /**
-   * @deprecated Dead stub kept only so src/lib/ipc-chat-transport.ts (old
-   * useChat/SSE renderer path, replaced in Task 6) still type-checks —
-   * `apis.agent.reconnect` no longer has a backing run buffer to read from
-   * (runs.ts is no longer wired up by this handler). Always returns null,
-   * which ipc-chat-transport.ts already treats as "no active run".
-   */
-  reconnect: async (
-    _event: Electron.IpcMainInvokeEvent,
-    _projectId: string,
-    _threadId: string
-  ) => {
-    return null
   },
 } satisfies NamespaceHandlers

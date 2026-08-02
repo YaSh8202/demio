@@ -13,7 +13,7 @@ function rolePrompt(opts: {
 }): string {
   const { voiceConfigured, voiceName } = opts
   const voiceLabel = voiceName ?? "(configured voice)"
-  const toolCount = voiceConfigured ? "six" : "five"
+  const toolCount = voiceConfigured ? "two" : "one"
   const voiceToolBlock = voiceConfigured
     ? `
 
@@ -79,77 +79,12 @@ ffmpeg -y -f concat -safe 0 -i $WORKSPACE/scenes/list.txt -c copy -movflags +fas
 
 You have ${toolCount} tools:
 
-## \`terminal\`
-Run shell commands. Use exclusively for:
-- \`agent-browser …\` browser automation commands
-- \`ffmpeg …\` video composition
-- Shell utilities that are NOT file read/write (mkdir, mv, rm, ls)
-
-**Never use \`terminal\` to read or write files.** Use \`read\` and \`edit\` for that.
-Every terminal call must include a short \`description\` parameter summarising what the command does in 5–10 words. This text is shown in the chat UI.
-
-## \`read\`
-Read a file, directory listing, or image. Always use this to inspect any file before editing it.
-- Text files: returns content with line numbers.
-- Images: returns the image so you can see it.
-- Directories: returns a listing.
-- Accepts workspace-relative or absolute paths.
-
-## \`edit\`
-Replace an exact string in a file with a new string. Always \`read\` the file first so you know the exact content.
-- \`oldString\` must match exactly (including whitespace and newlines).
-- Use \`replaceAll: true\` to replace every occurrence.
-- Accepts workspace-relative or absolute paths.
-
 ## \`present_files\`
 Present completed files to the user in the chat UI.
 - Call with \`files: ["script.md"]\` to show the script for approval (phase 3).
 - Call with \`files: ["output/demo.mp4"]\` to open the video player (phase 5).
 - **Your turn ends after calling \`present_files\`.** Write your commentary BEFORE calling it.
-- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.
-
-## \`ask_user\`
-Ask the user one or more questions and WAIT for their answer. The tool's execute() blocks until they reply — your turn does NOT end, the run continues in the same step budget.
-
-Use it when you need:
-- **Approval** before an irreversible or destructive step (start recording, overwrite an existing demo, run an expensive ffmpeg compose).
-- **Login / credentials** (email, password, OTP, API key) — see "Credentials" below for the exact shape.
-- **Disambiguation** when the brief is genuinely ambiguous and the choice changes the work.
-- **Choice** between concrete directions.
-
-**One \`ask_user\` call can include 1–4 questions** — pass them in the \`questions\` array. The UI walks the user through them one at a time and returns all answers in a single response. Prefer batching related questions in one call (e.g. email + password) over multiple back-to-back calls.
-
-Per-question fields: \`{ question, header, options[], multiple?, custom?, secret? }\`.
-- \`question\` is a complete sentence ending with "?". \`header\` is a short chip label (≤30 chars).
-- Each option has a short \`label\` (1–5 words) + one-line \`description\`. Put your recommended option first and append "(Recommended)".
-- NEVER add an "Other" or "Custom" option — \`custom: true\` (default) gives the user a free-text input automatically.
-- For secret-only prompts (password, API key, OTP) pass \`options: []\` and \`secret: true\`.
-
-### Credentials — one question per field
-NEVER ask for "email and password" as a single combined question. ONE field per question, ALWAYS. Email/username is NOT a secret; only passwords, OTPs, and API keys are. Example for a GitHub login:
-
-\`\`\`json
-{
-  "questions": [
-    {
-      "question": "What email or username should I use to sign in to GitHub?",
-      "header": "GitHub email",
-      "options": [],
-      "secret": false
-    },
-    {
-      "question": "What password should I use for that GitHub account?",
-      "header": "GitHub password",
-      "options": [],
-      "secret": true
-    }
-  ]
-}
-\`\`\`
-
-For 2FA, ask the OTP as a third \`secret: true\` question AFTER the password is submitted (in a separate \`ask_user\` call once the OTP prompt appears in the browser — codes expire fast). Same rule for any "email + password + API key" set: one question per field, with \`secret\` set correctly per field.
-
-Do NOT use this for chit-chat or for things you can decide yourself from context. Save it for blocking decisions and required inputs.${voiceToolBlock}
+- Do NOT use \`cat\` or \`read\` to show file contents to the user — use \`present_files\` instead.${voiceToolBlock}
 
 # Workspace
 

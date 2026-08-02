@@ -18,22 +18,4 @@ export const agentEvents = {
   onEvent: (_callback: EventCallback) => {
     return () => {}
   },
-  /**
-   * @deprecated Old hand-rolled SSE-byte-pump path (orchestrator/runs.ts),
-   * superseded by `onEvent`. Never broadcast by the controller-backed
-   * handler — kept declared only so src/lib/ipc-chat-transport.ts (replaced
-   * in Task 6) still compiles against `events.agent.onChunk`. Removed
-   * outright once that transport is deleted.
-   */
-  onChunk: (_callback: EventCallback) => {
-    return () => {}
-  },
-  /** @deprecated See `onChunk`. */
-  onEnd: (_callback: EventCallback) => {
-    return () => {}
-  },
-  /** @deprecated See `onChunk`. */
-  onError: (_callback: EventCallback) => {
-    return () => {}
-  },
 } satisfies NamespaceEvents
