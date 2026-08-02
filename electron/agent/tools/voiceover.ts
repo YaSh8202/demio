@@ -11,19 +11,18 @@
 // overlay segments onto the scene and produce `scenes/<sceneId>.voiced.mp4`.
 //
 // Composition stays with `terminal` — this tool is pure synthesis + planning.
+// The actual synthesis (ElevenLabs fetch, per-segment MP3 write, ffprobe
+// duration validation, non-overlap check, mix-args construction) lives in
+// `agent/lib/voiceover.ts` — reused as-is by the tts workflow step (Task 12).
+// This file is now schema + delegation + result formatting only.
 
-import { spawn } from "node:child_process"
-import fs from "node:fs"
-import fsPromises from "node:fs/promises"
-import path from "node:path"
 import { tool } from "ai"
 import { z } from "zod"
-import log from "../../lib/logger"
-import { resolveFfmpeg } from "../../lib/ffmpeg"
-
-const ELEVENLABS_BASE = "https://api.elevenlabs.io/v1/text-to-speech"
-const DEFAULT_MODEL = "eleven_turbo_v2_5"
-const OUTPUT_FORMAT = "mp3_44100_128"
+import {
+  synthesizeSegments,
+  VoiceoverSynthesisError,
+  type SynthesizedSegmentDetail,
+} from "../lib/voiceover"
 
 export interface VoiceoverToolOptions {
   cwd: string
@@ -32,130 +31,25 @@ export interface VoiceoverToolOptions {
   signal: AbortSignal
 }
 
-const resolveFfmpegPath = resolveFfmpeg
-
 /**
- * Estimate MP3 duration from file size for a fixed-bitrate stream.
- * `mp3_44100_128` = 128 kbps = 16,000 bytes/sec. Accurate within ~50ms (ID3
- * tag overhead ≲ 1KB). Used as a fallback when ffmpeg's stderr probe doesn't
- * produce a parseable `Duration:` line — good enough for overlap validation
- * and the agent can ffprobe later if it needs exact timing.
+ * Turn the lib's execFile-safe `ffmpegMixArgs` into the single ready-to-run
+ * shell command string the tool has always returned. Built by
+ * quoting/joining that exact array — one source of truth, so the string and
+ * the args it was derived from can never drift apart. The `terminal` tool
+ * always runs with `cwd` == the workspace (see `workspace-factory.ts`), so
+ * the workspace-relative paths inside `args` resolve without a `$WORKSPACE`
+ * prefix, and `ffmpeg` resolves via the terminal's PATH shim.
  */
-function estimateMp3Duration128kbps(filePath: string): number | null {
-  try {
-    const { size } = fs.statSync(filePath)
-    if (size < 200) return null
-    return Math.max(0, (size - 200) / 16000)
-  } catch {
-    return null
-  }
+function quoteArgForShell(arg: string): string {
+  // Bare tokens (flags, plain workspace-relative paths, "0:v", …) need no
+  // quoting. Anything with shell metacharacters — notably the
+  // filter_complex value and "[aout]" — gets double-quoted.
+  if (/^[A-Za-z0-9_.\-:/]+$/.test(arg)) return arg
+  return `"${arg.replace(/"/g, '\\"')}"`
 }
 
-/**
- * Read the MP3 duration. Tries ffmpeg first; falls back to size-based
- * estimation for the fixed 128 kbps output format we request. Logs the
- * ffmpeg stderr when both paths fail so we can debug the binary.
- */
-async function probeDurationSec(filePath: string): Promise<number | null> {
-  const bin = resolveFfmpegPath()
-  if (bin && fs.existsSync(bin)) {
-    const fromFfmpeg = await new Promise<number | null>((resolve) => {
-      let stderr = ""
-      let settled = false
-      const settle = (v: number | null) => {
-        if (settled) return
-        settled = true
-        resolve(v)
-      }
-      try {
-        const child = spawn(bin, [
-          "-hide_banner",
-          "-i",
-          filePath,
-          "-f",
-          "null",
-          "-",
-        ])
-        child.stderr.on("data", (b: Buffer) => {
-          stderr += b.toString()
-        })
-        child.on("close", () => {
-          const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
-          if (!m) {
-            log.warn(
-              `[voiceover] ffmpeg probe did not return Duration for ${filePath}. stderr: ${stderr.slice(0, 400)}`
-            )
-            return settle(null)
-          }
-          const h = Number(m[1])
-          const min = Number(m[2])
-          const s = Number(m[3])
-          settle(h * 3600 + min * 60 + s)
-        })
-        child.on("error", (err) => {
-          log.warn(`[voiceover] ffmpeg spawn error: ${err.message}`)
-          settle(null)
-        })
-      } catch (err) {
-        log.warn(
-          `[voiceover] ffmpeg spawn threw: ${err instanceof Error ? err.message : String(err)}`
-        )
-        settle(null)
-      }
-    })
-    if (fromFfmpeg !== null) return fromFfmpeg
-  } else {
-    log.warn(
-      `[voiceover] ffmpeg binary not found at ${bin ?? "(null)"} — falling back to file-size estimate`
-    )
-  }
-  // Fallback: estimate from file size at the known 128 kbps output bitrate.
-  return estimateMp3Duration128kbps(filePath)
-}
-
-/**
- * Build the ffmpeg command the agent should run via the `terminal` tool to
- * overlay each segment onto the scene's webm and produce a `.voiced.mp4`.
- * Segments are delayed with `adelay` (ms) and mixed with `amix`. The output
- * `-shortest` is intentionally omitted — the agent should keep the full scene.
- */
-function buildFfmpegMixCommand(
-  cwd: string,
-  sceneId: string,
-  segments: Array<{ file: string; startTimeSec: number }>
-): string {
-  const sceneVideo = `$WORKSPACE/scenes/${sceneId}.webm`
-  const out = `$WORKSPACE/scenes/${sceneId}.voiced.mp4`
-
-  const inputs: string[] = [`-i ${sceneVideo}`]
-  for (const seg of segments) {
-    const abs = path.isAbsolute(seg.file)
-      ? seg.file
-      : `$WORKSPACE/${path.relative(cwd, path.join(cwd, seg.file))}`
-    inputs.push(`-i ${abs}`)
-  }
-
-  const filterParts: string[] = []
-  const labels: string[] = []
-  segments.forEach((seg, i) => {
-    const delayMs = Math.max(0, Math.round(seg.startTimeSec * 1000))
-    // adelay with same value twice covers stereo (left|right).
-    filterParts.push(`[${i + 1}:a]adelay=${delayMs}|${delayMs}[a${i}]`)
-    labels.push(`[a${i}]`)
-  })
-  filterParts.push(
-    `${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0[aout]`
-  )
-  const filter = filterParts.join(";")
-
-  return [
-    `ffmpeg -y`,
-    ...inputs,
-    `-filter_complex "${filter}"`,
-    `-map 0:v -map "[aout]"`,
-    `-c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac`,
-    out,
-  ].join(" \\\n  ")
+function buildFfmpegMixCommand(ffmpegMixArgs: string[]): string {
+  return ["ffmpeg", ...ffmpegMixArgs.map(quoteArgForShell)].join(" ")
 }
 
 const TOOL_DESCRIPTION = `Synthesise voiceover narration for one scene using ElevenLabs.
@@ -210,134 +104,45 @@ export function createVoiceoverTool({
     }),
 
     execute: async ({ sceneId, segments }) => {
-      // Sort defensively in case the agent didn't.
-      const sorted = [...segments].sort(
-        (a, b) => a.startTimeSec - b.startTimeSec
-      )
+      const synthesized: SynthesizedSegmentDetail[] = []
 
-      const scenesDir = path.join(cwd, "scenes")
-      await fsPromises.mkdir(scenesDir, { recursive: true })
-
-      const synthesized: Array<{
-        file: string
-        startTimeSec: number
-        durationSec: number
-      }> = []
-
-      for (let i = 0; i < sorted.length; i++) {
-        if (signal.aborted) {
-          return {
-            ok: false,
-            reason: "aborted",
-            message: "Stopped by user before all segments synthesised",
-            segmentFiles: synthesized,
-          }
-        }
-
-        const seg = sorted[i]
-        const idx = String(i + 1).padStart(2, "0")
-        const rel = `scenes/${sceneId}.voice-${idx}.mp3`
-        const abs = path.join(cwd, rel)
-        const tmp = `${abs}.partial`
-
-        let res: Response
-        try {
-          res = await fetch(
-            `${ELEVENLABS_BASE}/${encodeURIComponent(voiceId)}?output_format=${OUTPUT_FORMAT}`,
-            {
-              method: "POST",
-              signal,
-              headers: {
-                "xi-api-key": apiKey,
-                "content-type": "application/json",
-                accept: "audio/mpeg",
-              },
-              body: JSON.stringify({
-                text: seg.text,
-                model_id: DEFAULT_MODEL,
-              }),
-            }
-          )
-        } catch (err) {
-          if (signal.aborted) {
-            return {
-              ok: false,
-              reason: "aborted",
-              message: "Stopped by user during synthesis",
-              segmentFiles: synthesized,
-            }
-          }
-          log.error(`[voiceover] fetch failed for segment ${idx}:`, err)
-          return {
-            ok: false,
-            reason: "network",
-            message: err instanceof Error ? err.message : String(err),
-            segmentFiles: synthesized,
-          }
-        }
-
-        if (!res.ok) {
-          let body = ""
-          try {
-            body = (await res.text()).slice(0, 500)
-          } catch {
-            /* ignore */
-          }
-          return {
-            ok: false,
-            reason: "elevenlabs_error",
-            message: `ElevenLabs returned ${res.status} for segment ${idx}: ${body}`,
-            segmentFiles: synthesized,
-          }
-        }
-
-        const buf = Buffer.from(await res.arrayBuffer())
-        await fsPromises.writeFile(tmp, buf)
-        await fsPromises.rename(tmp, abs)
-
-        const duration = await probeDurationSec(abs)
-        if (duration === null) {
-          return {
-            ok: false,
-            reason: "probe_failed",
-            message: `Could not read duration of ${rel} via ffmpeg.`,
-            segmentFiles: synthesized,
-          }
-        }
-
-        synthesized.push({
-          file: rel,
-          startTimeSec: seg.startTimeSec,
-          durationSec: Number(duration.toFixed(3)),
+      try {
+        const result = await synthesizeSegments({
+          cwd,
+          sceneId,
+          sceneVideoPath: `scenes/${sceneId}.webm`,
+          segments: segments.map((s) => ({
+            text: s.text,
+            atSec: s.startTimeSec,
+          })),
+          voiceId,
+          apiKey,
+          signal,
+          onSegment: (detail) => synthesized.push(detail),
         })
-      }
 
-      // Overlap check (after all durations are known)
-      for (let i = 0; i < synthesized.length - 1; i++) {
-        const cur = synthesized[i]
-        const next = synthesized[i + 1]
-        const endOfCur = cur.startTimeSec + cur.durationSec
-        if (endOfCur > next.startTimeSec + 1e-3) {
+        const ffmpegMixCommand = buildFfmpegMixCommand(result.ffmpegMixArgs)
+
+        return {
+          ok: true,
+          sceneId,
+          segmentFiles: synthesized,
+          ffmpegMixCommand,
+          notes:
+            "Run ffmpegMixCommand via the `terminal` tool to produce scenes/" +
+            sceneId +
+            ".voiced.mp4. In phase 5 concat .voiced.mp4 files instead of .webm.",
+        }
+      } catch (err) {
+        if (err instanceof VoiceoverSynthesisError) {
           return {
             ok: false,
-            reason: "overlap",
-            message: `Segment ${i + 1} ends at ${endOfCur.toFixed(2)}s but segment ${i + 2} starts at ${next.startTimeSec.toFixed(2)}s. Shorten segment ${i + 1} or push segment ${i + 2} later, then re-call.`,
-            segmentFiles: synthesized,
+            reason: err.reason,
+            message: err.message,
+            segmentFiles: err.segments,
           }
         }
-      }
-
-      const ffmpegMixCommand = buildFfmpegMixCommand(cwd, sceneId, synthesized)
-
-      return {
-        ok: true,
-        sceneId,
-        segmentFiles: synthesized,
-        ffmpegMixCommand,
-        notes:
-          "Run ffmpegMixCommand via the `terminal` tool to produce scenes/" +
-          sceneId +
-          ".voiced.mp4. In phase 5 concat .voiced.mp4 files instead of .webm.",
+        throw err
       }
     },
   })
