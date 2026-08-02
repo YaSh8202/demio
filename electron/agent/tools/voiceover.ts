@@ -61,7 +61,7 @@ You must call this tool AFTER the scene has been recorded. Plan the segments by:
 
 The tool writes one MP3 per segment to scenes/<sceneId>.voice-NN.mp3, validates that segments do not overlap (segment N+1 must start AFTER segment N ends), and returns:
 - \`segmentFiles\`: each segment's workspace-relative MP3 path, startTimeSec, and actual durationSec.
-- \`ffmpegMixCommand\`: a ready-to-run ffmpeg invocation. Pass it through the \`terminal\` tool to produce scenes/<sceneId>.voiced.mp4 (video + mixed audio). In phase 5 (Composition) concat the .voiced.mp4 files instead of the raw .webm.
+- \`ffmpegMixCommand\`: a ready-to-run ffmpeg invocation. Pass it through the \`execute_command\` tool to produce scenes/<sceneId>.voiced.mp4 (video + mixed audio). In phase 5 (Composition) concat the .voiced.mp4 files instead of the raw .webm.
 
 If the tool returns ok:false with reason "overlap", shorten or re-time the offending segments and call again. Segments must be in startTimeSec order.`
 
@@ -129,7 +129,7 @@ export function createVoiceoverTool({
           segmentFiles: synthesized,
           ffmpegMixCommand,
           notes:
-            "Run ffmpegMixCommand via the `terminal` tool to produce scenes/" +
+            "Run ffmpegMixCommand via the `execute_command` tool to produce scenes/" +
             sceneId +
             ".voiced.mp4. In phase 5 concat .voiced.mp4 files instead of .webm.",
         }

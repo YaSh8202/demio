@@ -426,9 +426,13 @@ export function recorderInstructions(ctx: RecorderInstructionsContext): string {
 
   const actionsList = scene.actions.map((action, i) => `${i + 1}. ${action}`).join("\n")
 
+  // `previousFailure` already self-describes which phase it failed in
+  // (e.g. "failed before recording — ...", "failed during recording — ...",
+  // "failed verification — ...") — see record-scene.ts's failure-message
+  // construction — so this block doesn't hardcode a phase name itself.
   const retryBlock =
     attempt > 1 && previousFailure
-      ? `\n\nPrevious attempt failed verification: ${previousFailure}. Adjust your approach accordingly.`
+      ? `\n\nPrevious attempt ${previousFailure}. Adjust your approach accordingly.`
       : ""
 
   return `You are the Demio recorder agent. You are recording ONE scene of a product demo. Recording is ALREADY running — do NOT run \`agent-browser record start\` or \`agent-browser record stop\`, and do NOT open a new page unless one of your actions explicitly requires navigation. Perform these actions smoothly and deliberately, in order:
@@ -439,11 +443,11 @@ Scene goal: ${scene.goal}
 
 # Tools
 
-You have workspace tools only: \`execute_command\` (run \`agent-browser\` and shell commands), \`read_file\`, \`edit_file\`. There is no \`present_files\` or \`synthesize_voiceover\` tool in this run — do not attempt to call them.
+You have workspace tools only: \`mastra_workspace_execute_command\` (run \`agent-browser\` and shell commands), \`mastra_workspace_read_file\`, \`mastra_workspace_edit_file\`. There is no \`present_files\` or \`synthesize_voiceover\` tool in this run — do not attempt to call them.
 
 # Workspace
 
-Files live in \`${workspace}\`. The \`execute_command\` tool sets \`$WORKSPACE\` to this directory in its shell environment — reference it directly when a command needs an absolute path.
+Files live in \`${workspace}\`. The \`mastra_workspace_execute_command\` tool sets \`$WORKSPACE\` to this directory in its shell environment — reference it directly when a command needs an absolute path.
 
 # Locator priority (highest reliability first)
 
