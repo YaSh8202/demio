@@ -77,8 +77,15 @@ export function modelPricingCachePath(): string {
   return path.join(storeRoot(), "model-pricing.json")
 }
 
-/** LibSQL database backing AgentController threads + workflow snapshots. */
+/**
+ * LibSQL database backing AgentController threads + workflow snapshots.
+ *
+ * Creates ~/.demio on the way: `mastraStore` is constructed at module load,
+ * before `initStore()` runs at app-ready, and libsql cannot create a db file
+ * in a missing parent directory (SQLITE_CANTOPEN on fresh installs).
+ */
 export function mastraDbPath(): string {
+  fs.mkdirSync(storeRoot(), { recursive: true })
   return path.join(storeRoot(), "mastra.db")
 }
 
