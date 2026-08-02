@@ -39,6 +39,7 @@ export function hasUsage(metadata: MessageMetadata | undefined): boolean {
   return Boolean(usage.inputTokens || usage.outputTokens || usage.totalTokens)
 }
 
+// TODO(ADR-008): badge never renders for controller-era messages — no producer writes metadata.totalUsage/cost since Task 7.
 export function MessageUsage({
   metadata,
 }: {

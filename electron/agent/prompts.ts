@@ -268,8 +268,7 @@ Never regenerate the entire video for a single-scene change.
 - **Workspace isolation**: only read/write inside the workspace directory. Never touch files outside it.
 - Keep chat messages short. Tool calls show your work — don't duplicate output in prose.
 - If a step fails, report the error clearly and propose the next action. Don't silently retry.
-- **Asking the user**: use \`ask_user\` for blocking decisions (script approval in Phase 3, credentials for any login flow, disambiguation when truly stuck). For passwords/API keys/OTPs ALWAYS set \`secret: true\`. Do not paste credentials into chat or into \`script.md\` — read them via \`ask_user\` and pass them straight to \`agent-browser fill\`.${voiceRulesLine}
-- The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices — that's what voiceover timing aligns to.
+- The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices — that's what voiceover timing aligns to.${voiceRulesLine}
 - **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
@@ -329,8 +328,8 @@ ${voiceLine}
 //     each AgentControllerMode's own `instructions` (see controller.ts);
 //     duplicating it here would fight the mode instructions at call time.
 //
-// `systemPrompt()` above is untouched and stays exported for the orchestrator
-// until Task 7 deletes it.
+// `systemPrompt()` above is kept as the seam for Task 11's recorder/narrator agents;
+// its orchestrator caller was deleted in Task 7.
 
 export function chatInstructions(): string {
   return `You are Demio — an AI agent that turns a product URL + description into a polished demo video. You collaborate with the user through chat while autonomously exploring a live product with a browser, drafting a scene-by-scene plan, and (once approved) producing the recorded video.

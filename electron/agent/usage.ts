@@ -261,6 +261,7 @@ export function computeCostSync(
   return priceWith(memo?.catalog ?? null, fullModelId, usage)
 }
 
+// TODO(ADR-008): orphaned since the orchestrator was deleted (Task 7) — per-message usage/cost has no producer; thread-level usage flows via useAgentEvents().usage. Rewire or remove when the controller exposes per-message usage.
 /**
  * Build the usage-related slice of `MessageMetadata` for a finished run.
  *
@@ -278,6 +279,7 @@ export async function buildUsageMetadata(
   }
 }
 
+// TODO(ADR-008): orphaned since the orchestrator was deleted (Task 7) — per-message usage/cost has no producer; thread-level usage flows via useAgentEvents().usage. Rewire or remove when the controller exposes per-message usage.
 /**
  * Metadata to ride the live stream when a run reports its totals, so the
  * renderer can show tokens and cost the moment they are known rather than only
