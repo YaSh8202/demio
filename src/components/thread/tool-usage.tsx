@@ -29,6 +29,8 @@ import {
 import { cn } from "@/lib/utils"
 import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart } from "ai"
 import type { UIMessage } from "@electron/store/types"
+import type { WorkflowState } from "@/hooks/use-agent-events"
+import { WorkflowProgress } from "@/components/thread/workflow-progress"
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -114,11 +116,16 @@ export function ThreadAssistantPartRenderer({
   parts,
   isMessageStreaming,
   onVideoReady,
+  workflow,
 }: {
   messageId: string
   parts: UIMessage["parts"]
   isMessageStreaming: boolean
   onVideoReady?: (absPath: string) => void
+  /** `generate_demo` stage tracker slice — see `WorkflowProgress`'s file
+   * header. Only consulted by the `generate_demo` tool part branch in
+   * `ThreadToolUsage`; every other part ignores it. */
+  workflow?: WorkflowState | null
 }) {
   const renderedParts: ReactNode[] = []
   const effectiveParts = resolveStalledParts(parts, isMessageStreaming)
@@ -201,6 +208,7 @@ export function ThreadAssistantPartRenderer({
             key={toolPart.toolCallId ?? key}
             part={toolPart}
             onVideoReady={onVideoReady}
+            workflow={workflow}
           />
         )
       }
@@ -213,6 +221,7 @@ export function ThreadAssistantPartRenderer({
         key={toolPart.toolCallId ?? key}
         part={toolPart}
         onVideoReady={onVideoReady}
+        workflow={workflow}
       />
     )
   }
@@ -243,7 +252,13 @@ function isReasoningPartStreaming(
 function isClusterableToolPart(part: ThreadMessagePart): boolean {
   if (!isThreadToolPart(part)) return false
   const name = getThreadToolName(part)
-  return name !== "present_files" && name !== "ask_user"
+  // `generate_demo` gets its own full-width `WorkflowProgress` card (below)
+  // — folding it into a generic "used N tools" cluster row alongside
+  // read/edit/terminal calls would bury the stage tracker inside a
+  // collapsed summary instead of showing it inline.
+  return (
+    name !== "present_files" && name !== "ask_user" && name !== "generate_demo"
+  )
 }
 
 function isStructuralPart(part: ThreadMessagePart): boolean {
@@ -825,9 +840,11 @@ function AskUserAnsweredCollapsible({
 function ThreadToolUsage({
   part,
   onVideoReady,
+  workflow,
 }: {
   part: ThreadToolPart
   onVideoReady?: (absPath: string) => void
+  workflow?: WorkflowState | null
 }) {
   const toolName = getThreadToolName(part)
 
@@ -840,6 +857,19 @@ function ThreadToolUsage({
       <PresentFilesContent
         onVideoReady={onVideoReady}
         output={part.output as PresentFilesOutput}
+      />
+    )
+  }
+
+  if (toolName === "generate_demo" && part.toolCallId) {
+    return (
+      <WorkflowProgress
+        toolCallId={part.toolCallId}
+        toolState={part.state}
+        input={part.input}
+        output={part.output}
+        errorText={part.errorText}
+        workflow={workflow ?? null}
       />
     )
   }

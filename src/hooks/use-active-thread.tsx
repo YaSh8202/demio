@@ -36,6 +36,7 @@ import {
   useAgentEvents,
   type SerializedAgentMessage,
   type AgentSuspension,
+  type WorkflowState,
 } from "@/hooks/use-agent-events"
 
 // ── Message shape adapter ────────────────────────────────────────────────────
@@ -235,6 +236,10 @@ interface ActiveThreadContextValue {
   error: string | null
   /** Active `ask_user`/`submit_plan` suspension awaiting a response, or null. */
   suspension: AgentSuspension | null
+  /** `generate_demo` stage tracker (Task 13) — see `WorkflowState`'s doc
+   * comment for lifecycle (survives `agent_end`, cleared on thread switch or
+   * a fresh `generate_demo` call). */
+  workflow: WorkflowState | null
 
   selectedModel: string
   voiceId: string | null
@@ -565,6 +570,7 @@ export function ActiveThreadProvider({
       status,
       error,
       suspension: agentEvents.suspension,
+      workflow: agentEvents.workflow,
       selectedModel: meta?.selectedModel ?? "",
       voiceId: meta?.voiceId ?? null,
       voiceName: meta?.voiceName ?? null,
@@ -590,6 +596,7 @@ export function ActiveThreadProvider({
       messages,
       status,
       agentEvents.suspension,
+      agentEvents.workflow,
       error,
       meta,
       input,

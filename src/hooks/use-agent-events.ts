@@ -91,9 +91,11 @@ interface SerializedError {
 
 /** Discriminated union of the controller event shapes this hook acts on.
  * `AgentControllerEvent` (types.d.ts) has ~40 variants — most (mode_changed,
- * thread_*, tool_start/update/end, om_*, subagent_*, task_updated, ...) are
+ * thread_*, tool_start/end, om_*, subagent_*, task_updated, ...) are
  * intentionally not modeled here; they fall through the reducer's default
- * case and are ignored without crashing, per the brief. */
+ * case and are ignored without crashing, per the brief. `tool_update` IS
+ * modeled (Task 13) — but only its `scene-progress` shaped partialResult is
+ * acted on, everything else routes to the reducer's default case too. */
 type ControllerEvent =
   | { type: "agent_start" }
   | {
@@ -129,6 +131,12 @@ type ControllerEvent =
     }
   | { type: "mode_changed"; modeId: string; previousModeId: string }
   | { type: "model_changed"; modelId: string }
+  // `AgentControllerEvent`'s `tool_update` variant (types.d.ts:609-613):
+  // `{type, toolCallId, partialResult}` — no `toolName` field (confirmed
+  // against the compiled source, agent-controller-ByW51eCC.js ~line 831),
+  // so `generate_demo`'s scene-progress writes can only be recognized by
+  // `partialResult.type === "scene-progress"` below, never by tool name.
+  | { type: "tool_update"; toolCallId: string; partialResult: unknown }
 
 /** Internal reducer actions beyond the raw controller event union — never
  * broadcast over IPC, only dispatched locally by the effect below. */
@@ -161,6 +169,50 @@ export interface AgentEventError {
   message: string
 }
 
+/** One scene's progress, as last reported by `generate_demo`'s
+ * `record-scene` step (`electron/agent/workflows/record-scene.ts`'s
+ * `onProgress` callback, forwarded verbatim through the `scene-progress`
+ * `tool_update` payload). */
+export interface WorkflowSceneState {
+  phase: "recording" | "verifying" | "failed" | "done"
+  attempt: number
+  detail?: string
+}
+
+/** Fold of every `scene-progress` `tool_update` seen for the current (or
+ * most recent) `generate_demo` tool call. `toolCallId` scopes `scenes` to a
+ * single call — a later call (e.g. a fresh `generate_demo` after a prior
+ * run finished) starts its `scenes` map over rather than merging onto a
+ * stale one. Deliberately NOT cleared on `agent_end`/`reset` of the run
+ * status alone — see `AgentEventState.workflow`'s own doc comment. */
+export interface WorkflowState {
+  toolCallId: string
+  of: number
+  scenes: Record<string, WorkflowSceneState>
+}
+
+/** Shape of `generate_demo`'s `scene-progress` `tool_update` partialResult
+ * (`electron/agent/workflows/demo-video.ts`'s `sceneStep`:
+ * `writer.write({type: "scene-progress", ...u, of: scenes.length})`, `u`
+ * being `record-scene.ts`'s `onProgress` payload). */
+interface SceneProgressPartialResult {
+  type: "scene-progress"
+  sceneId: string
+  attempt: number
+  phase: WorkflowSceneState["phase"]
+  of: number
+  detail?: string
+}
+
+function isSceneProgress(value: unknown): value is SceneProgressPartialResult {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "scene-progress" &&
+    typeof (value as { sceneId?: unknown }).sceneId === "string"
+  )
+}
+
 export interface AgentEventState {
   messages: SerializedAgentMessage[]
   status: "idle" | "running" | "error"
@@ -169,6 +221,14 @@ export interface AgentEventState {
   displayState: SerializedDisplayState | null
   shellOutput: Record<string, string>
   usage: TokenUsage | null
+  /** `generate_demo` stage tracker, folded from `scene-progress` `tool_update`
+   * events (see `WorkflowState`). `null` until the first such event for the
+   * current/most-recent thread. Deliberately survives `agent_end` (a
+   * finished/suspended run's last-known scene states stay visible in the
+   * card rather than disappearing the instant the run stops) — only
+   * `reset` (thread switch) or a fresh `generate_demo` call under a new
+   * `toolCallId` clears/replaces it. */
+  workflow: WorkflowState | null
 }
 
 const initial: AgentEventState = {
@@ -179,6 +239,7 @@ const initial: AgentEventState = {
   displayState: null,
   shellOutput: {},
   usage: null,
+  workflow: null,
 }
 
 // Cap accumulated shell output per toolCallId — a long-running command's
@@ -343,9 +404,34 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
         ),
       }
 
+    case "tool_update": {
+      if (!isSceneProgress(event.partialResult)) return state
+      const p = event.partialResult
+      // A new `toolCallId` (a fresh `generate_demo` call) starts `scenes`
+      // over instead of merging onto whatever the previous call left behind.
+      const prevScenes =
+        state.workflow?.toolCallId === event.toolCallId
+          ? state.workflow.scenes
+          : {}
+      return {
+        ...state,
+        workflow: {
+          toolCallId: event.toolCallId,
+          of: p.of,
+          scenes: {
+            ...prevScenes,
+            [p.sceneId]: { phase: p.phase, attempt: p.attempt, detail: p.detail },
+          },
+        },
+      }
+    }
+
     default:
       // Unknown/unmodeled event types (mode_changed, thread_*, tool_start,
-      // om_*, subagent_*, task_updated, ...) are intentionally no-ops.
+      // tool_end, om_*, subagent_*, task_updated, ...) are intentionally
+      // no-ops — including a `tool_update` whose `partialResult` isn't
+      // `scene-progress` shaped (returned early inside the `tool_update`
+      // case above, never reaching here, but noted for completeness).
       return state
   }
 }
