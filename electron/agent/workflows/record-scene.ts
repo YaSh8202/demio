@@ -18,7 +18,7 @@
 import path from "node:path"
 import { WORKSPACE_TOOLS } from "@mastra/core/workspace"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
-import { createDemioAgent } from "../mastra"
+import { createDemioAgent } from "../demio-agent"
 import { verifyScene } from "./verify"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
 import { recorderInstructions } from "../prompts"

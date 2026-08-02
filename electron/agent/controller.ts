@@ -40,6 +40,7 @@ import type {
 } from "@mastra/core/agent-controller"
 import { Agent } from "@mastra/core/agent"
 import type { ToolsInput } from "@mastra/core/agent"
+import { createTool } from "@mastra/core/tools"
 import { LibSQLStore } from "@mastra/libsql"
 import { z } from "zod"
 import { getModel } from "./providers"
@@ -49,6 +50,10 @@ import { createDemioWorkspace } from "./workspace-factory"
 import { createPresentFilesTool } from "./tools/present-files"
 import { ensureWorkspace } from "./workspace"
 import { mastraDbPath } from "../store/paths"
+import { scenePlanSchema } from "./workflows/schemas"
+import { mastra } from "./mastra"
+import { getDecryptedKey } from "../store/provider-keys"
+import { getProject } from "../store"
 
 /** Re-exported for the IPC handler/preload typing (Task 4). */
 export type DemioControllerEvent = AgentControllerEvent
@@ -115,6 +120,150 @@ function threadIdFromCtx(
 ): string | undefined {
   return ctx?.scope ?? ctx?.threadId ?? undefined
 }
+
+// ── generate_demo tool (Task 12) ─────────────────────────────────────────────
+//
+// Runs the `demo-video` workflow (workflows/demo-video.ts) and streams its
+// per-scene progress. Surfaces the workflow's own per-scene suspend/resume
+// (retry/skip/abort a scene that exhausted its recording attempts) as a
+// NATIVE tool suspension — `context.agent.suspend(...)` — rather than a
+// custom controller event.
+//
+// Reconciliation evidence (brief proposed a custom `workflow_suspended`
+// event + a new `agent.resumeWorkflow` handler "mirroring respondSuspension"
+// IF the native route wasn't available):
+//
+// - `ToolExecutionContext.agent: AgentToolExecutionContext<TSuspend, TResume>`
+//   (`node_modules/@mastra/core/dist/tools/types.d.ts:146-159`) is populated
+//   with `{ suspend, resumeData, toolCallId, ... }` whenever a Mastra
+//   `Tool` (via `createTool`) executes inside an Agent's tool-call loop —
+//   confirmed in the compiled tool-call step
+//   (`node_modules/@mastra/core/dist/agent-0y2cApTZ.js` ~line 27271: the
+//   `toolOptions.suspend` passed to every tool call enqueues a
+//   `tool-call-suspended` chunk and delegates to the step's own `suspend()`).
+//   The AgentController's session machinery
+//   (`node_modules/@mastra/core/dist/agent-controller-ByW51eCC.js` ~line 503)
+//   converts that chunk into a `tool_suspended` AgentControllerEvent and
+//   registers it in `session.suspensions` — the exact mechanism
+//   `submit_plan`/`ask_user` already use.
+// - `electron/handlers/agent.ts`'s existing `respondSuspension(projectId,
+//   threadId, { toolCallId, resumeData })` IPC handler already calls
+//   `session.respondToToolSuspension(...)` generically for ANY suspended
+//   tool (its `isSubmitPlan` branch is the only tool-specific special case,
+//   and `generate_demo` doesn't hit it) — so Task 13's renderer can resume a
+//   suspended `generate_demo` call with ZERO new IPC surface, just
+//   `apis.agent.respondSuspension(projectId, threadId, { toolCallId,
+//   resumeData: { action, guidance } })`.
+//
+// So: no custom `workflow_suspended` event, no new `agent.resumeWorkflow`
+// handler. The tool's own `suspendSchema`/`resumeSchema` below carry exactly
+// the locked `{ runId, sceneId, failure, attempts }` / `{ action, guidance? }`
+// shapes — same payload the brief's fallback custom event would have
+// carried, just delivered as the native `tool_suspended` event's
+// `suspendPayload`/`resumeSchema` fields instead.
+//
+// Suspend/resume in Mastra workflow steps is snapshot-replay (see
+// workflows/demo-video.ts's file header): resuming a suspended `Tool.execute`
+// call is the SAME re-invoke-from-the-top model (confirmed in the compiled
+// `Tool` wrapper, `node_modules/@mastra/core/dist/tool-B09dFqXW.js` ~line
+// 583 — `originalExecute(data, organizedContext)` runs again on resume, this
+// time with `context.agent.resumeData` populated). A fresh invocation has no
+// closure over the in-flight `demo-video` run, so its `runId` is tracked
+// out-of-band here, keyed by threadId — the workflow run itself is
+// recoverable from `mastra`'s LibSQLStore via `workflow.createRun({ runId })`
+// regardless, but the runId string itself has to come from somewhere. A
+// plain in-memory map is sufficient because Electron's main process is
+// long-lived for a session; it does NOT survive an app restart mid-suspension
+// (documented as untested/known-gap in task-12-report.md).
+const activeDemoRuns = new Map<string, string>()
+
+const generateDemoTool = createTool({
+  id: "generate_demo",
+  description:
+    "Run the approved demo plan through the demo-video pipeline: record every scene, verify, narrate, compose. Call exactly once with the approved plan.",
+  inputSchema: z.object({ plan: scenePlanSchema }),
+  outputSchema: z.object({ videoPath: z.string() }),
+  suspendSchema: z.object({
+    runId: z.string(),
+    sceneId: z.string(),
+    failure: z.string(),
+    attempts: z.number(),
+  }),
+  resumeSchema: z.object({
+    action: z.enum(["retry", "skip", "abort"]),
+    guidance: z.string().optional(),
+  }),
+  execute: async (input, context) => {
+    const ctx = readControllerCtx(context.requestContext)
+    const threadId = threadIdFromCtx(ctx)
+    if (!threadId) {
+      throw new Error("generate_demo: no threadId in request context")
+    }
+    const projectId = ctx?.resourceId
+    if (!projectId) {
+      throw new Error("generate_demo: no projectId (resourceId) in request context")
+    }
+
+    const workspace = ensureWorkspace(threadId)
+    const modelId = ctx?.session.modelId || DEFAULT_MODEL_ID
+    const workflow = mastra.getWorkflow("demo-video")
+
+    const resumeData = context.agent?.resumeData
+
+    const result = resumeData
+      ? await (async () => {
+          const runId = activeDemoRuns.get(threadId)
+          if (!runId) {
+            throw new Error(
+              "generate_demo: no active demo-video run found to resume for this " +
+                "thread (the app may have restarted while a scene decision was pending)"
+            )
+          }
+          const run = await workflow.createRun({ runId })
+          return run.resume({ step: "record-scene", resumeData })
+        })()
+      : await (async () => {
+          const project = getProject(projectId)
+          const voiceId = project?.meta.voiceId ?? null
+          const elevenLabsKey = voiceId ? getDecryptedKey("elevenlabs") : null
+
+          const run = await workflow.createRun()
+          activeDemoRuns.set(threadId, run.runId)
+          return run.start({
+            inputData: { plan: input.plan, workspace, modelId, voiceId, elevenLabsKey },
+          })
+        })()
+
+    if (result.status === "suspended") {
+      if (!context.agent?.suspend) {
+        throw new Error(
+          "generate_demo: workflow suspended but no tool-suspension context is available " +
+            "(generate_demo must run inside an Agent tool call)"
+        )
+      }
+      const payload = result.suspendPayload as {
+        sceneId: string
+        failure: string
+        attempts: number
+      }
+      return await context.agent.suspend({
+        runId: activeDemoRuns.get(threadId) ?? "",
+        sceneId: payload.sceneId,
+        failure: payload.failure,
+        attempts: payload.attempts,
+      })
+    }
+
+    activeDemoRuns.delete(threadId)
+
+    if (result.status !== "success") {
+      const detail = result.status === "failed" ? `: ${result.error.message}` : ""
+      throw new Error(`demo-video workflow ${result.status}${detail}`)
+    }
+
+    return { videoPath: result.result.videoPath }
+  },
+})
 
 let controller: AgentController<DemioControllerState> | null = null
 let initPromise: Promise<AgentController<DemioControllerState>> | null = null
@@ -217,9 +366,9 @@ async function buildAndInitController(): Promise<
       {
         id: "execute",
         name: "Execute",
-        // No availableTools restriction — full workspace tool access.
-        // generate_demo does not exist yet (Task 12); this mode ships
-        // without it for now per the task brief.
+        // No availableTools restriction — full workspace tool access, plus
+        // generate_demo layered on top via additionalTools (Task 12).
+        additionalTools: { generate_demo: generateDemoTool } as ToolsInput,
         instructions:
           "The plan is approved (activePlan in state; the plan file contains a fenced " +
           "json scene plan). Call generate_demo exactly once with that json plan, " +
