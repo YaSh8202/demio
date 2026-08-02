@@ -420,6 +420,10 @@ async function buildAndInitController(): Promise<
     id: "demio-agent",
     name: "Demio",
     instructions: "",
+    // Transient connect failures (ECONNRESET / "fetch failed" before any
+    // chunk) killed live runs — the deleted orchestrator retried these
+    // (modelSettings.maxRetries: 4); restore the same budget here.
+    maxRetries: 4,
     model: ({ requestContext }) => {
       const ctx = readControllerCtx(requestContext)
       return getModel(ctx?.session.modelId || DEFAULT_MODEL_ID)

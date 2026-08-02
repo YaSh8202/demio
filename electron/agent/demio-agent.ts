@@ -158,6 +158,9 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
   return new Agent({
     id: "demio",
     name: "Demio",
+    // Same transient-connect retry budget as the controller's backing agent —
+    // recorder/narrator runs die mid-scene otherwise (see controller.ts).
+    maxRetries: 4,
     instructions:
       opts.instructionsOverride ??
       systemPrompt({
