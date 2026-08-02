@@ -26,6 +26,7 @@ import {
   LocalFilesystem,
   LocalSandbox,
 } from "@mastra/core/workspace"
+import type { WorkspaceToolsConfig } from "@mastra/core/workspace"
 import { resolveFfmpeg } from "../lib/ffmpeg"
 import { resolveBinaryPath as resolveAgentBrowser } from "../lib/agent-browser/exec"
 import log from "../lib/logger"
@@ -111,15 +112,22 @@ function linkExe(
 
 // ── Workspace factory ────────────────────────────────────────────────────────
 
-export function createDemioWorkspace(threadId: string): Workspace {
-  const cwd = ensureWorkspace(threadId)
+/**
+ * Build a Workspace (filesystem + sandbox) rooted at an arbitrary directory.
+ * `createDemioWorkspace` (below) is the thread-scoped convenience wrapper
+ * used by the live chat AgentController; `createDemioAgent` (mastra.ts, Task
+ * 11) calls this directly for the recorder/narrator agents, which are handed
+ * an already-resolved workspace directory rather than a threadId.
+ */
+export function createWorkspaceForDir(
+  cwd: string,
+  opts?: { id?: string; tools?: WorkspaceToolsConfig }
+): Workspace {
   const shimDir = buildShimPath()
   const pathSep = process.platform === "win32" ? ";" : ":"
 
   return new Workspace({
-    // Stable id per thread — reuse preserves ProcessManager (background
-    // processes) across turns.
-    id: `demio-workspace-${threadId}`,
+    id: opts?.id,
     filesystem: new LocalFilesystem({
       basePath: cwd,
       allowedPaths: [os.tmpdir()],
@@ -143,5 +151,13 @@ export function createDemioWorkspace(threadId: string): Workspace {
         NONINTERACTIVE: "1",
       },
     }),
+    tools: opts?.tools,
   })
+}
+
+export function createDemioWorkspace(threadId: string): Workspace {
+  const cwd = ensureWorkspace(threadId)
+  // Stable id per thread — reuse preserves ProcessManager (background
+  // processes) across turns.
+  return createWorkspaceForDir(cwd, { id: `demio-workspace-${threadId}` })
 }
