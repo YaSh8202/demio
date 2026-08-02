@@ -49,15 +49,22 @@ import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeSegments } from "../lib/voiceover"
 import { createDemioAgent } from "../demio-agent"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
+import { getDecryptedKey } from "../../store/provider-keys"
 
 const execFileAsync = promisify(execFile)
 
+// `elevenLabsKey` is deliberately NOT part of this schema (code review fix
+// #4): `createRun`/`start`/`resume` snapshot `inputData` into the workflow's
+// LibSQLStore row on every suspend, and a decrypted API key has no business
+// sitting in that table in plaintext. `voiceId` alone travels through the
+// pipeline; `ttsStep` re-reads `getDecryptedKey("elevenlabs")` at the moment
+// it actually needs the key, off the same on-disk encrypted store
+// `controller.ts` already reads it from.
 const inputSchema = z.object({
   plan: scenePlanSchema,
   workspace: z.string(),
   modelId: z.string(),
   voiceId: z.string().nullable(),
-  elevenLabsKey: z.string().nullable(),
 })
 
 /** Data every scene-level step needs but doesn't receive as its per-item
@@ -187,7 +194,7 @@ const narrateStep = createStep({
   inputSchema: collectedSchema,
   outputSchema: narratedSchema,
   execute: async ({ inputData, abortSignal }) => {
-    if (!inputData.voiceId || !inputData.elevenLabsKey) {
+    if (!inputData.voiceId) {
       return { ...inputData, narration: null }
     }
     // Narrator needs no tools — action logs are inlined into the prompt.
@@ -233,8 +240,19 @@ const ttsStep = createStep({
   inputSchema: narratedSchema,
   outputSchema: voicedSchema,
   execute: async ({ inputData, abortSignal }) => {
-    if (!inputData.narration || !inputData.voiceId || !inputData.elevenLabsKey) {
+    if (!inputData.narration || !inputData.voiceId) {
       return { ...inputData, voicedPaths: null }
+    }
+
+    // Re-read the decrypted key here rather than threading it through
+    // `inputData` (code review fix #4) — see the `inputSchema` comment for
+    // why it must not ride the persisted workflow snapshot.
+    const elevenLabsKey = getDecryptedKey("elevenlabs")
+    if (!elevenLabsKey) {
+      throw new Error(
+        `generate_demo: project has voiceId "${inputData.voiceId}" configured but no ` +
+          "ElevenLabs API key is stored — cannot synthesize voiceover."
+      )
     }
 
     const ffmpeg = resolveFfmpeg()
@@ -263,7 +281,7 @@ const ttsStep = createStep({
         sceneVideoPath: result.videoPath,
         segments: sceneNarration.segments,
         voiceId: inputData.voiceId,
-        apiKey: inputData.elevenLabsKey,
+        apiKey: elevenLabsKey,
         signal: abortSignal,
       })
       // `segmentPaths`/`outputPath` from `synthesizeSegments` are
@@ -295,45 +313,82 @@ const composeStep = createStep({
 
     const outDir = path.join(inputData.workspace, "output")
     await fs.mkdir(outDir, { recursive: true })
+
+    // Normalize every scene to a uniform h264/yuv420p/30fps + aac .mp4
+    // BEFORE concatenating (code review fix #6). A run's scenes are a mix
+    // of raw .webm (whatever codec agent-browser recorded, video-only) and
+    // voiced .mp4 (already h264/yuv420p/30fps/aac — see `ttsStep`'s
+    // `buildFfmpegMixArgs` output). The concat DEMUXER (`-f concat`) only
+    // works correctly when every input shares the same codec/container —
+    // `-c copy` outright fails on a codec mismatch, and re-encoding via the
+    // demuxer (`-c:v libx264` with mixed inputs) is not a substitute: the
+    // demuxer itself requires uniform inputs to decode correctly in the
+    // first place. Normalizing each part individually first (a plain
+    // single-input transcode, safe regardless of source codec) means the
+    // final concat is ALWAYS a uniform `-c copy`, sidestepping the demuxer's
+    // uniformity requirement entirely rather than trying to pick a
+    // concat-filter workaround per mix.
+    const parts: string[] = []
+    for (const r of inputData.results) {
+      const voicedPath = inputData.voicedPaths?.[r.sceneId]
+      if (voicedPath) {
+        parts.push(voicedPath)
+        continue
+      }
+      // Raw scene recordings are video-only (the voiceover pipeline never
+      // copies original recording audio either — see `ttsStep`'s `-map
+      // 0:v` — so a missing/ignored source audio track is consistent
+      // behavior, not a regression). Synthesize a silent audio track sized
+      // to the video via `-shortest` against an infinite `anullsrc` so the
+      // normalized output has the same stream layout (1 video + 1 audio)
+      // as a voiced part, matching the concat demuxer's requirements.
+      const normalizedPath = path.join(outDir, `${r.sceneId}.normalized.mp4`)
+      await execFileAsync(ffmpeg, [
+        "-y",
+        "-i",
+        r.videoPath,
+        "-f",
+        "lavfi",
+        "-i",
+        "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-shortest",
+        "-map",
+        "0:v:0",
+        "-map",
+        "1:a:0",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        "30",
+        "-c:a",
+        "aac",
+        normalizedPath,
+      ])
+      parts.push(normalizedPath)
+    }
+
     const outputPath = path.join(outDir, "demo.mp4")
-    const parts = inputData.results.map(
-      (r) => inputData.voicedPaths?.[r.sceneId] ?? r.videoPath
-    )
     const listPath = path.join(outDir, "concat.txt")
     await fs.writeFile(
       listPath,
       parts.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n")
     )
-    // Stream-copy (`-c copy`) is only safe when EVERY scene is a uniform
-    // voiced .mp4 — the zero-segments guard in `ttsStep` can leave some
-    // scenes without a voicedPaths entry even when `voicedPaths` itself is
-    // non-null, and mixing raw .webm with voiced .mp4 under `-c copy` would
-    // concat mismatched codecs. Re-encode (the unvoiced branch) whenever the
-    // mix is anything less than fully voiced.
-    const voiced =
-      Boolean(inputData.voicedPaths) &&
-      inputData.results.every((r) => Boolean(inputData.voicedPaths?.[r.sceneId]))
-    const args = voiced
-      ? ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", outputPath]
-      : [
-          "-y",
-          "-f",
-          "concat",
-          "-safe",
-          "0",
-          "-i",
-          listPath,
-          "-c:v",
-          "libx264",
-          "-pix_fmt",
-          "yuv420p",
-          "-r",
-          "30",
-          "-movflags",
-          "+faststart",
-          outputPath,
-        ]
-    await execFileAsync(ffmpeg, args)
+    await execFileAsync(ffmpeg, [
+      "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      listPath,
+      "-c",
+      "copy",
+      "-movflags",
+      "+faststart",
+      outputPath,
+    ])
     return { videoPath: outputPath, scenes: inputData.results }
   },
 })

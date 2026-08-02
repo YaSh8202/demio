@@ -52,7 +52,6 @@ import { ensureWorkspace } from "./workspace"
 import { mastraDbPath } from "../store/paths"
 import { scenePlanSchema } from "./workflows/schemas"
 import { mastra } from "./mastra"
-import { getDecryptedKey } from "../store/provider-keys"
 import { getProject } from "../store"
 
 /** Re-exported for the IPC handler/preload typing (Task 4). */
@@ -173,8 +172,11 @@ function threadIdFromCtx(
 // recoverable from `mastra`'s LibSQLStore via `workflow.createRun({ runId })`
 // regardless, but the runId string itself has to come from somewhere. A
 // plain in-memory map is sufficient because Electron's main process is
-// long-lived for a session; it does NOT survive an app restart mid-suspension
-// (documented as untested/known-gap in task-12-report.md).
+// long-lived for a session; it does NOT survive an app restart mid-suspension.
+// Fallback only (code review fix #5) — `resumeData.runId` (below) is
+// preferred whenever the caller supplies it, since it rides the
+// `tool_suspended` event's `suspendPayload` all the way to the renderer and
+// back, and so survives exactly the restart this map doesn't.
 const activeDemoRuns = new Map<string, string>()
 
 const generateDemoTool = createTool({
@@ -192,6 +194,11 @@ const generateDemoTool = createTool({
   resumeSchema: z.object({
     action: z.enum(["retry", "skip", "abort"]),
     guidance: z.string().optional(),
+    // Code review fix #5: carried back from the suspend payload so a
+    // resume can recover the run even if `activeDemoRuns` lost its entry
+    // (e.g. an app restart). Optional because Task 13's renderer may not
+    // echo it back yet — falls back to the in-memory map either way.
+    runId: z.string().optional(),
   }),
   execute: async (input, context) => {
     const ctx = readControllerCtx(context.requestContext)
@@ -210,29 +217,68 @@ const generateDemoTool = createTool({
 
     const resumeData = context.agent?.resumeData
 
-    const result = resumeData
-      ? await (async () => {
-          const runId = activeDemoRuns.get(threadId)
-          if (!runId) {
-            throw new Error(
-              "generate_demo: no active demo-video run found to resume for this " +
-                "thread (the app may have restarted while a scene decision was pending)"
-            )
-          }
-          const run = await workflow.createRun({ runId })
-          return run.resume({ step: "record-scene", resumeData })
-        })()
-      : await (async () => {
-          const project = getProject(projectId)
-          const voiceId = project?.meta.voiceId ?? null
-          const elevenLabsKey = voiceId ? getDecryptedKey("elevenlabs") : null
+    // Code review fix #2: `sceneStep`'s `writer.write({type:"scene-progress",...})`
+    // is a no-op unless the run's `outputWriter` is wired — `ToolStream._write`
+    // only calls its `writeFn` if one was passed to the `Run.start`/`resume`
+    // call (workflows/types.d.ts `WorkflowRunStartOptions.outputWriter`,
+    // same field on `resume()`). Forward every chunk into the TOOL's own
+    // writer via `.custom()` (raw passthrough, no re-wrapping —
+    // `ToolStream.custom`, tools/stream.d.ts) so it reaches whatever
+    // consumes `generate_demo`'s tool-call stream.
+    const outputWriter = async (chunk: unknown) => {
+      await context.writer?.custom(chunk as { type: string })
+    }
 
-          const run = await workflow.createRun()
-          activeDemoRuns.set(threadId, run.runId)
-          return run.start({
-            inputData: { plan: input.plan, workspace, modelId, voiceId, elevenLabsKey },
-          })
-        })()
+    let run: Awaited<ReturnType<typeof workflow.createRun>>
+    let result: Awaited<ReturnType<typeof run.start>>
+
+    if (resumeData) {
+      // Code review fix #5: prefer the runId carried on resumeData; the
+      // in-memory map is the fallback for callers that don't send it yet.
+      const runId = resumeData.runId ?? activeDemoRuns.get(threadId)
+      if (!runId) {
+        throw new Error(
+          "generate_demo: no active demo-video run found to resume for this " +
+            "thread (the app may have restarted while a scene decision was pending)"
+        )
+      }
+      run = await workflow.createRun({ runId })
+      activeDemoRuns.set(threadId, runId)
+
+      // Code review fix #3: the tool's own abortSignal (session cancel)
+      // never reached the workflow run otherwise — `Run` gets its own
+      // internal AbortController, so cancelling the chat session did
+      // nothing to an in-flight `demo-video` run. Cancel the run explicitly
+      // (`Run.cancel()`, workflow.d.ts) when the session aborts.
+      const onAbort = () => void run.cancel()
+      context.abortSignal?.addEventListener("abort", onAbort)
+      try {
+        result = await run.resume({ step: "record-scene", resumeData, outputWriter })
+      } finally {
+        context.abortSignal?.removeEventListener("abort", onAbort)
+      }
+    } else {
+      const project = getProject(projectId)
+      const voiceId = project?.meta.voiceId ?? null
+
+      run = await workflow.createRun()
+      activeDemoRuns.set(threadId, run.runId)
+
+      const onAbort = () => void run.cancel()
+      context.abortSignal?.addEventListener("abort", onAbort)
+      try {
+        // `elevenLabsKey` is intentionally NOT included here (code review
+        // fix #4) — see the workflow's `inputSchema` comment: it would
+        // otherwise be persisted in plaintext into the workflow's LibSQL
+        // snapshot. `ttsStep` re-reads it itself at execution time.
+        result = await run.start({
+          inputData: { plan: input.plan, workspace, modelId, voiceId },
+          outputWriter,
+        })
+      } finally {
+        context.abortSignal?.removeEventListener("abort", onAbort)
+      }
+    }
 
     if (result.status === "suspended") {
       if (!context.agent?.suspend) {
@@ -241,13 +287,20 @@ const generateDemoTool = createTool({
             "(generate_demo must run inside an Agent tool call)"
         )
       }
-      const payload = result.suspendPayload as {
-        sceneId: string
-        failure: string
-        attempts: number
-      }
+      // Code review fix #1: `WorkflowResult.suspendPayload` is keyed by
+      // STEP ID (`{ "record-scene": { sceneId, failure, attempts } }`),
+      // confirmed in the compiled result formatter
+      // (agent-0y2cApTZ.js: `suspendPayload[stepId] = rest` inside the
+      // `status === "suspended"` branch) — not the flat `{sceneId,...}`
+      // shape a naive read assumes.
+      const payload = (
+        result.suspendPayload as Record<
+          string,
+          { sceneId: string; failure: string; attempts: number }
+        >
+      )["record-scene"]
       return await context.agent.suspend({
-        runId: activeDemoRuns.get(threadId) ?? "",
+        runId: run.runId,
         sceneId: payload.sceneId,
         failure: payload.failure,
         attempts: payload.attempts,
