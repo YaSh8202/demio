@@ -18,6 +18,7 @@
 import path from "node:path"
 import { WORKSPACE_TOOLS } from "@mastra/core/workspace"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
+import { shellQuote } from "../../lib/agent-browser/quote"
 import { createDemioAgent } from "../demio-agent"
 import { verifyScene } from "./verify"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
@@ -33,8 +34,12 @@ const RECORDER_TOOL_FILTER = [
   WORKSPACE_TOOLS.FILESYSTEM.EDIT_FILE,
 ]
 
+// NOTE: execAgentBrowser takes ONE FULL COMMAND STRING per array element
+// (single command → tokenized; multiple elements → `batch` mode, where a bare
+// URL becomes its own "Unknown command"). Variable parts go through
+// shellQuote so paths/URLs with spaces survive splitCommand.
 async function currentUrl(): Promise<string> {
-  const r = await execAgentBrowser(["get", "url"], { timeout: 10_000 })
+  const r = await execAgentBrowser(["get url"], { timeout: 10_000 })
   return r.ok ? String(r.output).trim() : ""
 }
 
@@ -82,7 +87,9 @@ export async function recordSceneWithRetry(opts: {
     opts.onProgress?.({ sceneId: scene.id, attempt, phase: "recording" })
 
     // 1. Position the browser BEFORE recording so page-load isn't in the video.
-    const open = await execAgentBrowser(["open", scene.startUrl], { timeout: 60_000 })
+    const open = await execAgentBrowser([`open ${shellQuote(scene.startUrl)}`], {
+      timeout: 60_000,
+    })
     if (!open.ok) {
       previousFailure = `failed before recording — could not open ${scene.startUrl}: ${open.error ?? "unknown error"}`
       lastReport = infraFailureReport(previousFailure)
@@ -93,12 +100,14 @@ export async function recordSceneWithRetry(opts: {
 
     // 2. Harness starts recording (ADR-005 — agent never touches the lifecycle).
     const rec = await execAgentBrowser(
-      ["record", "start", videoPath, "--log-actions", actionsPath],
+      [
+        `record start ${shellQuote(videoPath)} --log-actions ${shellQuote(actionsPath)}`,
+      ],
       { timeout: 30_000 }
     )
     if (!rec.ok) {
       // A stale recording session is the known failure mode — clear and retry.
-      const cleanup = await execAgentBrowser(["record", "stop"], { timeout: 15_000 })
+      const cleanup = await execAgentBrowser(["record stop"], { timeout: 15_000 })
       if (!cleanup.ok) {
         log.warn(
           `[demo-workflow] scene ${scene.id} attempt ${attempt} stale-session cleanup ` +
@@ -138,7 +147,7 @@ export async function recordSceneWithRetry(opts: {
       agentFailure = err instanceof Error ? err.message : String(err)
     } finally {
       // 4. Recording ALWAYS stops, agent success or not.
-      const stop = await execAgentBrowser(["record", "stop"], { timeout: 30_000 })
+      const stop = await execAgentBrowser(["record stop"], { timeout: 30_000 })
       if (!stop.ok) {
         log.warn(
           `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop failed: ${stop.error}`
