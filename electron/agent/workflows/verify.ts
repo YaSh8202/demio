@@ -64,7 +64,16 @@ export async function verifyScene(input: VerifyInput): Promise<VerifyReport> {
   if (exists) {
     try {
       const durationSec = await probeDurationSec(input.videoPath)
-      const dur = pure.checkDurationRange(durationSec, input.scene)
+      // Planner-authored bounds imagine final-video pacing, but the raw
+      // recording includes the recorder agent's LLM think-time between
+      // actions — routinely 5-10x the imagined length. The mechanical
+      // check's job is catching broken recordings, not pacing, so the max
+      // is clamped up to a generous floor; a genuinely runaway recording
+      // still fails. (Seen live: planner set [3, 6], real scene was 30.6s.)
+      const dur = pure.checkDurationRange(durationSec, {
+        minDurationSec: input.scene.minDurationSec,
+        maxDurationSec: Math.max(input.scene.maxDurationSec, 120),
+      })
       checks.push({ name: "duration-range", ok: dur.ok, detail: dur.detail })
     } catch (err) {
       checks.push({

@@ -18,8 +18,20 @@ export const sceneSchema = z.object({
     .string()
     .describe("Verifiable end-state assertion, e.g. 'board Demio QA visible with 3 lists'"),
   narrationHint: z.string().describe("Tone/content cue for the voiceover writer"),
-  minDurationSec: z.number().default(4),
-  maxDurationSec: z.number().default(90),
+  minDurationSec: z
+    .number()
+    .default(4)
+    .describe(
+      "Minimum RAW recording length in seconds — catches broken/instant recordings"
+    ),
+  maxDurationSec: z
+    .number()
+    .default(90)
+    .describe(
+      "Maximum RAW recording length in seconds. The raw capture includes the " +
+        "recording agent's think-time between actions, so set this generously " +
+        "(60-120s typical) — verification clamps it up to at least 120s anyway"
+    ),
 })
 export type Scene = z.infer<typeof sceneSchema>
 
