@@ -41,11 +41,12 @@ test("parseActionEntries: skips ok:false and unparseable lines", () => {
 test("groupActions: merges type→Enter pairs, splits across think-time gaps", () => {
   const entries = parseActionEntries(SCENE_01_JSONL)
   const groups = groupActions(entries, EDL_DEFAULTS.mergeGapMs)
-  // pairs at ~18.7s, ~26.4s, ~32.7s — gaps between pairs are ~7.5s and ~6.1s
+  // tsMs = action END. Pair windows: [16998, 18914], [23485, 26590],
+  // [30079, 32850] — inter-group gaps 4571ms and 3489ms, both > mergeGap 3000
   assert.equal(groups.length, 3)
   assert.deepEqual(groups[0].actionIdxs, [0, 1])
-  assert.equal(groups[0].startMs, 18730)
-  assert.equal(groups[0].endMs, 18939) // 18914 + 25
+  assert.equal(groups[0].startMs, 16998) // 18730 - 1732
+  assert.equal(groups[0].endMs, 18914) // Enter's tsMs
   assert.deepEqual(groups[2].actionIdxs, [4, 5])
 })
 
@@ -69,20 +70,21 @@ test("buildEdl: voiced scene — slots contiguous, voice drives holds", () => {
   assert.deepEqual(v, { ok: true, errors: [] })
   // intro slot: voice need = 3715 + 300 gap = 4015 > minHold 2000
   assert.equal(edl.slots[0].outEndMs - edl.slots[0].outStartMs, 4015)
-  // action group 0 footage: src [17930, 20139] = 2209ms; voice need 2879+300=3179 → hold 970
-  assert.equal(edl.slots[1].srcStartMs, 18730 - 800)
-  assert.equal(edl.slots[1].srcEndMs, 18939 + 1200)
-  assert.equal(edl.slots[1].holdMs, 3179 - 2209)
+  // action group 0 footage: src [16198, 20114] = 3916ms (window [16998,
+  // 18914] ± pads); voice need 2879+300=3179 < footage → no hold
+  assert.equal(edl.slots[1].srcStartMs, 16998 - 800)
+  assert.equal(edl.slots[1].srcEndMs, 18914 + 1200)
+  assert.equal(edl.slots[1].holdMs, 0)
   // anchor 2 (action idx 2) lands in GROUP 1 (actions 2+3) = slots[2]:
-  // footage [25623, 27792] = 2169ms; need 2508+300=2808 → hold 639
-  assert.equal(edl.slots[2].holdMs, 2808 - 2169)
+  // footage [22685, 27790] = 5105ms; need 2508+300=2808 < footage → no hold
+  assert.equal(edl.slots[2].holdMs, 0)
   // group 2 (actions 4+5) has no voice: footage only, no hold
   assert.equal(edl.slots[3].holdMs, 0)
   // segment outStartMs sits at its slot's outStartMs
   assert.equal(edl.segments[0].outStartMs, edl.slots[0].outStartMs)
   assert.equal(edl.segments[1].outStartMs, edl.slots[1].outStartMs)
-  // total is far below the raw 40.7s
-  assert.ok(edl.totalMs < 20000, `expected tight cut, got ${edl.totalMs}`)
+  // total: 4015 + 3916 + 5105 + 4771 + 2901 = 20708 — half the raw 40.7s
+  assert.equal(edl.totalMs, 20708)
 })
 
 test("buildEdl: voiceless — slots are action windows + pads, minHold intro/outro", () => {
@@ -110,8 +112,8 @@ test("buildEdl: multiple segments on one anchor stack with gaps", () => {
   const seg1 = edl.segments[1]
   assert.equal(seg1.outStartMs, seg0.outStartMs + 2000 + EDL_DEFAULTS.segmentGapMs)
   const slot = edl.slots.find((s) => s.segmentIdxs.length === 2)
-  // need = 2000 + 300 + 1500 + 300 = 4100 > footage 2209 → hold 1891
-  assert.equal(slot.holdMs, 4100 - 2209)
+  // need = 2000 + 300 + 1500 + 300 = 4100 > footage 3916 → hold 184
+  assert.equal(slot.holdMs, 4100 - 3916)
 })
 
 test("buildEdl: out-of-range action anchor clamps to last group", () => {

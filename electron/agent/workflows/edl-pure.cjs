@@ -48,13 +48,17 @@ function summarizeArgs(action, args) {
 function groupActions(entries, mergeGapMs) {
   const groups = []
   for (const e of entries) {
-    const endMs = e.tsMs + e.durationMs
+    // tsMs is stamped when the action COMPLETES (agent-browser logs the
+    // entry after execution — see "Background facts"), so the action
+    // occupied [tsMs - durationMs, tsMs] on the recording timeline.
+    const startMs = Math.max(0, e.tsMs - e.durationMs)
+    const endMs = e.tsMs
     const last = groups[groups.length - 1]
-    if (last && e.tsMs - last.endMs < mergeGapMs) {
-      last.endMs = endMs
+    if (last && startMs - last.endMs < mergeGapMs) {
+      last.endMs = Math.max(last.endMs, endMs)
       last.actionIdxs.push(e.idx)
     } else {
-      groups.push({ startMs: e.tsMs, endMs, actionIdxs: [e.idx] })
+      groups.push({ startMs, endMs, actionIdxs: [e.idx] })
     }
   }
   return groups
