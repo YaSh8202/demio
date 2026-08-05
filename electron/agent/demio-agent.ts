@@ -58,7 +58,6 @@ function restrictedWorkspaceToolsConfig(allowed: string[]): WorkspaceToolsConfig
 
 export interface CreateDemioAgentOpts {
   workspace: string
-  signal: AbortSignal
   modelId: string
   /**
    * @deprecated No runtime caller since Task 7/12 — kept as reference for

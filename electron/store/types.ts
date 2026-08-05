@@ -33,8 +33,8 @@ export interface ProjectMeta {
   id: string
   selectedModel: string
   /**
-   * ElevenLabs voice id. When null/undefined the agent runs without voiceover
-   * and the synthesize_voiceover tool is omitted from its toolset.
+   * ElevenLabs voice id. When null/undefined the demo-video workflow's
+   * `ttsStep` skips voiceover synthesis and the scene renders unvoiced.
    */
   voiceId?: string | null
   /** Human-readable name cached for display in chat & UI. */

@@ -150,7 +150,7 @@ function buildEdl({ actionEntries, videoDurationMs, segments, opts }) {
   // the previous slot's src end so kept footage never overlaps.
   let prevSrcEnd = 0
   groups.forEach((g, gi) => {
-    const srcStart = clamp(g.startMs - o.preRollMs, prevSrcEnd === 0 ? 0 : prevSrcEnd, videoDurationMs)
+    const srcStart = clamp(g.startMs - o.preRollMs, prevSrcEnd, videoDurationMs)
     const srcEnd = clamp(g.endMs + o.postRollMs, srcStart + 1, videoDurationMs)
     const slot = pushSlot("action", srcStart, srcEnd, bySlot.groups[gi], 0)
     slot.actionIdxs = [...g.actionIdxs]
@@ -266,7 +266,7 @@ function buildMixArgs(retimedPath, segments, outputPath) {
     parts.push(`[${i + 1}:a]adelay=${d}|${d}[a${i}]`)
     labels.push(`[a${i}]`)
   })
-  parts.push(`${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0[aout]`)
+  parts.push(`${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0:normalize=0[aout]`)
   args.push(
     "-filter_complex", parts.join(";"),
     "-map", "0:v", "-map", "[aout]",

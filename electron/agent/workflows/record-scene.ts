@@ -129,7 +129,6 @@ export async function recordSceneWithRetry(opts: {
     try {
       const recorder = createDemioAgent({
         workspace,
-        signal,
         modelId,
         toolFilter: RECORDER_TOOL_FILTER,
         instructionsOverride: recorderInstructions({

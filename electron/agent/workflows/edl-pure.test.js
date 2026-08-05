@@ -149,7 +149,7 @@ test("buildEdl: pads clamp at video bounds", () => {
   })
   const actions = edl.slots.filter((s) => s.kind === "action")
   assert.equal(actions[0].srcStartMs, 0) // 200 - 800 clamps
-  assert.equal(actions[1].srcEndMs, 10000) // 9900 + 1200 clamps
+  assert.equal(actions[1].srcEndMs, 10000) // 9500 + 1200 clamps
   assert.deepEqual(validateEdl(edl, 10000), { ok: true, errors: [] })
 })
 
@@ -209,7 +209,7 @@ test("buildMixArgs: adelay per segment at outStartMs, video stream copied", () =
   const fc = args[args.indexOf("-filter_complex") + 1]
   assert.ok(fc.includes("[1:a]adelay=0|0[a0]"))
   assert.ok(fc.includes("[2:a]adelay=4015|4015[a1]"))
-  assert.ok(fc.includes("amix=inputs=2:dropout_transition=0"))
+  assert.ok(fc.includes("amix=inputs=2:dropout_transition=0:normalize=0"))
   assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), ["-c:v", "copy"])
   assert.ok(args.join(" ").includes("-ar 44100"))
   assert.ok(args.join(" ").includes("-ac 2"))

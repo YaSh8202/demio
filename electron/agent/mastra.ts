@@ -12,9 +12,9 @@
 // `createDemioAgent` directly with a full terminal/read/edit/ask_user
 // toolset — the live conversation path now runs entirely through
 // AgentController (see controller.ts), which brings its own Workspace
-// primitives. `createDemioAgent` survives lean (present_files +
-// synthesize_voiceover only) as the seam for the recorder/narrator agents
-// (Tasks 11/12), which get Workspace tools via the `toolFilter` mechanism.
+// primitives. `createDemioAgent` survives lean (present_files is its only
+// custom tool) as the seam for the recorder/narrator agents (Tasks 11/12),
+// which get Workspace tools via the `toolFilter` mechanism.
 
 import { Mastra } from "@mastra/core"
 import { LibSQLStore } from "@mastra/libsql"

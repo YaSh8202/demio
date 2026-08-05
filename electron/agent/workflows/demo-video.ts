@@ -276,7 +276,6 @@ const narrateStep = createStep({
     // Narrator needs no tools — action logs are inlined into the prompt.
     const narrator = createDemioAgent({
       workspace: inputData.workspace,
-      signal: abortSignal,
       modelId: inputData.modelId,
       toolFilter: [],
       instructionsOverride: NARRATOR_INSTRUCTIONS,
