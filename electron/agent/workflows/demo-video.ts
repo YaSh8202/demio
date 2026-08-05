@@ -48,6 +48,7 @@ import type { SceneResult } from "./schemas"
 import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeSegments } from "../lib/voiceover"
 import { createDemioAgent } from "../demio-agent"
+import { parseActionEntries } from "./sync"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
 
@@ -185,11 +186,28 @@ const collectResultsStep = createStep({
   },
 })
 
+const segmentAnchorSchema = z.union([
+  z.literal("intro"),
+  z.literal("outro"),
+  z.number().int().min(0),
+])
+
 const narrationSegmentsSchema = z.object({
   scenes: z.array(
     z.object({
       sceneId: z.string(),
-      segments: z.array(z.object({ text: z.string(), atSec: z.number() })),
+      segments: z
+        .array(
+          z.object({
+            text: z.string().describe("One short spoken sentence"),
+            anchor: segmentAnchorSchema.describe(
+              'What this line plays over: "intro" (opening frame, before any action), ' +
+                'an action index from the numbered action list, or "outro" (final state)'
+            ),
+          })
+        )
+        .min(1)
+        .max(8),
     })
   ),
 })
@@ -198,16 +216,17 @@ const narratedSchema = collectedSchema.extend({
   narration: narrationSegmentsSchema.nullable(),
 })
 
-const NARRATOR_INSTRUCTIONS = `You are the Demio narrator. You write voiceover narration for a recorded product demo, given each scene's goal, narration hint, and a timed log of the actions the recorder performed.
+const NARRATOR_INSTRUCTIONS = `You are the Demio narrator. You write voiceover narration for a recorded product demo, given each scene's goal, narration hint, and a numbered list of the browser actions the recorder performed.
 
 Rules:
-- Target ~150 words per minute (~2.5 words/second).
-- 2-6 timed segments per scene. Each segment is { text, atSec } — atSec is seconds from the scene's own recording start.
-- No segment may start later than that scene's durationSec - 2.
-- Segments within a scene must not overlap: segment N+1's atSec must be at least the estimated duration of segment N after segment N's atSec.
-- Schedule a line slightly BEFORE the action it describes (0.6-1.2s lead-in) — viewers should hear "now we'll log in" just before the click lands.
-- Write in a natural, conversational register matching each scene's narrationHint. Keep each segment to one short sentence.
-- Output narration for every scene provided, even if brief.`
+- Each segment is { text, anchor }. You NEVER schedule times — the sync engine times everything. anchor says what the line plays over:
+  - "intro" — over the scene's opening frame, before any action happens. Use it to set context.
+  - an action index (a number from the scene's numbered action list) — the line plays as that action happens on screen.
+  - "outro" — over the scene's final state. Use it to land the outcome.
+- List segments in playback order: intro lines first, then action-anchored lines in ascending action order, outro lines last. Multiple lines may share an anchor.
+- One short conversational sentence per segment (~150 words per minute pacing — a sentence of 8-15 words). Match each scene's narrationHint for tone.
+- Anchor to the FIRST action of a burst: typing then pressing Enter is one moment — anchor to the typing action's index.
+- Output narration for every scene provided, even if brief. 2-6 segments per scene.`
 
 const narrateStep = createStep({
   id: "narrate",
@@ -233,21 +252,26 @@ const narrateStep = createStep({
       instructionsOverride: NARRATOR_INSTRUCTIONS,
     })
     const actionLogs = await Promise.all(
-      inputData.results.map(async (r) => ({
-        sceneId: r.sceneId,
-        durationSec: r.durationSec,
-        actions: await fs.readFile(r.actionsPath, "utf8"),
-      }))
+      inputData.results.map(async (r) => {
+        const entries = parseActionEntries(await fs.readFile(r.actionsPath, "utf8"))
+        return {
+          sceneId: r.sceneId,
+          durationSec: r.durationSec,
+          numberedActions: entries.map(
+            (e) => `${e.idx}: ${e.action}${e.argsSummary ? ` ${e.argsSummary}` : ""}`
+          ),
+        }
+      })
     )
     const { object } = await narrator.generate(
       `Write voiceover narration for this demo: ${inputData.plan.demoTitle}.
-Scene data (goals, hints, timed action logs):
+Scene data (goals, hints, numbered action lists):
 ${JSON.stringify(
   inputData.plan.scenes.map((s) => ({
     sceneId: s.id,
     goal: s.goal,
     narrationHint: s.narrationHint,
-    log: actionLogs.find((l) => l.sceneId === s.id),
+    actions: actionLogs.find((l) => l.sceneId === s.id),
   })),
   null,
   2
