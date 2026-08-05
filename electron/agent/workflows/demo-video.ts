@@ -1,8 +1,9 @@
 // ── demo-video workflow (ADR-001) ───────────────────────────────────────────
 //
 // plan (input) → foreach scene [record+verify+retry, suspend on exhaustion]
-// → collect → narrate (structured) → tts (skipped when no voice) → compose
-// (ffmpeg).
+// → collect → narrate (structured) → tts (synthesis only, skipped when no
+// voice) → sync (EDL-based retiming/mix, see `./sync`) → compose (pure
+// concat, ffmpeg).
 //
 // Reconciled against installed `@mastra/core@1.55.0` workflow/agent APIs
 // (Task 12) — see `task-12-report.md` for full evidence. The two load-bearing
@@ -46,9 +47,9 @@ import { z } from "zod"
 import { scenePlanSchema, sceneResultSchema, sceneSchema } from "./schemas"
 import type { SceneResult } from "./schemas"
 import { recordSceneWithRetry } from "./record-scene"
-import { synthesizeSegments } from "../lib/voiceover"
+import { synthesizeNarrationAudio } from "../lib/voiceover"
 import { createDemioAgent } from "../demio-agent"
-import { parseActionEntries } from "./sync"
+import { parseActionEntries, renderScene } from "./sync"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
 
@@ -77,10 +78,11 @@ type DemoVideoInit = z.infer<typeof inputSchema>
 // scene-01") — no `.regex()` — so a malformed/adversarial plan could smuggle
 // path-traversal characters (`../`, `/`) or shell-unsafe characters into a
 // sceneId. Every downstream sceneId use ends up in a `path.join(...)` (this
-// file's `composeStep` normalization, and internally inside
-// `synthesizeSegments` for the voiced-segment paths) — validate once, here,
-// at the earliest choke point, so every one of those sites is safe by
-// construction rather than needing its own guard (code review round-2 #6).
+// file's `syncStep`/`composeStep`, and internally inside
+// `synthesizeNarrationAudio` and `renderScene` for the per-scene audio/render
+// paths) — validate once, here, at the earliest choke point, so every one of
+// those sites is safe by construction rather than needing its own guard
+// (code review round-2 #6).
 const SAFE_SCENE_ID = /^[a-zA-Z0-9._-]+$/
 
 const toScenesStep = createStep({
@@ -125,7 +127,14 @@ const sceneStep = createStep({
   outputSchema: sceneResultSchema.nullable(),
   resumeSchema: sceneResumeSchema,
   suspendSchema: sceneSuspendSchema,
-  execute: async ({ inputData: scene, resumeData, suspend, getInitData, writer, abortSignal }) => {
+  execute: async ({
+    inputData: scene,
+    resumeData,
+    suspend,
+    getInitData,
+    writer,
+    abortSignal,
+  }) => {
     const init = getInitData<DemoVideoInit>()
 
     // Re-invoked from the top on resume (see file header) — resumeData is
@@ -140,7 +149,13 @@ const sceneStep = createStep({
 
     const sceneToRecord =
       resumeData?.action === "retry" && resumeData.guidance
-        ? { ...scene, actions: [...scene.actions, `User guidance: ${resumeData.guidance}`] }
+        ? {
+            ...scene,
+            actions: [
+              ...scene.actions,
+              `User guidance: ${resumeData.guidance}`,
+            ],
+          }
         : scene
 
     const outcome = await recordSceneWithRetry({
@@ -149,7 +164,11 @@ const sceneStep = createStep({
       modelId: init.modelId,
       signal: abortSignal,
       onProgress: (u) => {
-        void writer.write({ type: "scene-progress", ...u, of: init.plan.scenes.length })
+        void writer.write({
+          type: "scene-progress",
+          ...u,
+          of: init.plan.scenes.length,
+        })
       },
     })
 
@@ -173,7 +192,9 @@ const sceneStep = createStep({
 // schema below is built from a plain zod variable instead, and reused as
 // both the producing step's `outputSchema` and the next step's
 // `inputSchema` so the two stay structurally identical.
-const collectedSchema = inputSchema.extend({ results: z.array(sceneResultSchema) })
+const collectedSchema = inputSchema.extend({
+  results: z.array(sceneResultSchema),
+})
 
 const collectResultsStep = createStep({
   id: "collect-scene-results",
@@ -253,12 +274,15 @@ const narrateStep = createStep({
     })
     const actionLogs = await Promise.all(
       inputData.results.map(async (r) => {
-        const entries = parseActionEntries(await fs.readFile(r.actionsPath, "utf8"))
+        const entries = parseActionEntries(
+          await fs.readFile(r.actionsPath, "utf8")
+        )
         return {
           sceneId: r.sceneId,
           durationSec: r.durationSec,
           numberedActions: entries.map(
-            (e) => `${e.idx}: ${e.action}${e.argsSummary ? ` ${e.argsSummary}` : ""}`
+            (e) =>
+              `${e.idx}: ${e.action}${e.argsSummary ? ` ${e.argsSummary}` : ""}`
           ),
         }
       })
@@ -282,8 +306,15 @@ ${JSON.stringify(
   },
 })
 
+const sceneAudioSegmentSchema = z.object({
+  text: z.string(),
+  anchor: segmentAnchorSchema,
+  file: z.string().describe("Workspace-relative MP3 path"),
+  durationMs: z.number(),
+})
+
 const voicedSchema = narratedSchema.extend({
-  voicedPaths: z.record(z.string(), z.string()).nullable(),
+  sceneAudio: z.record(z.string(), z.array(sceneAudioSegmentSchema)).nullable(),
 })
 
 const ttsStep = createStep({
@@ -292,68 +323,72 @@ const ttsStep = createStep({
   outputSchema: voicedSchema,
   execute: async ({ inputData, abortSignal }) => {
     if (!inputData.narration || !inputData.voiceId) {
-      return { ...inputData, voicedPaths: null }
+      return { ...inputData, sceneAudio: null }
     }
-
-    // Re-read the decrypted key here rather than threading it through
-    // `inputData` (code review fix #4) — see the `inputSchema` comment for
-    // why it must not ride the persisted workflow snapshot. `narrateStep`
-    // already gates on the same check before generating narration, so this
-    // should always be present by the time `ttsStep` runs — but the key
-    // could theoretically be deleted/revoked in the window between the two
-    // steps. Degrade to unvoiced (round-2 #2) rather than hard-failing the
-    // whole run after every scene has already been recorded: a video the
-    // user can still watch beats no video at all over a key that went away
-    // mid-run.
+    // Key re-read at execution time — never in workflow state (see
+    // inputSchema comment).
     const elevenLabsKey = getDecryptedKey("elevenlabs")
     if (!elevenLabsKey) {
-      return { ...inputData, voicedPaths: null }
+      return { ...inputData, sceneAudio: null }
     }
 
-    const ffmpeg = resolveFfmpeg()
-    if (!ffmpeg) {
-      // Fail loudly rather than silently shipping an unvoiced video when the
-      // user configured a voice — `resolveFfmpeg` returns `string | null`.
-      throw new Error(
-        "ffmpeg binary not available — cannot mix voiceover onto the scene video. " +
-          "Reinstall dependencies, or remove the project's voice to skip narration."
-      )
-    }
-
-    const voicedPaths: Record<string, string> = {}
+    const sceneAudio: Record<
+      string,
+      z.infer<typeof sceneAudioSegmentSchema>[]
+    > = {}
     for (const sceneNarration of inputData.narration.scenes) {
-      // Ledgered gap (lib/voiceover.ts): `synthesizeSegments` builds an
-      // invalid `amix=inputs=0` filter on an empty segment list — skip this
-      // scene's tts instead of calling it.
       if (sceneNarration.segments.length === 0) continue
-
-      const result = inputData.results.find((r) => r.sceneId === sceneNarration.sceneId)
-      if (!result) continue
-
-      const synth = await synthesizeSegments({
+      if (!inputData.results.some((r) => r.sceneId === sceneNarration.sceneId))
+        continue
+      const audio = await synthesizeNarrationAudio({
         cwd: inputData.workspace,
         sceneId: sceneNarration.sceneId,
-        sceneVideoPath: result.videoPath,
-        segments: sceneNarration.segments,
+        texts: sceneNarration.segments.map((s) => s.text),
         voiceId: inputData.voiceId,
         apiKey: elevenLabsKey,
         signal: abortSignal,
       })
-      // `segmentPaths`/`outputPath` from `synthesizeSegments` are
-      // workspace-relative (lib/voiceover.ts) — run the mix with `cwd` set
-      // to the workspace so those relative -i/output args resolve, and
-      // store the ABSOLUTE output path so `composeStep`'s concat list is
-      // consistent with the unvoiced branch's absolute `SceneResult.videoPath`.
-      await execFileAsync(ffmpeg, synth.ffmpegMixArgs, { cwd: inputData.workspace })
-      voicedPaths[sceneNarration.sceneId] = path.join(inputData.workspace, synth.outputPath)
+      sceneAudio[sceneNarration.sceneId] = sceneNarration.segments.map(
+        (seg, i) => ({
+          text: seg.text,
+          anchor: seg.anchor,
+          file: audio[i].file,
+          durationMs: audio[i].durationMs,
+        })
+      )
     }
-    return { ...inputData, voicedPaths }
+    return { ...inputData, sceneAudio }
+  },
+})
+
+// sceneId → absolute path of the retimed, audio-carrying final scene file
+const syncedSchema = voicedSchema.extend({
+  retimedPaths: z.record(z.string(), z.string()),
+})
+
+const syncStep = createStep({
+  id: "sync",
+  inputSchema: voicedSchema,
+  outputSchema: syncedSchema,
+  execute: async ({ inputData }) => {
+    const retimedPaths: Record<string, string> = {}
+    for (const r of inputData.results) {
+      const rendered = await renderScene({
+        workspace: inputData.workspace,
+        sceneId: r.sceneId,
+        videoPath: r.videoPath,
+        actionsPath: r.actionsPath,
+        segments: inputData.sceneAudio?.[r.sceneId] ?? [],
+      })
+      retimedPaths[r.sceneId] = rendered.finalPath
+    }
+    return { ...inputData, retimedPaths }
   },
 })
 
 const composeStep = createStep({
   id: "compose",
-  inputSchema: voicedSchema,
+  inputSchema: syncedSchema,
   outputSchema: z.object({
     videoPath: z.string(),
     scenes: z.array(sceneResultSchema),
@@ -365,74 +400,18 @@ const composeStep = createStep({
         "ffmpeg binary not available — cannot compose the final demo video."
       )
     }
-
     const outDir = path.join(inputData.workspace, "output")
     await fs.mkdir(outDir, { recursive: true })
 
-    // Normalize every scene to a uniform h264/yuv420p/30fps + aac .mp4
-    // BEFORE concatenating (code review fix #6). A run's scenes are a mix
-    // of raw .webm (whatever codec agent-browser recorded, video-only) and
-    // voiced .mp4 (already h264/yuv420p/30fps/aac — see `ttsStep`'s
-    // `buildFfmpegMixArgs` output). The concat DEMUXER (`-f concat`) only
-    // works correctly when every input shares the same codec/container —
-    // `-c copy` outright fails on a codec mismatch, and re-encoding via the
-    // demuxer (`-c:v libx264` with mixed inputs) is not a substitute: the
-    // demuxer itself requires uniform inputs to decode correctly in the
-    // first place. Normalizing each part individually first (a plain
-    // single-input transcode, safe regardless of source codec) means the
-    // final concat is ALWAYS a uniform `-c copy`, sidestepping the demuxer's
-    // uniformity requirement entirely rather than trying to pick a
-    // concat-filter workaround per mix.
-    const parts: string[] = []
-    for (const r of inputData.results) {
-      const voicedPath = inputData.voicedPaths?.[r.sceneId]
-      if (voicedPath) {
-        parts.push(voicedPath)
-        continue
-      }
-      // Raw scene recordings are video-only (the voiceover pipeline never
-      // copies original recording audio either — see `ttsStep`'s `-map
-      // 0:v` — so a missing/ignored source audio track is consistent
-      // behavior, not a regression). Synthesize a silent audio track sized
-      // to the video via `-shortest` against an infinite `anullsrc` so the
-      // normalized output has the same stream layout (1 video + 1 audio)
-      // as a voiced part, matching the concat demuxer's requirements.
-      const normalizedPath = path.join(outDir, `${r.sceneId}.normalized.mp4`)
-      await execFileAsync(ffmpeg, [
-        "-y",
-        "-i",
-        r.videoPath,
-        "-f",
-        "lavfi",
-        "-i",
-        "anullsrc=channel_layout=stereo:sample_rate=44100",
-        "-shortest",
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-c:v",
-        "libx264",
-        "-pix_fmt",
-        "yuv420p",
-        "-r",
-        "30",
-        "-c:a",
-        "aac",
-        // Pin the audio format explicitly (code review round-2 #5) rather
-        // than relying on the AAC encoder inferring it from the `anullsrc`
-        // source — the final concat is a stream COPY (`-c copy` below), so
-        // every part's audio must already match exactly; an implicit
-        // sample-rate/channel mismatch against `ttsStep`'s voiced output
-        // would only surface as a broken/silent-audio concat downstream.
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
-        normalizedPath,
-      ])
-      parts.push(normalizedPath)
-    }
+    // Every scene's final file was rendered by sync.ts with identical
+    // codec/stream parameters (h264 yuv420p 30fps + aac 44100 stereo) —
+    // the concat demuxer's uniformity requirement holds by construction
+    // and the concat is a pure stream copy.
+    const parts = inputData.results.map((r) => {
+      const p = inputData.retimedPaths[r.sceneId]
+      if (!p) throw new Error(`compose: no retimed output for ${r.sceneId}`)
+      return p
+    })
 
     const outputPath = path.join(outDir, "demo.mp4")
     const listPath = path.join(outDir, "concat.txt")
@@ -468,5 +447,6 @@ export const demoVideoWorkflow = createWorkflow({
   .then(collectResultsStep)
   .then(narrateStep)
   .then(ttsStep)
+  .then(syncStep)
   .then(composeStep)
   .commit()
