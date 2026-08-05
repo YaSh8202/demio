@@ -1,9 +1,19 @@
 // ── Voiceover synthesis (pure) ───────────────────────────────────────────────
 //
-// ElevenLabs text-to-speech synthesis for a scene's narration segments, plus
-// the ffmpeg mix-args construction that overlays them onto the scene video.
-// Extracted from `agent/tools/voiceover.ts` so the tts workflow step (Task
-// 12) can call it directly without going through the tool/agent loop.
+// ElevenLabs text-to-speech synthesis for a scene's narration. Two APIs
+// currently live here side by side:
+//
+// - `synthesizeSegments` (legacy) also builds the ffmpeg mix-args that
+//   overlay timed segments onto the scene video. Extracted from
+//   `agent/tools/voiceover.ts` so the tts workflow step could call it
+//   directly without going through the tool/agent loop. `demo-video.ts`'s
+//   `ttsStep` still calls this until Task 6 rewires it onto the EDL-based
+//   sync engine, at which point this function (and `buildFfmpegMixArgs`) are
+//   deleted.
+// - `synthesizeNarrationAudio` (new, Task 4) is synthesis-only: it writes
+//   each text's MP3 and probes its real duration, with no opinion on
+//   placement. Timing is the EDL builder's job (`edl-pure.cjs`) and mixing
+//   is `sync.ts`'s — this module no longer does either.
 //
 // Pure with respect to the agent runtime: no `ai` tool wrapper, no zod, no
 // tool-result shaping. Still does real I/O (network fetch, file writes,
@@ -57,24 +67,28 @@ export type VoiceoverSynthesisFailureReason =
   | "overlap"
 
 /**
- * Thrown by `synthesizeSegments` on any failure. Carries the same
- * `reason` / `message` / partial-segment-detail shape the tool used to
- * return directly (pre-extraction), so `tools/voiceover.ts` can catch this
- * and reformat an identical `ok: false` result.
+ * Thrown by `synthesizeSegments`/`synthesizeNarrationAudio` on any failure.
+ * Carries `reason`/`message` plus how many segments/texts had already
+ * synthesized successfully before the failure, for partial-progress
+ * reporting.
+ *
+ * `"overlap"` is only ever thrown by `synthesizeSegments` (kept in the union
+ * until Task 6 deletes that function) — `synthesizeNarrationAudio` never
+ * throws it, since it has no opinion on placement.
  */
 export class VoiceoverSynthesisError extends Error {
   readonly reason: VoiceoverSynthesisFailureReason
-  readonly segments: SynthesizedSegmentDetail[]
+  readonly synthesizedCount: number
 
   constructor(
     reason: VoiceoverSynthesisFailureReason,
     message: string,
-    segments: SynthesizedSegmentDetail[]
+    synthesizedCount: number
   ) {
     super(message)
     this.name = "VoiceoverSynthesisError"
     this.reason = reason
-    this.segments = segments
+    this.synthesizedCount = synthesizedCount
   }
 }
 
@@ -263,7 +277,7 @@ export async function synthesizeSegments(opts: {
       throw new VoiceoverSynthesisError(
         "aborted",
         "Stopped by user before all segments synthesised",
-        synthesized
+        synthesized.length
       )
     }
 
@@ -296,14 +310,14 @@ export async function synthesizeSegments(opts: {
         throw new VoiceoverSynthesisError(
           "aborted",
           "Stopped by user during synthesis",
-          synthesized
+          synthesized.length
         )
       }
       log.error(`[voiceover] fetch failed for segment ${idx}:`, err)
       throw new VoiceoverSynthesisError(
         "network",
         err instanceof Error ? err.message : String(err),
-        synthesized
+        synthesized.length
       )
     }
 
@@ -317,7 +331,7 @@ export async function synthesizeSegments(opts: {
       throw new VoiceoverSynthesisError(
         "elevenlabs_error",
         `ElevenLabs returned ${res.status} for segment ${idx}: ${body}`,
-        synthesized
+        synthesized.length
       )
     }
 
@@ -330,7 +344,7 @@ export async function synthesizeSegments(opts: {
       throw new VoiceoverSynthesisError(
         "probe_failed",
         `Could not read duration of ${rel} via ffmpeg.`,
-        synthesized
+        synthesized.length
       )
     }
 
@@ -385,7 +399,7 @@ export async function synthesizeSegments(opts: {
       throw new VoiceoverSynthesisError(
         "overlap",
         `Segment ${i + 1} ends at ${endOfCur.toFixed(2)}s but segment ${i + 2} starts at ${next.startTimeSec.toFixed(2)}s. Shorten segment ${i + 1} or push segment ${i + 2} later, then re-call.`,
-        synthesized
+        synthesized.length
       )
     }
   }
@@ -398,4 +412,107 @@ export async function synthesizeSegments(opts: {
     ffmpegMixArgs,
     outputPath,
   }
+}
+
+export interface SynthesizedAudio {
+  /** Workspace-relative MP3 path: `scenes/<sceneId>.voice-NN.mp3`. */
+  file: string
+  durationMs: number
+}
+
+/**
+ * Synthesize each text via ElevenLabs in order, write
+ * `scenes/<sceneId>.voice-NN.mp3`, probe real durations. Placement/mixing is
+ * NOT this module's job anymore — the EDL builder (edl-pure.cjs) turns these
+ * durations into timeline offsets and sync.ts mixes them.
+ */
+export async function synthesizeNarrationAudio(opts: {
+  cwd: string
+  sceneId: string
+  texts: string[]
+  voiceId: string
+  apiKey: string
+  signal?: AbortSignal
+}): Promise<SynthesizedAudio[]> {
+  const { cwd, sceneId, texts, voiceId, apiKey, signal } = opts
+  const scenesDir = path.join(cwd, "scenes")
+  await fsPromises.mkdir(scenesDir, { recursive: true })
+
+  const out: SynthesizedAudio[] = []
+  for (let i = 0; i < texts.length; i++) {
+    if (signal?.aborted) {
+      throw new VoiceoverSynthesisError(
+        "aborted",
+        "Stopped by user before all segments synthesised",
+        out.length
+      )
+    }
+    const idx = String(i + 1).padStart(2, "0")
+    const rel = `scenes/${sceneId}.voice-${idx}.mp3`
+    const abs = path.join(cwd, rel)
+    const tmp = `${abs}.partial`
+
+    let res: Response
+    try {
+      res = await fetch(
+        `${ELEVENLABS_BASE}/${encodeURIComponent(voiceId)}?output_format=${OUTPUT_FORMAT}`,
+        {
+          method: "POST",
+          signal,
+          headers: {
+            "xi-api-key": apiKey,
+            "content-type": "application/json",
+            accept: "audio/mpeg",
+          },
+          body: JSON.stringify({
+            text: texts[i],
+            model_id: DEFAULT_MODEL,
+          }),
+        }
+      )
+    } catch (err) {
+      if (signal?.aborted) {
+        throw new VoiceoverSynthesisError(
+          "aborted",
+          "Stopped by user during synthesis",
+          out.length
+        )
+      }
+      log.error(`[voiceover] fetch failed for segment ${idx}:`, err)
+      throw new VoiceoverSynthesisError(
+        "network",
+        err instanceof Error ? err.message : String(err),
+        out.length
+      )
+    }
+
+    if (!res.ok) {
+      let body = ""
+      try {
+        body = (await res.text()).slice(0, 500)
+      } catch {
+        /* ignore */
+      }
+      throw new VoiceoverSynthesisError(
+        "elevenlabs_error",
+        `ElevenLabs returned ${res.status} for segment ${idx}: ${body}`,
+        out.length
+      )
+    }
+
+    const buf = Buffer.from(await res.arrayBuffer())
+    await fsPromises.writeFile(tmp, buf)
+    await fsPromises.rename(tmp, abs)
+
+    const durationSec = await probeDurationSec(abs)
+    if (durationSec === null) {
+      throw new VoiceoverSynthesisError(
+        "probe_failed",
+        `Could not read duration of ${rel} via ffmpeg.`,
+        out.length
+      )
+    }
+    out.push({ file: rel, durationMs: Math.round(durationSec * 1000) })
+  }
+  return out
 }

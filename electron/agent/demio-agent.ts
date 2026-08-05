@@ -1,9 +1,9 @@
 // ── Demio per-run agent factory ──────────────────────────────────────────────
 //
 // `createDemioAgent` builds a per-run `Agent`. Tools depend on the per-run
-// workspace `cwd` (and the voiceover tool on the per-run `AbortSignal`), so
-// the demio agent itself isn't statically registered on the `mastra`
-// singleton — this factory mirrors the current per-run construction pattern.
+// workspace `cwd`, so the demio agent itself isn't statically registered on
+// the `mastra` singleton — this factory mirrors the current per-run
+// construction pattern.
 //
 // Tools are passed through as-is: ai-sdk's `tool({...})` shape is accepted by
 // Mastra's `ToolsInput` (the type union includes `VercelTool | VercelToolV5`).
@@ -39,7 +39,6 @@ import type { WorkspaceToolsConfig } from "@mastra/core/workspace"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
 import { createPresentFilesTool } from "./tools/present-files"
-import { createVoiceoverTool } from "./tools/voiceover"
 import { createWorkspaceForDir } from "./workspace-factory"
 
 /**
@@ -72,30 +71,6 @@ export interface CreateDemioAgentOpts {
   threadTitle?: string
   domain?: string | null
   /**
-   * @deprecated No runtime caller since Task 7/12 — kept as reference for
-   * future recorder prompt work. Only feeds `voiceConfigured`/`systemPrompt`
-   * below (dead per the same note) and the `synthesize_voiceover` tool
-   * registration further down (also dead — see that block's comment); both
-   * `createDemioAgent` call sites leave this unset.
-   * ElevenLabs voice id selected for this project. Null = no voiceover.
-   */
-  voiceId?: string | null
-  /**
-   * @deprecated No runtime caller since Task 7/12 — kept as reference for
-   * future recorder prompt work. Only reaches the dead `systemPrompt(...)`
-   * fallback branch. Human-readable voice name surfaced in the system
-   * prompt for tone cues.
-   */
-  voiceName?: string | null
-  /**
-   * @deprecated No runtime caller since Task 7/12 — kept as reference for
-   * future recorder prompt work. Only feeds `voiceConfigured` and the dead
-   * `synthesize_voiceover` tool registration further down; both
-   * `createDemioAgent` call sites leave this unset.
-   * Decrypted ElevenLabs API key. Null = no voiceover.
-   */
-  elevenLabsKey?: string | null
-  /**
    * Replace the composed `systemPrompt(...)` entirely. Used by the recorder
    * (Task 11) and narrator (Task 12) agents, which need a scoped one-shot
    * prompt rather than the full chat-agent system prompt.
@@ -103,39 +78,18 @@ export interface CreateDemioAgentOpts {
   instructionsOverride?: string
   /**
    * Restrict the agent's tool set to exactly these names (custom tool names
-   * like `present_files`/`synthesize_voiceover`, and/or
-   * `mastra_workspace_*` workspace tool names). `undefined` (default) keeps
-   * the original unrestricted behavior — present_files + synthesize_voiceover
-   * (if configured), no workspace tools. `[]` means no tools at all (the
-   * narrator agent, Task 12 — its inputs are inlined, no file/shell access
-   * needed).
+   * like `present_files`, and/or `mastra_workspace_*` workspace tool
+   * names). `undefined` (default) keeps the original unrestricted behavior
+   * — present_files only, no workspace tools. `[]` means no tools at all
+   * (the narrator agent, Task 12 — its inputs are inlined, no file/shell
+   * access needed).
    */
   toolFilter?: string[]
 }
 
 export function createDemioAgent(opts: CreateDemioAgentOpts) {
-  // @deprecated No runtime caller since Task 7/12 — kept as reference for
-  // future recorder prompt work. `voiceConfigured` (and therefore the whole
-  // `synthesize_voiceover` tool registration below) is always `false` in
-  // practice: neither `createDemioAgent` call site (`workflows/
-  // record-scene.ts`'s recorder, `workflows/demo-video.ts`'s narrator)
-  // passes `voiceId`/`elevenLabsKey` — see those fields' `@deprecated`
-  // notes above. Voiceover in the live pipeline is synthesized directly by
-  // the `demo-video` workflow's own `ttsStep`, not via an agent tool call.
-  const voiceConfigured = Boolean(opts.voiceId && opts.elevenLabsKey)
-
   const customTools: Record<string, unknown> = {
     present_files: createPresentFilesTool({ cwd: opts.workspace }),
-    ...(voiceConfigured
-      ? {
-          synthesize_voiceover: createVoiceoverTool({
-            cwd: opts.workspace,
-            voiceId: opts.voiceId as string,
-            apiKey: opts.elevenLabsKey as string,
-            signal: opts.signal,
-          }),
-        }
-      : {}),
   }
 
   const tools: Record<string, unknown> =
@@ -168,8 +122,8 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
         projectTitle: opts.projectTitle,
         threadTitle: opts.threadTitle,
         domain: opts.domain ?? null,
-        voiceConfigured,
-        voiceName: opts.voiceName ?? null,
+        voiceConfigured: false,
+        voiceName: null,
       }),
     model: getModel(opts.modelId),
     // Keys here become the streamed `toolName` — they must match the names
