@@ -207,28 +207,37 @@ const collectResultsStep = createStep({
   },
 })
 
+// Wire schema for the narrator's structured output — kept free of
+// minItems/maxItems/minimum JSON-schema keywords (no .min()/.max()/.int() on
+// the array or the numeric anchor branch). Mastra passes this schema
+// natively via response_format, and strict `json_schema` providers (e.g.
+// @ai-sdk/openai's default) reject those constraint keywords outright,
+// which would hard-fail the whole run at narrate — AFTER every scene is
+// already recorded. Segment-count guidance ("2-6 segments per scene") lives
+// in NARRATOR_INSTRUCTIONS prose instead. Downstream is safe with unbounded/
+// non-integer anchors: `buildEdl` clamps out-of-range or non-integer action
+// indices to the last action group, and `ttsStep`'s
+// `segments.length === 0` guard now also covers the case where the array
+// itself validates as empty.
 const segmentAnchorSchema = z.union([
   z.literal("intro"),
   z.literal("outro"),
-  z.number().int().min(0),
+  z.number(),
 ])
 
 const narrationSegmentsSchema = z.object({
   scenes: z.array(
     z.object({
       sceneId: z.string(),
-      segments: z
-        .array(
-          z.object({
-            text: z.string().describe("One short spoken sentence"),
-            anchor: segmentAnchorSchema.describe(
-              'What this line plays over: "intro" (opening frame, before any action), ' +
-                'an action index from the numbered action list, or "outro" (final state)'
-            ),
-          })
-        )
-        .min(1)
-        .max(8),
+      segments: z.array(
+        z.object({
+          text: z.string().describe("One short spoken sentence"),
+          anchor: segmentAnchorSchema.describe(
+            'What this line plays over: "intro" (opening frame, before any action), ' +
+              'an action index from the numbered action list, or "outro" (final state)'
+          ),
+        })
+      ),
     })
   ),
 })
@@ -370,9 +379,12 @@ const syncStep = createStep({
   id: "sync",
   inputSchema: voicedSchema,
   outputSchema: syncedSchema,
-  execute: async ({ inputData }) => {
+  execute: async ({ inputData, abortSignal }) => {
     const retimedPaths: Record<string, string> = {}
     for (const r of inputData.results) {
+      if (abortSignal?.aborted) {
+        throw new Error("Demo generation stopped by user during sync/retiming")
+      }
       const rendered = await renderScene({
         workspace: inputData.workspace,
         sceneId: r.sceneId,
