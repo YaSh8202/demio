@@ -220,10 +220,87 @@ function validateEdl(edl, videoDurationMs) {
   return { ok: errors.length === 0, errors }
 }
 
+function msToSec(ms) {
+  return (ms / 1000).toFixed(3)
+}
+
+/** Trim one slot from the raw capture, freeze-extend via tpad when the slot
+ * holds, and encode to the uniform silent-video slot format.
+ *
+ * `-ss`/`-t` MUST be input options (before `-i`): the demuxer then reaches
+ * EOF at the trim end, which is the signal tpad needs to append its cloned
+ * frames. With output-side `-to`, the muxer would stop writing at srcEnd
+ * while tpad's padding only arrives after the FULL source drains — the
+ * freeze hold would silently never render. Input-side `-ss` on modern
+ * ffmpeg seeks to the prior keyframe and decodes forward to the exact
+ * requested time, so the cut stays frame-accurate. */
+function buildSlotArgs(sourcePath, slot, outPath) {
+  const args = [
+    "-y",
+    "-ss", msToSec(slot.srcStartMs),
+    "-t", msToSec(slot.srcEndMs - slot.srcStartMs),
+    "-i", sourcePath,
+  ]
+  if (slot.holdMs > 0) {
+    args.push("-vf", `tpad=stop_mode=clone:stop_duration=${msToSec(slot.holdMs)}`)
+  }
+  args.push("-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", outPath)
+  return args
+}
+
+function buildConcatListText(paths) {
+  return paths.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n")
+}
+
+/** Overlay voice segments onto the retimed (already h264) scene at their
+ * EDL-computed offsets. Video is stream-copied — no second generation loss.
+ * Audio pinned to 44100/stereo aac: the final compose concat is `-c copy`
+ * and requires byte-identical stream parameters across scenes. */
+function buildMixArgs(retimedPath, segments, outputPath) {
+  const args = ["-y", "-i", retimedPath]
+  for (const seg of segments) args.push("-i", seg.file)
+  const parts = []
+  const labels = []
+  segments.forEach((seg, i) => {
+    const d = Math.max(0, Math.round(seg.outStartMs))
+    parts.push(`[${i + 1}:a]adelay=${d}|${d}[a${i}]`)
+    labels.push(`[a${i}]`)
+  })
+  parts.push(`${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0[aout]`)
+  args.push(
+    "-filter_complex", parts.join(";"),
+    "-map", "0:v", "-map", "[aout]",
+    "-c:v", "copy",
+    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+    outputPath
+  )
+  return args
+}
+
+/** Voiceless variant: attach a silent 44100/stereo track so every scene's
+ * final file has an identical stream layout for the `-c copy` concat. */
+function buildSilentAudioArgs(retimedPath, outputPath) {
+  return [
+    "-y",
+    "-i", retimedPath,
+    "-f", "lavfi",
+    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-shortest",
+    "-map", "0:v:0", "-map", "1:a:0",
+    "-c:v", "copy",
+    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+    outputPath,
+  ]
+}
+
 module.exports = {
   EDL_DEFAULTS,
   parseActionEntries,
   groupActions,
   buildEdl,
   validateEdl,
+  buildSlotArgs,
+  buildConcatListText,
+  buildMixArgs,
+  buildSilentAudioArgs,
 }

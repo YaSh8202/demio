@@ -163,3 +163,61 @@ test("validateEdl: catches src range beyond video and non-contiguous slots", () 
   gapped.slots[1].outStartMs += 50
   assert.equal(validateEdl(gapped, 40700).ok, false)
 })
+
+const {
+  buildSlotArgs,
+  buildConcatListText,
+  buildMixArgs,
+  buildSilentAudioArgs,
+} = require("./edl-pure.cjs")
+
+test("buildSlotArgs: input-side trim (-ss/-t BEFORE -i) so tpad sees EOF", () => {
+  const hold = buildSlotArgs(
+    "scenes/scene-01.webm",
+    { srcStartMs: 17930, srcEndMs: 20139, holdMs: 970 },
+    "scenes/scene-01.slots/slot-01.mp4"
+  )
+  // -ss/-t must be INPUT options (before -i): the demuxer then EOFs at the
+  // trim end, which is what makes tpad append its cloned frames. As output
+  // options, -to would stop the muxer at srcEnd while tpad's padding only
+  // arrives after the FULL source drains — holds would never render.
+  const iPos = hold.indexOf("-i")
+  assert.ok(hold.indexOf("-ss") < iPos)
+  assert.ok(hold.indexOf("-t") < iPos)
+  assert.deepEqual(hold.slice(hold.indexOf("-ss"), hold.indexOf("-ss") + 4), ["-ss", "17.930", "-t", "2.209"])
+  assert.ok(hold.join(" ").includes("tpad=stop_mode=clone:stop_duration=0.970"))
+  assert.ok(hold.includes("-an"))
+  assert.ok(hold.join(" ").includes("libx264"))
+  const noHold = buildSlotArgs("s.webm", { srcStartMs: 0, srcEndMs: 1000, holdMs: 0 }, "o.mp4")
+  assert.ok(!noHold.join(" ").includes("tpad"))
+})
+
+test("buildConcatListText: escapes single quotes", () => {
+  const txt = buildConcatListText(["/a/plain.mp4", "/b/it's.mp4"])
+  assert.equal(txt, "file '/a/plain.mp4'\nfile '/b/it'\\''s.mp4'")
+})
+
+test("buildMixArgs: adelay per segment at outStartMs, video stream copied", () => {
+  const args = buildMixArgs(
+    "scenes/scene-01.retimed.mp4",
+    [
+      { file: "scenes/scene-01.voice-01.mp3", outStartMs: 0 },
+      { file: "scenes/scene-01.voice-02.mp3", outStartMs: 4015 },
+    ],
+    "scenes/scene-01.final.mp4"
+  )
+  const fc = args[args.indexOf("-filter_complex") + 1]
+  assert.ok(fc.includes("[1:a]adelay=0|0[a0]"))
+  assert.ok(fc.includes("[2:a]adelay=4015|4015[a1]"))
+  assert.ok(fc.includes("amix=inputs=2:dropout_transition=0"))
+  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), ["-c:v", "copy"])
+  assert.ok(args.join(" ").includes("-ar 44100"))
+  assert.ok(args.join(" ").includes("-ac 2"))
+})
+
+test("buildSilentAudioArgs: anullsrc silent track, video copied", () => {
+  const args = buildSilentAudioArgs("in.mp4", "out.mp4")
+  assert.ok(args.join(" ").includes("anullsrc=channel_layout=stereo:sample_rate=44100"))
+  assert.ok(args.includes("-shortest"))
+  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), ["-c:v", "copy"])
+})
