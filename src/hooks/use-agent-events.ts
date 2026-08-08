@@ -156,6 +156,13 @@ type HookAction =
   // way a live controller `error` event is, so a broken IPC call on mount
   // doesn't silently present as an empty idle thread.
   | { type: "hydrate_error"; error: AgentEventError }
+  // Local echo of an outgoing user message, dispatched by `send()`. The
+  // controller broadcasts message events for the ASSISTANT stream only —
+  // there is no live event carrying the user's own message (it reaches the
+  // UI again only via `listMessages` hydration on the next mount, under the
+  // Memory-persisted id). Without this echo the just-sent prompt is
+  // invisible for the rest of the live session.
+  | { type: "local_user_message"; message: SerializedAgentMessage }
 
 // ── Public state shape (Task 6 relies on these field names exactly) ────────
 
@@ -325,6 +332,12 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
       return {
         ...state,
         messages: insertIfAbsent(state.messages, event.message),
+      }
+
+    case "local_user_message":
+      return {
+        ...state,
+        messages: upsertMessage(state.messages, event.message),
       }
 
     case "hydrate_error":
@@ -542,6 +555,23 @@ export function useAgentEvents(
         role: "user",
         parts: [{ type: "text", text }],
       }
+      // Echo locally BEFORE the IPC call — see `local_user_message`'s doc
+      // comment. Cast: `MastraMessagePart` is a broad union; this literal
+      // text part matches its v4 text-part member at runtime.
+      dispatch({
+        type: "local_user_message",
+        message: {
+          id: message.id,
+          role: "user",
+          threadId,
+          createdAt: new Date().toISOString(),
+          content: {
+            format: 2,
+            parts: [{ type: "text", text }],
+            content: text,
+          },
+        } as SerializedAgentMessage,
+      })
       await apis.agent.sendMessage(projectId, threadId, { message })
     },
     [projectId, threadId]
