@@ -36,6 +36,7 @@ import { useState } from "react"
 import { CheckIcon } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { SECRET_QUESTION_RE } from "@/components/thread/tool-usage"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { MessageResponse } from "@/components/ai-elements/message"
@@ -349,7 +350,10 @@ function AskUserCard({
   const question = payload.question ?? ""
   const options = payload.options ?? []
   const isMulti = payload.selectionMode === "multi_select"
-  const isSecret = Boolean(payload.secret)
+  // The built-in's suspend payload has no `secret` flag — fall back to the
+  // shared question-text heuristic so credential prompts get a masked
+  // input (see SECRET_QUESTION_RE's doc comment in tool-usage.tsx).
+  const isSecret = Boolean(payload.secret) || SECRET_QUESTION_RE.test(question)
 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [freeText, setFreeText] = useState("")
