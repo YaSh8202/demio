@@ -349,7 +349,8 @@ export const agentHandlers = {
       // everything else, fire-and-forget — progress still arrives via
       // agent:onEvent, and the IPC call itself must not pend for the
       // remainder of the turn. submit_plan below keeps the awaited
-      // semantics because the reject-then-abort ordering needs it.
+      // semantics because its dedicated path resolves promptly and the
+      // approve branch must set activePlan state before resuming.
       void session
         .respondToToolSuspension({
           toolCallId: body.toolCallId,
@@ -412,14 +413,13 @@ export const agentHandlers = {
     // planContentCache) so a later resubmit with a revised plan re-reads.
     planContentCache.delete(body.toolCallId)
 
-    // On rejection we don't want the built-in tool's auto-continue (it just
-    // re-feeds the model the rejection + feedback and lets it keep
-    // streaming in the same turn) — Demio wants a hard stop so the
-    // rejection + feedback becomes context for the user's NEXT message
-    // rather than an in-turn auto-revision.
-    if (resumeData?.action === "rejected") {
-      session.abort()
-    }
+    // On rejection, the built-in tool's auto-continue takes over: it
+    // re-feeds the model the rejection + feedback in the same turn, the
+    // model revises the plan file in place and calls submit_plan again,
+    // and a fresh suspension card appears. An earlier revision aborted
+    // here instead ("feedback becomes context for the NEXT message") —
+    // live use showed that just reads as the agent dying on "Request
+    // changes": the user typed feedback and got silence.
 
     return { ok: true }
   },
