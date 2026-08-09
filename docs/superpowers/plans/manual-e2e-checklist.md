@@ -123,3 +123,37 @@ existing pre-migration thread if available (for item 8).
     trigger while store is mid-write) when opening a thread.
     Expected: an explicit error state is shown, not a silently blank
     thread.
+
+## D. Milestone 2 — sync/retiming (Task 7)
+
+21. **Offline render smoke test (optional, automatable)** — Against a real
+    archived scene (`scenes/scene-01.webm` + `scene-01.actions.jsonl` from an
+    existing workspace), run `edl-pure.cjs`'s `buildEdl`/`validateEdl` and
+    render the slots + concat with ffmpeg by hand (no app boot, no LLM). See
+    `.superpowers/sdd/2026-08-02-sync-retiming-engine/task-7-report.md` for
+    the exact script and a passing run.
+    Expected: `validateEdl` returns `{"ok":true,"errors":[]}`; retimed
+    duration is within ±1s of `edl.totalMs / 1000`; scrubbing through evenly
+    spaced frames shows no long static stretches, each typed todo is visible
+    on screen, and intro/outro freeze frames look like a calm page (not a
+    mid-motion smear). This item is optional/offline — done once as
+    engineering verification, does not need to be repeated per release.
+
+22. **Live voiced run renders retimed, tightly-timed output** — `bun start`,
+    new thread, generate a TodoMVC demo on a voice-configured project.
+    Expected: workspace contains `scenes/*.edl.json` and `scenes/*.final.mp4`
+    per scene, plus `output/demo.mp4`; total duration is in the tens-of-
+    seconds-tight range (not padded out to the raw recording length).
+
+23. **Narration/action alignment listen-through** — Play back the voiced
+    `output/demo.mp4` from item 22 start to finish with audio on.
+    Expected: narration about typing/clicking plays while that action is
+    visible on screen (not before or after it), no narration is cut off
+    mid-word, and there are no silent+static stretches longer than ~3s.
+
+24. **Voiceless run still retimes (idle cut), edl.json shows empty
+    segments** — Remove the project voice (or use a project without one
+    configured) and regenerate the same demo.
+    Expected: the demo still renders retimed (idle time cut, not raw-length
+    passthrough) with a silent audio track, and the scene's `edl.json` has
+    `segments: []`.

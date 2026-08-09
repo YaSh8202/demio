@@ -15,6 +15,7 @@
     "preview": "vite preview",
     "summarize-thread": "node scripts/summarize-thread.js",
     "test:scripts": "node --test scripts/*.test.js",
+    "test:workflows": "node --test electron/agent/workflows/*.test.js",
     "mastra:dev": "mastra dev",
     "mastra:build": "mastra build"
   },

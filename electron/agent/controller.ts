@@ -40,6 +40,7 @@ import type {
 } from "@mastra/core/agent-controller"
 import { Agent } from "@mastra/core/agent"
 import type { ToolsInput } from "@mastra/core/agent"
+import { Memory } from "@mastra/memory"
 import { createTool } from "@mastra/core/tools"
 import { z } from "zod"
 import { getModel } from "./providers"
@@ -428,6 +429,25 @@ async function buildAndInitController(): Promise<
       const ctx = readControllerCtx(requestContext)
       return getModel(ctx?.session.modelId || DEFAULT_MODEL_ID)
     },
+    // Message persistence lives on the AGENT's Memory, not on the harness:
+    // the controller only ever passes `memory: { thread, resource }` stream
+    // options through (buildAgentMessageStreamOptions), and an Agent with no
+    // Memory logs "No memory configured but resourceId and threadId were
+    // passed in args" and silently persists NOTHING (agent-0y2cApTZ.js
+    // ~30848). Without this: `mastra_messages` stays empty, `listMessages`
+    // hydration returns [] (user bubbles never render — they have no live
+    // event), history is lost on every restart, and follow-up turns reach
+    // the model with no conversation history. Same LibSQLStore instance the
+    // harness reads from, so writes and reads meet in one table.
+    memory: new Memory({
+      storage: mastraStore,
+      options: {
+        lastMessages: 30,
+        // No vector store is configured — leave RAG-style recall off
+        // explicitly rather than relying on defaults.
+        semanticRecall: false,
+      },
+    }),
   })
 
   const instance = new AgentController<DemioControllerState>({

@@ -5,6 +5,16 @@ import { Readable } from "stream"
 import type { ReadableStream as NodeReadableStream } from "stream/web"
 import { config as loadDotenv } from "dotenv"
 loadDotenv({ path: [".env.local", ".env"], quiet: true })
+// Opt-in CDP port so UI-automation harnesses (agent-browser) can attach to
+// the Electron app window for e2e runs. Guarded by env var — a no-op in
+// normal runs.
+if (process.env.DEMIO_CDP_PORT) {
+  app.commandLine.appendSwitch("remote-debugging-port", process.env.DEMIO_CDP_PORT)
+  // Recent Chromium refuses to open the DevTools protocol server unless a
+  // non-implicit --user-data-dir is also present; pass the app's own default
+  // path explicitly so behavior/data location is unchanged.
+  app.commandLine.appendSwitch("user-data-dir", app.getPath("userData"))
+}
 import log from "./lib/logger"
 import { registerHandlers } from "./handlers"
 import { registerEvents } from "./events"

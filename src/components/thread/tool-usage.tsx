@@ -640,14 +640,43 @@ interface ControllerAskUserToolInput {
   secret?: boolean
 }
 
-/** `askUserTool`'s resolved output — a bare string (free text/single-select)
- * or `string[]` (multi-select). `"(skipped)"` is `suspension-card.tsx`'s own
- * sentinel for its "Skip question" action, not a value the tool itself
- * defines — rendered specially here for readability. */
+/** `askUserTool`'s resolved output. The installed built-in returns
+ * `{ content: "User answered: <answer>", isError }` (tools-DQ_N-0ao.js —
+ * `formatQuestionAnswer` joins multi-select arrays with ", " before
+ * prefixing), NOT the bare string/array its resumeSchema might suggest —
+ * only handling string/array here is what rendered every answered question
+ * as "(no answer)". All three shapes are accepted defensively.
+ * `"(skipped)"` is `suspension-card.tsx`'s own sentinel for its "Skip
+ * question" action, not a value the tool itself defines — rendered
+ * specially here for readability. */
+const ASK_USER_ANSWER_PREFIX = "User answered: "
+
+function askUserAnswerText(output: unknown): string {
+  const raw = Array.isArray(output)
+    ? output.join(", ")
+    : typeof output === "string"
+      ? output
+      : typeof (output as { content?: unknown } | null)?.content === "string"
+        ? (output as { content: string }).content
+        : ""
+  return raw.startsWith(ASK_USER_ANSWER_PREFIX)
+    ? raw.slice(ASK_USER_ANSWER_PREFIX.length)
+    : raw
+}
+
+/** The installed built-in's input schema has no `secret` flag, but the agent
+ * routinely asks for credentials via ask_user (login flows) — without this,
+ * a fixed answer render would put the password in plaintext in the
+ * transcript card. Heuristic, display-only masking; the value still flows
+ * to the agent unmasked (it needs it to log in). Shared with
+ * `suspension-card.tsx`, which uses it to switch its free-text input to
+ * type="password". */
+export const SECRET_QUESTION_RE = /password|passcode|secret|token|api[\s_-]?key/i
+
 function ControllerAskUserToolCard({ part }: { part: ThreadToolPart }) {
   const input = asObject<ControllerAskUserToolInput>(part.input)
   const question = input?.question ?? ""
-  const isSecret = Boolean(input?.secret)
+  const isSecret = Boolean(input?.secret) || SECRET_QUESTION_RE.test(question)
 
   if (part.state === "input-streaming" || part.state === "input-available") {
     return (
@@ -674,12 +703,7 @@ function ControllerAskUserToolCard({ part }: { part: ThreadToolPart }) {
   }
 
   if (part.state === "output-available") {
-    const output = part.output
-    const answerText = Array.isArray(output)
-      ? output.join(", ")
-      : typeof output === "string"
-        ? output
-        : ""
+    const answerText = askUserAnswerText(part.output)
     const skipped = answerText === "(skipped)"
     const hasAnswer = answerText.length > 0 && !skipped
 

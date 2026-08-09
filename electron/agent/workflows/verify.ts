@@ -1,10 +1,8 @@
 // ── Scene mechanical verifier (ADR-004 Layer 1) ─────────────────────────────
 
 import { promises as fs } from "node:fs"
-import { execFile } from "node:child_process"
-import { promisify } from "node:util"
 import { createRequire } from "node:module"
-import { resolveFfmpeg } from "../../lib/ffmpeg"
+import { probeDurationSec } from "../lib/media-probe"
 import type { Scene, VerifyReport } from "./schemas"
 
 const require = createRequire(import.meta.url)
@@ -19,30 +17,12 @@ const pure = require("./verify-pure.cjs") as {
   ) => { ok: boolean; detail: string }
   checkEndUrl: (u: string, s: Pick<Scene, "endUrl">) => { ok: boolean; detail: string }
 }
-const execFileAsync = promisify(execFile)
 
 export interface VerifyInput {
   scene: Scene
   videoPath: string
   actionsPath: string
   finalUrl: string
-}
-
-async function probeDurationSec(videoPath: string): Promise<number> {
-  // ffmpeg -i prints "Duration: HH:MM:SS.cc" to stderr and exits non-zero
-  // without an output file — capture stderr regardless of exit code.
-  const ffmpeg = resolveFfmpeg()
-  if (!ffmpeg) throw new Error("no ffmpeg binary available to probe duration")
-  let stderr = ""
-  try {
-    const r = await execFileAsync(ffmpeg, ["-i", videoPath], { encoding: "utf8" })
-    stderr = r.stderr
-  } catch (err) {
-    stderr = (err as { stderr?: string }).stderr ?? ""
-  }
-  const m = stderr.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
-  if (!m) throw new Error(`could not read duration from ${videoPath}`)
-  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3])
 }
 
 export async function verifyScene(input: VerifyInput): Promise<VerifyReport> {

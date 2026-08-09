@@ -26,6 +26,7 @@ Workspace `~/.demio/workspaces/b12e11d4-.../`:
 - `scene-01.webm`: 40.7s, vp8, 1280x800, **10 fps**. Actions span 18.73s–32.85s. 18.7s idle head, ~8s idle tail.
 - `scene-02.webm`: 28.9s. ONE action at 19.88s (0.97s long). 3 voice segments.
 - `actions.jsonl` line shape: `{"action":"type","args":{...},"durationMs":1732,"frameIdx":187,"ok":true,"target":{"x":662,"y":207},"tsMs":18730}` — `frameIdx = tsMs/100` at 10fps. `target` x/y exists for click/type (future zoom work, out of scope here).
+- **`tsMs` is the action's END time**, not its start — verified in agent-browser source (`cli/src/native/actions.rs` `log_user_action` computes `durationMs = started.elapsed()` after the action completes, then `cli/src/native/recording.rs` `append_action_log` stamps `tsMs` at write time). An action occupied `[tsMs - durationMs, tsMs]` on the recording timeline. (Sanity check from the fixture: type "ends" 18730 after 1732ms, Enter at 18914 — sequential only under end-time semantics.)
 - Actions come in tight pairs: `type` then `press Enter` ~170ms later — MUST merge into one slot (`mergeGapMs`).
 - Voice MP3s run 2.5–3.7s each (`mp3_44100_128` = 128kbps CBR).
 
@@ -63,17 +64,17 @@ Workspace `~/.demio/workspaces/b12e11d4-.../`:
   "videoDurationMs": 40700,
   "opts": { "preRollMs": 800, "postRollMs": 1200, "segmentGapMs": 300, "minHoldMs": 2000, "mergeGapMs": 3000, "freezeSourceMs": 100, "introBackoffMs": 500 },
   "slots": [
-    { "kind": "intro",  "srcStartMs": 18230, "srcEndMs": 18330, "holdMs": 3915, "outStartMs": 0,    "outEndMs": 4015,  "actionIdxs": [],      "segmentIdxs": [0] },
-    { "kind": "action", "srcStartMs": 17930, "srcEndMs": 20139, "holdMs": 970,  "outStartMs": 4015, "outEndMs": 7194,  "actionIdxs": [0, 1],  "segmentIdxs": [1] },
+    { "kind": "intro",  "srcStartMs": 16498, "srcEndMs": 16598, "holdMs": 3915, "outStartMs": 0,    "outEndMs": 4015,  "actionIdxs": [],      "segmentIdxs": [0] },
+    { "kind": "action", "srcStartMs": 16198, "srcEndMs": 20114, "holdMs": 0,    "outStartMs": 4015, "outEndMs": 7931,  "actionIdxs": [0, 1],  "segmentIdxs": [1] },
     // …one slot per action group, then an outro freeze — 5 slots total for
     // scene-01 (intro + 3 groups + outro); see Task 2's fixture test for the
     // fully worked arithmetic…
-    { "kind": "outro",  "srcStartMs": 33952, "srcEndMs": 34052, "holdMs": 2801, "outStartMs": 12166, "outEndMs": 15067, "actionIdxs": [],     "segmentIdxs": [3] }
+    { "kind": "outro",  "srcStartMs": 33950, "srcEndMs": 34050, "holdMs": 2801, "outStartMs": 17807, "outEndMs": 20708, "actionIdxs": [],     "segmentIdxs": [3] }
   ],
   "segments": [
     { "idx": 0, "anchor": "intro", "text": "Meet TodoMVC…", "file": "scenes/scene-01.voice-01.mp3", "durationMs": 3715, "outStartMs": 0 }
   ],
-  "totalMs": 15067
+  "totalMs": 20708
 }
 ```
 
@@ -201,11 +202,12 @@ test("parseActionEntries: skips ok:false and unparseable lines", () => {
 test("groupActions: merges type→Enter pairs, splits across think-time gaps", () => {
   const entries = parseActionEntries(SCENE_01_JSONL)
   const groups = groupActions(entries, EDL_DEFAULTS.mergeGapMs)
-  // pairs at ~18.7s, ~26.4s, ~32.7s — gaps between pairs are ~7.5s and ~6.1s
+  // tsMs = action END. Pair windows: [16998, 18914], [23485, 26590],
+  // [30079, 32850] — inter-group gaps 4571ms and 3489ms, both > mergeGap 3000
   assert.equal(groups.length, 3)
   assert.deepEqual(groups[0].actionIdxs, [0, 1])
-  assert.equal(groups[0].startMs, 18730)
-  assert.equal(groups[0].endMs, 18939) // 18914 + 25
+  assert.equal(groups[0].startMs, 16998) // 18730 - 1732
+  assert.equal(groups[0].endMs, 18914) // Enter's tsMs
   assert.deepEqual(groups[2].actionIdxs, [4, 5])
 })
 
@@ -229,20 +231,21 @@ test("buildEdl: voiced scene — slots contiguous, voice drives holds", () => {
   assert.deepEqual(v, { ok: true, errors: [] })
   // intro slot: voice need = 3715 + 300 gap = 4015 > minHold 2000
   assert.equal(edl.slots[0].outEndMs - edl.slots[0].outStartMs, 4015)
-  // action group 0 footage: src [17930, 20139] = 2209ms; voice need 2879+300=3179 → hold 970
-  assert.equal(edl.slots[1].srcStartMs, 18730 - 800)
-  assert.equal(edl.slots[1].srcEndMs, 18939 + 1200)
-  assert.equal(edl.slots[1].holdMs, 3179 - 2209)
+  // action group 0 footage: src [16198, 20114] = 3916ms (window [16998,
+  // 18914] ± pads); voice need 2879+300=3179 < footage → no hold
+  assert.equal(edl.slots[1].srcStartMs, 16998 - 800)
+  assert.equal(edl.slots[1].srcEndMs, 18914 + 1200)
+  assert.equal(edl.slots[1].holdMs, 0)
   // anchor 2 (action idx 2) lands in GROUP 1 (actions 2+3) = slots[2]:
-  // footage [25623, 27792] = 2169ms; need 2508+300=2808 → hold 639
-  assert.equal(edl.slots[2].holdMs, 2808 - 2169)
+  // footage [22685, 27790] = 5105ms; need 2508+300=2808 < footage → no hold
+  assert.equal(edl.slots[2].holdMs, 0)
   // group 2 (actions 4+5) has no voice: footage only, no hold
   assert.equal(edl.slots[3].holdMs, 0)
   // segment outStartMs sits at its slot's outStartMs
   assert.equal(edl.segments[0].outStartMs, edl.slots[0].outStartMs)
   assert.equal(edl.segments[1].outStartMs, edl.slots[1].outStartMs)
-  // total is far below the raw 40.7s
-  assert.ok(edl.totalMs < 20000, `expected tight cut, got ${edl.totalMs}`)
+  // total: 4015 + 3916 + 5105 + 4771 + 2901 = 20708 — half the raw 40.7s
+  assert.equal(edl.totalMs, 20708)
 })
 
 test("buildEdl: voiceless — slots are action windows + pads, minHold intro/outro", () => {
@@ -270,8 +273,8 @@ test("buildEdl: multiple segments on one anchor stack with gaps", () => {
   const seg1 = edl.segments[1]
   assert.equal(seg1.outStartMs, seg0.outStartMs + 2000 + EDL_DEFAULTS.segmentGapMs)
   const slot = edl.slots.find((s) => s.segmentIdxs.length === 2)
-  // need = 2000 + 300 + 1500 + 300 = 4100 > footage 2209 → hold 1891
-  assert.equal(slot.holdMs, 4100 - 2209)
+  // need = 2000 + 300 + 1500 + 300 = 4100 > footage 3916 → hold 184
+  assert.equal(slot.holdMs, 4100 - 3916)
 })
 
 test("buildEdl: out-of-range action anchor clamps to last group", () => {
@@ -381,13 +384,17 @@ function summarizeArgs(action, args) {
 function groupActions(entries, mergeGapMs) {
   const groups = []
   for (const e of entries) {
-    const endMs = e.tsMs + e.durationMs
+    // tsMs is stamped when the action COMPLETES (agent-browser logs the
+    // entry after execution — see "Background facts"), so the action
+    // occupied [tsMs - durationMs, tsMs] on the recording timeline.
+    const startMs = Math.max(0, e.tsMs - e.durationMs)
+    const endMs = e.tsMs
     const last = groups[groups.length - 1]
-    if (last && e.tsMs - last.endMs < mergeGapMs) {
+    if (last && startMs - last.endMs < mergeGapMs) {
       last.endMs = Math.max(last.endMs, endMs)
       last.actionIdxs.push(e.idx)
     } else {
-      groups.push({ startMs: e.tsMs, endMs, actionIdxs: [e.idx] })
+      groups.push({ startMs, endMs, actionIdxs: [e.idx] })
     }
   }
   return groups
@@ -1342,7 +1349,7 @@ EOF
 ffprobe -v error -show_entries format=duration -of csv=p=0 "$WORK/retimed.mp4"
 ```
 
-Expected: `{"ok":true,"errors":[]}`; retimed duration ≈ `totalMs/1000` (±1s); **retimed duration well under 20s** vs the raw 40.7s. Open `"$WORK"/retimed.mp4` and confirm: no long static stretches, each typed todo appears with brief lead-in/out, intro/outro freezes look like a calm page (not a mid-motion smear).
+Expected: `{"ok":true,"errors":[]}`; retimed duration ≈ `totalMs/1000` (±1s); **retimed duration ≈ 17.8s** (voiceless: 2000 + 3916 + 5105 + 4771 + 2000) vs the raw 40.7s. Open `"$WORK"/retimed.mp4` and confirm: no long static stretches, each typed todo appears with brief lead-in/out, intro/outro freezes look like a calm page (not a mid-motion smear).
 
 - [ ] **Step 3: Live app run.** `bun start`, new thread, generate a TodoMVC demo with a voice configured. Confirm in the workspace: `scenes/*.edl.json` present, `scenes/*.final.mp4` per scene, `output/demo.mp4` total duration in the tens-of-seconds-tight range, narration audibly aligned with on-screen actions (voice about typing plays while typing is visible), no mid-word cutoffs, no >3s silent+static stretches.
 
