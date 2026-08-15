@@ -12,6 +12,7 @@ import { agentHandlers } from "./agent"
 import { providerKeysHandlers } from "./provider-keys"
 import { voiceoverHandlers } from "./voiceover"
 import { mediaHandlers } from "./media"
+import { usageHandlers } from "./usage"
 
 /**
  * All handler namespaces.
@@ -32,6 +33,7 @@ export const allHandlers = {
   providerKeys: providerKeysHandlers,
   voiceover: voiceoverHandlers,
   media: mediaHandlers,
+  usage: usageHandlers,
 } satisfies Record<string, NamespaceHandlers>
 
 /** Type-level export for the renderer type wrapper. */

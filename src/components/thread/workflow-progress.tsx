@@ -6,9 +6,14 @@
 // tool name is `generate_demo` — wired in from `tool-usage.tsx`'s
 // `ThreadToolUsage`.
 //
-// Per-scene rows come from `useAgentEvents`'s `workflow` slice
-// (`src/hooks/use-agent-events.ts`), folded from `scene-progress` `tool_update`
-// events. Scene ORDER and TITLE are not part of that slice (the harness only
+// Per-scene rows come from this call's entry in `useAgentEvents`'s
+// `workflows` map (`src/hooks/use-agent-events.ts`, keyed by `toolCallId`),
+// folded from BOTH carriers of `scene-progress`: live `tool_update` events,
+// and the `data-mastracode-tool-progress` parts persisted on the assistant
+// message — the latter is what keeps a refreshed thread showing real phases
+// instead of resetting every row to "Queued".
+//
+// Scene ORDER and TITLE are not part of that slice (the harness only
 // reports progress for scenes it has started) — they come from the tool
 // call's own `input.plan.scenes`, which is available the instant the tool
 // call is made (before any progress event arrives), so a freshly-started run
@@ -29,7 +34,10 @@
 import { CheckIcon, CircleIcon, XCircleIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
-import type { WorkflowSceneState, WorkflowState } from "@/hooks/use-agent-events"
+import type {
+  WorkflowSceneState,
+  WorkflowState,
+} from "@/hooks/use-agent-events"
 import type { DynamicToolUIPart } from "ai"
 
 /** The slice of `generate_demo`'s `{plan: ScenePlan}` input this card needs —
@@ -46,17 +54,16 @@ interface WorkflowProgressOutput {
 }
 
 interface WorkflowProgressProps {
-  toolCallId: string
   toolState: DynamicToolUIPart["state"]
   input: unknown
   output: unknown
   errorText?: string
-  /** `useAgentEvents().workflow` (via `useActiveThread`) — `null` until the
-   * first `scene-progress` event for ANY `generate_demo` call in this
-   * thread. Only acted on when `workflow.toolCallId` matches this part's own
-   * `toolCallId` — an older, unrelated call's leftover state (or a stale
-   * slice from before a thread switch fully re-hydrated) must never bleed
-   * into a different tool part's card. */
+  /** This tool call's own entry from `useAgentEvents().workflows` (looked up
+   * by `toolCallId` in `tool-usage.tsx`) — `null` until the first
+   * `scene-progress` for this call, from either carrier: a live `tool_update`
+   * event, or a persisted `data-mastracode-tool-progress` message part
+   * replayed on hydration. Because the map is keyed by `toolCallId`, an
+   * older `generate_demo` call's state can never bleed into this card. */
   workflow: WorkflowState | null
 }
 
@@ -143,7 +150,6 @@ function SceneRow({
 }
 
 export function WorkflowProgress({
-  toolCallId,
   toolState,
   input,
   output,
@@ -152,8 +158,7 @@ export function WorkflowProgress({
 }: WorkflowProgressProps) {
   const plan = asGenerateDemoInput(input).plan
   const planScenes = plan?.scenes ?? []
-  const liveScenes =
-    workflow?.toolCallId === toolCallId ? workflow.scenes : {}
+  const liveScenes = workflow?.scenes ?? {}
 
   // A resumed/reloaded thread may report scene progress for ids that never
   // appeared in `plan.scenes` here (e.g. `input` hasn't hydrated yet on a

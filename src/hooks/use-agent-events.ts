@@ -156,12 +156,12 @@ type HookAction =
   // way a live controller `error` event is, so a broken IPC call on mount
   // doesn't silently present as an empty idle thread.
   | { type: "hydrate_error"; error: AgentEventError }
-  // Local echo of an outgoing user message, dispatched by `send()`. The
-  // controller broadcasts message events for the ASSISTANT stream only —
-  // there is no live event carrying the user's own message (it reaches the
-  // UI again only via `listMessages` hydration on the next mount, under the
-  // Memory-persisted id). Without this echo the just-sent prompt is
-  // invisible for the rest of the live session.
+  // Local echo of an outgoing user message, dispatched by `send()` so the
+  // prompt is visible the instant it's sent. The controller DOES broadcast
+  // the prompt back once persisted (as a `role: "signal"` message — see
+  // `isUserSignal`), but only after the signal is accepted, and never if the
+  // send fails outright; the echo covers that window. `reconcileEcho` drops
+  // it again when the persisted counterpart lands, live or on hydration.
   | { type: "local_user_message"; message: SerializedAgentMessage }
 
 // ── Public state shape (Task 6 relies on these field names exactly) ────────
@@ -187,12 +187,12 @@ export interface WorkflowSceneState {
   detail?: string
 }
 
-/** Fold of every `scene-progress` `tool_update` seen for the current (or
- * most recent) `generate_demo` tool call. `toolCallId` scopes `scenes` to a
- * single call — a later call (e.g. a fresh `generate_demo` after a prior
- * run finished) starts its `scenes` map over rather than merging onto a
- * stale one. Deliberately NOT cleared on `agent_end`/`reset` of the run
- * status alone — see `AgentEventState.workflow`'s own doc comment. */
+/** Fold of every `scene-progress` update seen for ONE `generate_demo` tool
+ * call. Keyed by `toolCallId` in `AgentEventState.workflows`, so a thread
+ * with several `generate_demo` calls (e.g. a retry after a failed run) keeps
+ * each card's scene states separate instead of the newest call clobbering
+ * the older one's. Deliberately NOT cleared on `agent_end` — see
+ * `AgentEventState.workflows`' own doc comment. */
 export interface WorkflowState {
   toolCallId: string
   of: number
@@ -221,6 +221,72 @@ function isSceneProgress(value: unknown): value is SceneProgressPartialResult {
   )
 }
 
+/** A `scene-progress` update, from either carrier (live `tool_update` event
+ * or a persisted `data-mastracode-tool-progress` message part), folded into
+ * the per-call `workflows` map. Last write wins — matching the live event
+ * semantics, and correct for the persisted parts too since they're stored in
+ * chronological order. */
+function foldSceneProgress(
+  workflows: Record<string, WorkflowState>,
+  toolCallId: string,
+  p: SceneProgressPartialResult
+): Record<string, WorkflowState> {
+  const prev = workflows[toolCallId]
+  return {
+    ...workflows,
+    [toolCallId]: {
+      toolCallId,
+      of: p.of,
+      scenes: {
+        ...(prev?.scenes ?? {}),
+        [p.sceneId]: { phase: p.phase, attempt: p.attempt, detail: p.detail },
+      },
+    },
+  }
+}
+
+/** The persisted counterpart of a `scene-progress` `tool_update`: the same
+ * payload also lands on the assistant message as a
+ * `data-mastracode-tool-progress` part (written by `outputWriter` in
+ * `electron/agent/controller.ts`, persisted through the agent's Memory).
+ * `use-active-thread.tsx`'s `mapPart` drops every `data-*` part for
+ * RENDERING — correctly, there's no renderer for them — but this reads the
+ * raw message before that mapping, which is what lets a refreshed thread
+ * show each scene's last-known phase instead of resetting to "Queued". */
+interface ToolProgressPart {
+  type: "data-mastracode-tool-progress"
+  data: { toolCallId?: unknown; progress?: unknown }
+}
+
+function isToolProgressPart(part: unknown): part is ToolProgressPart {
+  return (
+    typeof part === "object" &&
+    part !== null &&
+    (part as { type?: unknown }).type === "data-mastracode-tool-progress" &&
+    typeof (part as { data?: unknown }).data === "object" &&
+    (part as { data: unknown }).data !== null
+  )
+}
+
+/** Fold every `scene-progress` carried by a message's persisted parts.
+ * Idempotent (pure last-write-wins over an ordered part list), so calling it
+ * for a message that was already folded — a `message_update` re-emitting the
+ * whole message, or a `hydrate_message` that `insertIfAbsent` skips — is
+ * harmless. Returns the same object identity when nothing was folded. */
+function foldProgressParts(
+  workflows: Record<string, WorkflowState>,
+  message: SerializedAgentMessage
+): Record<string, WorkflowState> {
+  let next = workflows
+  for (const part of message.content?.parts ?? []) {
+    if (!isToolProgressPart(part)) continue
+    const { toolCallId, progress } = part.data
+    if (typeof toolCallId !== "string" || !isSceneProgress(progress)) continue
+    next = foldSceneProgress(next, toolCallId, progress)
+  }
+  return next
+}
+
 export interface AgentEventState {
   messages: SerializedAgentMessage[]
   status: "idle" | "running" | "error"
@@ -229,14 +295,18 @@ export interface AgentEventState {
   displayState: SerializedDisplayState | null
   shellOutput: Record<string, string>
   usage: TokenUsage | null
-  /** `generate_demo` stage tracker, folded from `scene-progress` `tool_update`
-   * events (see `WorkflowState`). `null` until the first such event for the
-   * current/most-recent thread. Deliberately survives `agent_end` (a
-   * finished/suspended run's last-known scene states stay visible in the
-   * card rather than disappearing the instant the run stops) — only
-   * `reset` (thread switch) or a fresh `generate_demo` call under a new
-   * `toolCallId` clears/replaces it. */
-  workflow: WorkflowState | null
+  /** `generate_demo` stage trackers keyed by `toolCallId` (see
+   * `WorkflowState`), folded from both carriers of `scene-progress`: live
+   * `tool_update` events and the persisted `data-mastracode-tool-progress`
+   * parts replayed on hydration. Empty until the first of either. Entries
+   * deliberately survive `agent_end` (a finished/suspended run's last-known
+   * scene states stay visible in the card rather than disappearing the
+   * instant the run stops) — only `reset` (thread switch) clears them. */
+  workflows: Record<string, WorkflowState>
+  /** Ids of optimistically-echoed user messages (`local_user_message`) that
+   * haven't yet been reconciled against their persisted counterpart. See
+   * `reconcileEcho`. */
+  pendingEchoIds: string[]
 }
 
 const initial: AgentEventState = {
@@ -247,7 +317,8 @@ const initial: AgentEventState = {
   displayState: null,
   shellOutput: {},
   usage: null,
-  workflow: null,
+  workflows: {},
+  pendingEchoIds: [],
 }
 
 // Cap accumulated shell output per toolCallId — a long-running command's
@@ -310,6 +381,69 @@ function insertIfAbsent(
     : [...messages, message]
 }
 
+/** Mastra persists demio's user prompts as `role: "signal"` messages, never
+ * as `role: "user"`: `session.sendMessage` (electron/handlers/agent.ts)
+ * routes the text through the signal pipeline, which stores it with
+ * `content.metadata.signal = {type: "user", tagName: "user"}`. Mirrors
+ * Mastra's own `isUserSignalType`
+ * (node_modules/@mastra/core/dist/message-list-D-0IY45i.js:570), whose
+ * converter maps exactly these to `role: "user"` and every other signal
+ * (system reminders, state, reactive, notification — all control plane) to
+ * `"system"`. Not re-exported from `@mastra/core`, hence the local copy. */
+export function isUserSignal(message: SerializedAgentMessage): boolean {
+  if (message.role !== "signal") return false
+  const signal = (
+    message.content as {
+      metadata?: { signal?: { type?: string } }
+    }
+  ).metadata?.signal
+  return signal?.type === "user" || signal?.type === "user-message"
+}
+
+/** Concatenated text of a message's text parts, trimmed — the only field an
+ * echo and its persisted counterpart share (the ids never match). */
+function messageText(message: SerializedAgentMessage): string {
+  return (message.content?.parts ?? [])
+    .map((p) =>
+      (p as { type?: string; text?: string }).type === "text"
+        ? ((p as { text?: string }).text ?? "")
+        : ""
+    )
+    .join("")
+    .trim()
+}
+
+/** Drop the optimistic echo a just-arrived persisted user message supersedes.
+ *
+ * `send()` echoes the outgoing prompt locally under a client-generated id so
+ * it's visible immediately. The controller then broadcasts the SAME prompt
+ * back as a persisted `role: "signal"` message (`data-user-message` ->
+ * `createSignalMessage` -> `message_start`/`message_end`) under a
+ * Mastra-generated id, and hydration replays it on the next mount. Since the
+ * ids can never match, upserting the real message without this would render
+ * the prompt twice for the rest of the live session.
+ *
+ * Matched on trimmed text against the oldest un-reconciled echo — ids are
+ * unusable and demio sends one prompt at a time. No-op (same state identity)
+ * when the message isn't a user signal or nothing matches. */
+function reconcileEcho(
+  state: AgentEventState,
+  message: SerializedAgentMessage
+): AgentEventState {
+  if (state.pendingEchoIds.length === 0 || !isUserSignal(message)) return state
+  const text = messageText(message)
+  const echoId = state.pendingEchoIds.find((id) => {
+    const echo = state.messages.find((m) => m.id === id)
+    return echo !== undefined && messageText(echo) === text
+  })
+  if (echoId === undefined) return state
+  return {
+    ...state,
+    messages: state.messages.filter((m) => m.id !== echoId),
+    pendingEchoIds: state.pendingEchoIds.filter((id) => id !== echoId),
+  }
+}
+
 function appendShellOutput(
   shellOutput: Record<string, string>,
   toolCallId: string,
@@ -328,16 +462,20 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
     case "reset":
       return initial
 
-    case "hydrate_message":
+    case "hydrate_message": {
+      const base = reconcileEcho(state, event.message)
       return {
-        ...state,
-        messages: insertIfAbsent(state.messages, event.message),
+        ...base,
+        messages: insertIfAbsent(base.messages, event.message),
+        workflows: foldProgressParts(base.workflows, event.message),
       }
+    }
 
     case "local_user_message":
       return {
         ...state,
         messages: upsertMessage(state.messages, event.message),
+        pendingEchoIds: [...state.pendingEchoIds, event.message.id],
       }
 
     case "hydrate_error":
@@ -358,11 +496,18 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
 
     case "message_start":
     case "message_update":
-    case "message_end":
+    case "message_end": {
+      const base = reconcileEcho(state, event.message)
       return {
-        ...state,
-        messages: upsertMessage(state.messages, event.message),
+        ...base,
+        messages: upsertMessage(base.messages, event.message),
+        // Belt and braces alongside the `tool_update` case below: the same
+        // scene-progress payloads ride along on the assistant message's
+        // parts, so folding here keeps the card correct even if a
+        // `tool_update` event is ever dropped.
+        workflows: foldProgressParts(base.workflows, event.message),
       }
+    }
 
     case "tool_suspended":
       return {
@@ -436,23 +581,13 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
 
     case "tool_update": {
       if (!isSceneProgress(event.partialResult)) return state
-      const p = event.partialResult
-      // A new `toolCallId` (a fresh `generate_demo` call) starts `scenes`
-      // over instead of merging onto whatever the previous call left behind.
-      const prevScenes =
-        state.workflow?.toolCallId === event.toolCallId
-          ? state.workflow.scenes
-          : {}
       return {
         ...state,
-        workflow: {
-          toolCallId: event.toolCallId,
-          of: p.of,
-          scenes: {
-            ...prevScenes,
-            [p.sceneId]: { phase: p.phase, attempt: p.attempt, detail: p.detail },
-          },
-        },
+        workflows: foldSceneProgress(
+          state.workflows,
+          event.toolCallId,
+          event.partialResult
+        ),
       }
     }
 
