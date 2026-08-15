@@ -32,8 +32,10 @@ import type {
   ProjectMeta,
 } from "@electron/store/types"
 import type { DynamicToolUIPart } from "ai"
+import type { TokenUsage } from "@mastra/core/agent-controller"
 import {
   useAgentEvents,
+  isUserSignal,
   type SerializedAgentMessage,
   type AgentSuspension,
   type WorkflowState,
@@ -257,7 +259,13 @@ function mapPart(
 function toUIMessage(message: SerializedAgentMessage): UIMessage {
   return {
     id: message.id,
-    role: message.role as "user" | "assistant",
+    // A user prompt comes back from storage as `role: "signal"`, not "user"
+    // (see `isUserSignal`) — map it explicitly rather than passing the raw
+    // role through the cast, so it renders in the user bubble and
+    // `retryRun`'s "last user message" lookup keeps finding it.
+    role: isUserSignal(message)
+      ? "user"
+      : (message.role as "user" | "assistant"),
     parts: message.content.parts
       .map(mapPart)
       .filter((p): p is UIMessage["parts"][number] => p !== null),
@@ -287,10 +295,22 @@ interface ActiveThreadContextValue {
   error: string | null
   /** Active `ask_user`/`submit_plan` suspension awaiting a response, or null. */
   suspension: AgentSuspension | null
-  /** `generate_demo` stage tracker (Task 13) — see `WorkflowState`'s doc
-   * comment for lifecycle (survives `agent_end`, cleared on thread switch or
-   * a fresh `generate_demo` call). */
-  workflow: WorkflowState | null
+  /** The thread's CUMULATIVE token usage, not a per-message figure — Mastra
+   * keeps a running tally per thread and persists it in the thread's
+   * metadata, so it's restored on mount (`loadMetadata` ->
+   * `displayState.tokenUsage`) and survives a refresh. `null` before the
+   * first `display_state_changed`/`usage_update` lands. There is no
+   * per-message equivalent: persisted assistant messages carry `modelId` and
+   * `provider` but no token counts. */
+  usage: TokenUsage | null
+  /** Distinct `modelId`s the thread's assistant turns ran on — see the memo
+   * that builds it. More than one means `usage` cannot be priced. */
+  threadModelIds: string[]
+  /** `generate_demo` stage trackers keyed by `toolCallId` (Task 13) — see
+   * `WorkflowState`'s doc comment for lifecycle (survives `agent_end`,
+   * cleared on thread switch). Rehydrated from persisted message parts, so a
+   * refreshed thread keeps each scene's last-known phase. */
+  workflows: Record<string, WorkflowState>
 
   selectedModel: string
   voiceId: string | null
@@ -344,13 +364,37 @@ export function ActiveThreadProvider({
 
   const agentEvents = useAgentEvents(projectId, threadId)
 
+  // `role === "user"` only ever matches the local echo `send()` dispatches —
+  // storage never holds one (Mastra persists prompts as user signals), which
+  // is why `isUserSignal` has to be admitted here too or the prompt vanishes
+  // on every refresh.
   const controllerMessages = useMemo(
     () =>
       agentEvents.messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
+        .filter(
+          (m) => m.role === "user" || m.role === "assistant" || isUserSignal(m)
+        )
         .map(toUIMessage),
     [agentEvents.messages]
   )
+
+  // Distinct models this thread's persisted assistant turns actually ran on
+  // (`content.metadata.modelId`, e.g. "gemini-3.7-flash"). Mastra records a
+  // model per message but NO tokens per message — usage exists only as one
+  // cumulative per-thread tally — so a thread that switched models mid-way
+  // cannot have that tally split between them, and any USD figure would be
+  // fiction. Consumers (`thread-usage.tsx`) use this to decide whether a
+  // price can be quoted at all, not to compute one.
+  const threadModelIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const message of agentEvents.messages) {
+      if (message.role !== "assistant") continue
+      const modelId = (message.content as { metadata?: { modelId?: unknown } })
+        .metadata?.modelId
+      if (typeof modelId === "string" && modelId) ids.add(modelId)
+    }
+    return [...ids]
+  }, [agentEvents.messages])
 
   // ── Legacy JSON-store fallback (ADR-007: legacy threads stay readable) ──
   //
@@ -621,7 +665,9 @@ export function ActiveThreadProvider({
       status,
       error,
       suspension: agentEvents.suspension,
-      workflow: agentEvents.workflow,
+      usage: agentEvents.usage,
+      threadModelIds,
+      workflows: agentEvents.workflows,
       selectedModel: meta?.selectedModel ?? "",
       voiceId: meta?.voiceId ?? null,
       voiceName: meta?.voiceName ?? null,
@@ -647,7 +693,9 @@ export function ActiveThreadProvider({
       messages,
       status,
       agentEvents.suspension,
-      agentEvents.workflow,
+      agentEvents.usage,
+      threadModelIds,
+      agentEvents.workflows,
       error,
       meta,
       input,

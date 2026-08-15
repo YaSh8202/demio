@@ -116,16 +116,16 @@ export function ThreadAssistantPartRenderer({
   parts,
   isMessageStreaming,
   onVideoReady,
-  workflow,
+  workflows,
 }: {
   messageId: string
   parts: UIMessage["parts"]
   isMessageStreaming: boolean
   onVideoReady?: (absPath: string) => void
-  /** `generate_demo` stage tracker slice — see `WorkflowProgress`'s file
-   * header. Only consulted by the `generate_demo` tool part branch in
-   * `ThreadToolUsage`; every other part ignores it. */
-  workflow?: WorkflowState | null
+  /** `generate_demo` stage trackers keyed by `toolCallId` — see
+   * `WorkflowProgress`'s file header. Only consulted by the `generate_demo`
+   * tool part branch in `ThreadToolUsage`; every other part ignores it. */
+  workflows?: Record<string, WorkflowState>
 }) {
   const renderedParts: ReactNode[] = []
   const effectiveParts = resolveStalledParts(parts, isMessageStreaming)
@@ -208,7 +208,7 @@ export function ThreadAssistantPartRenderer({
             key={toolPart.toolCallId ?? key}
             part={toolPart}
             onVideoReady={onVideoReady}
-            workflow={workflow}
+            workflows={workflows}
           />
         )
       }
@@ -221,7 +221,7 @@ export function ThreadAssistantPartRenderer({
         key={toolPart.toolCallId ?? key}
         part={toolPart}
         onVideoReady={onVideoReady}
-        workflow={workflow}
+        workflows={workflows}
       />
     )
   }
@@ -671,7 +671,8 @@ function askUserAnswerText(output: unknown): string {
  * to the agent unmasked (it needs it to log in). Shared with
  * `suspension-card.tsx`, which uses it to switch its free-text input to
  * type="password". */
-export const SECRET_QUESTION_RE = /password|passcode|secret|token|api[\s_-]?key/i
+export const SECRET_QUESTION_RE =
+  /password|passcode|secret|token|api[\s_-]?key/i
 
 function ControllerAskUserToolCard({ part }: { part: ThreadToolPart }) {
   const input = asObject<ControllerAskUserToolInput>(part.input)
@@ -864,11 +865,11 @@ function AskUserAnsweredCollapsible({
 function ThreadToolUsage({
   part,
   onVideoReady,
-  workflow,
+  workflows,
 }: {
   part: ThreadToolPart
   onVideoReady?: (absPath: string) => void
-  workflow?: WorkflowState | null
+  workflows?: Record<string, WorkflowState>
 }) {
   const toolName = getThreadToolName(part)
 
@@ -888,12 +889,11 @@ function ThreadToolUsage({
   if (toolName === "generate_demo" && part.toolCallId) {
     return (
       <WorkflowProgress
-        toolCallId={part.toolCallId}
         toolState={part.state}
         input={part.input}
         output={part.output}
         errorText={part.errorText}
-        workflow={workflow ?? null}
+        workflow={workflows?.[part.toolCallId] ?? null}
       />
     )
   }

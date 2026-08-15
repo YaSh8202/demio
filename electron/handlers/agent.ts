@@ -184,6 +184,35 @@ function enrichPendingSuspensions(
   return { ...serializedDisplayState, pendingSuspensions: enriched }
 }
 
+/**
+ * A serialized display-state snapshot with both of the fixups the renderer
+ * needs — used for the first-subscribe resync and for `getDisplayState`.
+ *
+ * The `tokenUsage` patch is the non-obvious half. `displayState.tokenUsage`
+ * is a snapshot the display-state reducer refreshes only on `usage_update` /
+ * `thread_changed` / `thread_created` (compiled:
+ * agent-controller-ByW51eCC.js ~2805-2825). `getOrCreateSession` binds a
+ * thread the way `createSession` does when selecting the most recent
+ * tag-matching thread — `thread.set()` + `loadMetadata()` — which restores
+ * the persisted tally onto the session via `setTokenUsage` (a plain field
+ * write, no event) and emits neither `thread_changed` nor `thread_created`.
+ * So the snapshot reads zero on a freshly launched app for a thread that has
+ * real persisted usage, and nothing re-reports it until the next run starts.
+ * `session.getTokenUsage()` is authoritative in every case, including
+ * mid-run, so it simply replaces the field.
+ */
+function snapshotDisplayState(
+  session: Awaited<ReturnType<typeof getOrCreateSession>>,
+  threadId: string
+): Record<string, unknown> {
+  const serialized = serializeEvent(session.displayState.get()) as Record<
+    string,
+    unknown
+  >
+  serialized.tokenUsage = serializeEvent(session.getTokenUsage())
+  return enrichPendingSuspensions(serialized, threadId)
+}
+
 // In-flight/complete subscribe promises, keyed by `${projectId}:${threadId}`.
 // A Map<string, Promise<void>> (rather than a Set flagged before the await)
 // so concurrent callers all await the SAME subscribe sequence instead of a
@@ -272,13 +301,9 @@ async function subscribeSession(
   // snapshot right after subscribing, so first-mount never loses state —
   // `displayState.get()` already folds in everything those missed events
   // would have produced (isRunning, pendingSuspensions, tasks, etc).
-  const displayState = enrichPendingSuspensions(
-    serializeEvent(session.displayState.get()) as Record<string, unknown>,
-    threadId
-  )
   broadcast("agent:onEvent", key, {
     type: "display_state_changed",
-    displayState,
+    displayState: snapshotDisplayState(session, threadId),
   })
 }
 
@@ -449,14 +474,11 @@ export const agentHandlers = {
     // The `| null` in this method's documented return type is for callers
     // that haven't mounted a session at all; that's not a state this
     // handler can observe once ensureSubscribed has run.
-    const serialized = serializeEvent(session.displayState.get()) as Record<
-      string,
-      unknown
-    >
+    //
     // A refresh mid plan-approval must see the same `planContent` a live
-    // `tool_suspended` broadcast would have carried — a bare path with no
-    // plan body otherwise.
-    return enrichPendingSuspensions(serialized, threadId)
+    // `tool_suspended` broadcast would have carried, and the restored token
+    // tally must not read zero — both handled by `snapshotDisplayState`.
+    return snapshotDisplayState(session, threadId)
   },
 
   // History for thread mount / refresh-reattach. Controller storage is the

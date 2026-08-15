@@ -60,6 +60,7 @@ import {
 import { SuspensionCard } from "@/components/thread/suspension-card"
 import { hasUsage, MessageUsage } from "@/components/thread/message-usage"
 import { ModelSelectorPopover } from "@/components/model-selector"
+import { ThreadUsage } from "@/components/thread/thread-usage"
 import { useActiveThread } from "@/hooks/use-active-thread"
 import { useModelStore } from "@/store/model-store"
 import { Button } from "@/components/ui/button"
@@ -80,12 +81,12 @@ function ThreadMessage({
   message,
   isMessageStreaming,
   onVideoReady,
-  workflow,
+  workflows,
 }: {
   message: UIMessage
   isMessageStreaming: boolean
   onVideoReady?: (absPath: string) => void
-  workflow?: WorkflowState | null
+  workflows?: Record<string, WorkflowState>
 }) {
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(getMessageText(message))
@@ -121,7 +122,7 @@ function ThreadMessage({
             messageId={message.id}
             onVideoReady={onVideoReady}
             parts={message.parts}
-            workflow={workflow}
+            workflows={workflows}
           />
         )}
       </MessageContent>
@@ -154,7 +155,7 @@ export function ThreadShell() {
     status,
     error,
     suspension,
-    workflow,
+    workflows,
     respondSuspension,
     input,
     setInput,
@@ -347,7 +348,7 @@ export function ThreadShell() {
                             index === messages.length - 1
                           }
                           onVideoReady={handleVideoReady}
-                          workflow={workflow}
+                          workflows={workflows}
                         />
                       ))}
 
@@ -437,6 +438,7 @@ export function ThreadShell() {
                     <PromptInputFooter>
                       <PromptInputTools>
                         <ModelSelectorPopover disabled={isRunning} />
+                        <ThreadUsage />
                       </PromptInputTools>
                       <PromptInputSubmit
                         disabled={!input.trim() && chatStatus === "ready"}
