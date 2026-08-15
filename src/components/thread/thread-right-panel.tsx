@@ -1,15 +1,9 @@
 import { useCallback, useEffect, useState } from "react"
 import { Globe, Video, X, Sparkles, Download, Loader2 } from "lucide-react"
-import { MediaPlayer, MediaProvider } from "@vidstack/react"
-import {
-  DefaultVideoLayout,
-  defaultLayoutIcons,
-} from "@vidstack/react/player/layouts/default"
-import "@vidstack/react/player/styles/default/theme.css"
-import "@vidstack/react/player/styles/default/layouts/video.css"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
 import { LiveBrowserView } from "@/components/preview/LiveBrowserView"
+import { VideoPlayer } from "@/components/player/video-player"
 import { cn } from "@/lib/utils"
 import { apis } from "@/types/electron-api"
 import type { RightPanelTab } from "./thread-header"
@@ -18,6 +12,7 @@ interface ThreadRightPanelProps {
   activeTab: RightPanelTab
   onTabChange: (tab: RightPanelTab) => void
   videoPath: string | null
+  videoGeneration: string | number
   projectDomain?: string | null
 }
 
@@ -77,39 +72,16 @@ function BrowserView({
 
 // ── Video view ──────────────────────────────────────────────────────────────
 
-function VideoView({ videoPath }: { videoPath: string | null }) {
-  if (videoPath) {
-    return (
-      <div className="flex size-full items-center justify-center bg-black p-2">
-        <MediaPlayer
-          key={videoPath}
-          src={`demio-file://${videoPath}`}
-          playsInline
-          className="size-full overflow-hidden rounded-md"
-        >
-          <MediaProvider />
-          <DefaultVideoLayout
-            icons={defaultLayoutIcons}
-            smallLayoutWhen={false}
-            slots={{ airPlayButton: null, googleCastButton: null }}
-          />
-        </MediaPlayer>
-      </div>
-    )
-  }
-
+function VideoView({
+  videoPath,
+  videoGeneration,
+}: {
+  videoPath: string | null
+  videoGeneration: string | number
+}) {
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
-      <Loader2 className="size-5 animate-spin text-white/45" />
-      <div className="flex flex-col gap-1">
-        <p className="text-[13px] font-medium text-white/85">
-          Video not ready yet
-        </p>
-        <p className="max-w-[320px] text-[12px] leading-relaxed text-white/45">
-          The agent is still recording and rendering. The preview will appear
-          here automatically once it's done.
-        </p>
-      </div>
+    <div className="size-full bg-black p-2">
+      <VideoPlayer filePath={videoPath} generation={videoGeneration} />
     </div>
   )
 }
@@ -192,6 +164,7 @@ export function ThreadRightPanel({
   activeTab,
   onTabChange,
   videoPath,
+  videoGeneration,
   projectDomain,
 }: ThreadRightPanelProps) {
   const [wsUrl, setWsUrl] = useState<string | null>(null)
@@ -296,7 +269,7 @@ export function ThreadRightPanel({
       </TabsContent>
 
       <TabsContent value="video" className="flex-1 overflow-hidden">
-        <VideoView videoPath={videoPath} />
+        <VideoView videoPath={videoPath} videoGeneration={videoGeneration} />
       </TabsContent>
 
       <TabsContent value="script" className="flex-1 overflow-hidden">
