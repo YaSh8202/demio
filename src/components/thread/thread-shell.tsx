@@ -10,7 +10,7 @@
 // Mirrors the chatbot's ChatShell pattern — no local data fetching, all state
 // comes from ActiveThreadProvider via the useActiveThread hook.
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useLocation, useNavigate } from "react-router-dom"
 import { Sidebar, SidebarProvider, SidebarInset } from "@/components/ui/sidebar"
 import {
@@ -50,6 +50,7 @@ import {
 } from "@/components/thread/thread-header"
 import { ThreadSidebar } from "@/components/thread/thread-sidebar"
 import { ThreadRightPanel } from "@/components/thread/thread-right-panel"
+import { findLatestVideo } from "@/components/thread/present-files-video"
 import { RenameThreadDialog } from "@/components/thread/rename-thread-dialog"
 import { ConfirmDialog } from "@/components/confirm-dialog"
 import {
@@ -185,6 +186,10 @@ export function ThreadShell() {
   // Right panel state
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>(null)
   const [videoPath, setVideoPath] = useState<string | null>(null)
+  // Regenerating writes to the SAME path, so `videoPath` never changes and
+  // nothing downstream would re-resolve. Bumping this on every ready signal
+  // is what forces a fresh URL (and a fresh <video> element).
+  const [videoGeneration, setVideoGeneration] = useState(0)
   const rightPanelRef = useRef<PanelImperativeHandle>(null)
 
   const { defaultLayout, onLayoutChanged } = useDefaultLayout({
@@ -202,9 +207,22 @@ export function ThreadShell() {
     })
   }, [])
 
+  // Primary source of truth for the preview: read the video straight out of
+  // the message data. The `present_files` tool renders inside a collapsed
+  // Collapsible, and Radix unmounts collapsed content, so the callback below
+  // only fires once the user expands that block — which is why the panel
+  // could sit on "Video not ready yet" with the file already on disk.
+  const derivedVideo = useMemo(() => findLatestVideo(messages), [messages])
+
+  const effectiveVideoPath = derivedVideo?.path ?? videoPath
+  // The tool call id changes on every regeneration, which is exactly the
+  // signal the player needs to drop a stale buffer for the same path.
+  const effectiveVideoKey = derivedVideo?.key ?? videoGeneration
+
   const handleVideoReady = useCallback(
     (absPath: string) => {
       setVideoPath(absPath)
+      setVideoGeneration((n) => n + 1)
       handleRightPanelTabChange("video")
     },
     [handleRightPanelTabChange]
@@ -454,7 +472,8 @@ export function ThreadShell() {
             <ThreadRightPanel
               activeTab={rightPanelTab}
               onTabChange={handleRightPanelTabChange}
-              videoPath={videoPath}
+              videoPath={effectiveVideoPath}
+              videoGeneration={effectiveVideoKey}
               projectDomain={project?.domain}
             />
           </ResizablePanel>

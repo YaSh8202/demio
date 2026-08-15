@@ -1,15 +1,15 @@
 import { app, BrowserWindow, protocol } from "electron"
 import path from "path"
-import { createReadStream, statSync } from "fs"
-import { Readable } from "stream"
-import type { ReadableStream as NodeReadableStream } from "stream/web"
 import { config as loadDotenv } from "dotenv"
 loadDotenv({ path: [".env.local", ".env"], quiet: true })
 // Opt-in CDP port so UI-automation harnesses (agent-browser) can attach to
 // the Electron app window for e2e runs. Guarded by env var — a no-op in
 // normal runs.
 if (process.env.DEMIO_CDP_PORT) {
-  app.commandLine.appendSwitch("remote-debugging-port", process.env.DEMIO_CDP_PORT)
+  app.commandLine.appendSwitch(
+    "remote-debugging-port",
+    process.env.DEMIO_CDP_PORT
+  )
   // Recent Chromium refuses to open the DevTools protocol server unless a
   // non-implicit --user-data-dir is also present; pass the app's own default
   // path explicitly so behavior/data location is unchanged.
@@ -17,6 +17,8 @@ if (process.env.DEMIO_CDP_PORT) {
 }
 import log from "./lib/logger"
 import { registerHandlers } from "./handlers"
+import { DEMIO_FILE_SCHEME } from "./protocol/demio-file-url"
+import { registerDemioFileProtocol } from "./protocol/demio-file"
 import { registerEvents } from "./events"
 import { getExposedMeta } from "./exposed"
 import { initSharedStorage, flushSharedStorage } from "./shared-storage"
@@ -42,23 +44,6 @@ function getWindowAdditionalArguments() {
     `--window-name=main`,
     `--app-version=${app.getVersion()}`,
   ]
-}
-
-const MIME_BY_EXT: Record<string, string> = {
-  ".mp4": "video/mp4",
-  ".webm": "video/webm",
-  ".mov": "video/quicktime",
-  ".mkv": "video/x-matroska",
-  ".m4v": "video/x-m4v",
-  ".ogv": "video/ogg",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg",
-  ".m4a": "audio/mp4",
-}
-
-function mimeForPath(filePath: string): string {
-  return MIME_BY_EXT[path.extname(filePath).toLowerCase()] ?? "application/octet-stream"
 }
 
 function createWindow() {
@@ -88,11 +73,15 @@ function createWindow() {
   return mainWindow
 }
 
-// Register custom protocol scheme before app is ready
+// Register custom protocol scheme before app is ready.
+//
+// Deliberately NOT `standard: true` — that makes Chromium treat the first
+// authority component as a host, which gets case-folded and IDNA-normalized.
+// A media load is a no-cors request, so an opaque origin is fine.
 protocol.registerSchemesAsPrivileged([
   {
-    scheme: "demio-file",
-    privileges: { stream: true, supportFetchAPI: true },
+    scheme: DEMIO_FILE_SCHEME,
+    privileges: { stream: true, supportFetchAPI: true, secure: true },
   },
 ])
 
@@ -100,49 +89,8 @@ app.on("ready", () => {
   // Initialize Phoenix tracing first so any spans from later init are captured
   initPhoenix()
 
-  // Register demio-file:// protocol for serving local files (videos, etc.)
-  protocol.handle("demio-file", (req) => {
-    const filePath = decodeURIComponent(new URL(req.url).pathname)
-    const stat = statSync(filePath)
-    const fileSize = stat.size
-    const contentType = mimeForPath(filePath)
-
-    const range = req.headers.get("range")
-    if (range) {
-      const match = /bytes=(\d+)-(\d*)/.exec(range)
-      if (match) {
-        const start = parseInt(match[1], 10)
-        const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
-        const chunkSize = end - start + 1
-        const stream = createReadStream(filePath, { start, end })
-        return new Response(
-          Readable.toWeb(stream) as unknown as NodeReadableStream,
-          {
-            status: 206,
-            headers: {
-              "Content-Type": contentType,
-              "Content-Length": String(chunkSize),
-              "Content-Range": `bytes ${start}-${end}/${fileSize}`,
-              "Accept-Ranges": "bytes",
-            },
-          }
-        )
-      }
-    }
-
-    const stream = createReadStream(filePath)
-    return new Response(
-      Readable.toWeb(stream) as unknown as NodeReadableStream,
-      {
-        status: 200,
-        headers: {
-          "Content-Type": contentType,
-          "Content-Length": String(fileSize),
-          "Accept-Ranges": "bytes",
-        },
-      }
-    )
-  })
+  // Serve local media over demio-file:// (Range-aware, abort-safe)
+  registerDemioFileProtocol()
 
   // Load persisted shared storage from disk before anything else
   initSharedStorage()
