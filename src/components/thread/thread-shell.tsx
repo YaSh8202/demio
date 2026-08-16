@@ -19,7 +19,7 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable"
 import type { PanelImperativeHandle } from "react-resizable-panels"
-import { useDefaultLayout } from "react-resizable-panels"
+import { readRightPanelState, writeRightPanelState } from "./right-panel-state"
 import {
   Conversation,
   ConversationContent,
@@ -184,8 +184,16 @@ export function ThreadShell() {
     }
   }, [zustandModel, selectedModel, setSelectedModel])
 
-  // Right panel state
-  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>(null)
+  // Right panel state. Seeded from storage in a lazy initializer rather than an
+  // effect so the panel paints at its remembered width on the first frame.
+  // useState, not useRef: this snapshot is read during render to seed the panel
+  // defaultSizes, and refs may not be read during render.
+  const [stored] = useState(readRightPanelState)
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>(() =>
+    stored.open ? stored.tab : null
+  )
+  const lastTabRef = useRef(stored.tab)
+  const lastSizePctRef = useRef(stored.sizePct)
   const [videoPath, setVideoPath] = useState<string | null>(null)
   // Regenerating writes to the SAME path, so `videoPath` never changes and
   // nothing downstream would re-resolve. Bumping this on every ready signal
@@ -193,20 +201,48 @@ export function ThreadShell() {
   const [videoGeneration, setVideoGeneration] = useState(0)
   const rightPanelRef = useRef<PanelImperativeHandle>(null)
 
-  const { defaultLayout, onLayoutChanged } = useDefaultLayout({
-    id: "thread-panels",
-  })
-
-  const handleRightPanelTabChange = useCallback((tab: RightPanelTab) => {
-    setRightPanelTab((prev) => {
-      if (tab && !prev) {
-        rightPanelRef.current?.resize("40%")
-      } else if (!tab) {
-        rightPanelRef.current?.collapse()
-      }
-      return tab
+  const persistRightPanel = useCallback((tab: RightPanelTab) => {
+    writeRightPanelState({
+      open: tab !== null,
+      tab: lastTabRef.current,
+      sizePct: lastSizePctRef.current,
     })
   }, [])
+
+  // The imperative resize/collapse calls used to live inside the setState
+  // updater. Updaters must be pure, and <StrictMode> double-invokes them in dev,
+  // so every toggle fired the panel command twice. Reading the collapsed state
+  // off the handle instead of `prev` keeps this a plain, single-shot effect.
+  const handleRightPanelTabChange = useCallback((tab: RightPanelTab) => {
+    const panel = rightPanelRef.current
+    if (tab) {
+      lastTabRef.current = tab
+      if (panel?.isCollapsed()) panel.resize(`${lastSizePctRef.current}%`)
+    } else {
+      panel?.collapse()
+    }
+    setRightPanelTab(tab)
+  }, [])
+
+  // Open/close is persisted here rather than inside the toggler so that the
+  // drag-to-collapse path (which sets state straight from onResize) is covered
+  // by the same write. Width is persisted separately on onLayoutChanged.
+  useEffect(() => {
+    persistRightPanel(rightPanelTab)
+  }, [rightPanelTab, persistRightPanel])
+
+  // Width is captured here, not in onResize: onResize fires every frame of a
+  // drag, so dragging the panel *closed* would walk lastSizePctRef down through
+  // every intermediate width (50 → 40 → 30 → snap) and the panel would reopen
+  // tiny. onLayoutChanged fires once the layout settles, so this remembers where
+  // a drag ended rather than everywhere it passed through.
+  const handleLayoutChanged = useCallback(() => {
+    const size = rightPanelRef.current?.getSize()
+    if (size && size.asPercentage > 0) {
+      lastSizePctRef.current = size.asPercentage
+    }
+    persistRightPanel(rightPanelTab)
+  }, [rightPanelTab, persistRightPanel])
 
   // Primary source of truth for the preview: read the video straight out of
   // the message data. The `present_files` tool renders inside a collapsed
@@ -317,11 +353,17 @@ export function ThreadShell() {
         <ResizablePanelGroup
           orientation="horizontal"
           className="min-h-0 flex-1"
-          defaultLayout={defaultLayout}
-          onLayoutChanged={onLayoutChanged}
+          onLayoutChanged={handleLayoutChanged}
         >
-          {/* Center — conversation + prompt input */}
-          <ResizablePanel id="conversation" defaultSize="100%" minSize="35%">
+          {/* Center — conversation + prompt input.
+              minSize is in px, not %: a proportional floor scales with the
+              display, so on a wide monitor "35%" reserved ~900px for chat and
+              made the 70% right panel impossible to reach. */}
+          <ResizablePanel
+            id="conversation"
+            defaultSize={stored.open ? `${100 - stored.sizePct}%` : "100%"}
+            minSize="400px"
+          >
             <div className="flex h-full flex-col">
               {/* Messages */}
               <Conversation className="flex-1">
@@ -457,16 +499,18 @@ export function ThreadShell() {
           <ResizablePanel
             id="right-panel"
             panelRef={rightPanelRef}
-            defaultSize="0%"
-            minSize="20%"
-            maxSize="65%"
+            defaultSize={stored.open ? `${stored.sizePct}%` : "0%"}
+            minSize="360px"
             collapsible
             collapsedSize="0%"
             onResize={(size) => {
-              if (size.asPercentage === 0 && rightPanelTab) {
-                setRightPanelTab(null)
-              } else if (size.asPercentage > 0 && !rightPanelTab) {
-                setRightPanelTab("browser")
+              const pct = size.asPercentage
+              if (pct === 0) {
+                if (rightPanelTab) setRightPanelTab(null)
+              } else if (!rightPanelTab) {
+                // Dragging a collapsed panel open used to hardcode "browser",
+                // which is also why every reload landed on the Browser tab.
+                setRightPanelTab(lastTabRef.current)
               }
             }}
             className="border-l border-sidebar-border"

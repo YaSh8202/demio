@@ -50,6 +50,11 @@ function createWindow() {
   const mainWindow = new BrowserWindow({
     width: 1440,
     height: 900,
+    // The thread split has hard px floors: 400px chat + 360px right panel, plus
+    // a 256px sidebar = 1016px. Narrower than that and the two floors can't both
+    // be honoured, so the layout solver has to violate one.
+    minWidth: 1024,
+    minHeight: 640,
     titleBarStyle: "hidden",
     trafficLightPosition: { x: 12, y: 16 },
     webPreferences: {
