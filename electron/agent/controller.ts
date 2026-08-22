@@ -48,6 +48,7 @@ import { DEFAULT_MODEL_ID } from "./types"
 import { chatInstructions } from "./prompts"
 import { createDemioWorkspace } from "./workspace-factory"
 import { createPresentFilesTool } from "./tools/present-files"
+import { createExecuteCommandTool } from "./tools/execute-command"
 import { ensureWorkspace } from "./workspace"
 import { scenePlanSchema } from "./workflows/schemas"
 import { mastra, mastraStore } from "./mastra"
@@ -488,6 +489,14 @@ async function buildAndInitController(): Promise<
       // electron/agent/mastra.ts.
       return {
         present_files: createPresentFilesTool({ cwd }),
+        // Replaces the built-in workspace execute_command (disabled in
+        // createWorkspaceForDir) with an identically-named tool that also
+        // takes a `description` — the "Shell" card title in the chat UI.
+        // `createDemioWorkspace` is cached per thread, so this binds to the
+        // same Workspace instance the session was created with.
+        mastra_workspace_execute_command: createExecuteCommandTool(
+          createDemioWorkspace(threadId ?? "unknown")
+        ),
       } as ToolsInput
     },
     modes: [

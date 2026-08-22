@@ -39,6 +39,7 @@ import type { WorkspaceToolsConfig } from "@mastra/core/workspace"
 import { getModel } from "./providers"
 import { systemPrompt } from "./prompts"
 import { createPresentFilesTool } from "./tools/present-files"
+import { createExecuteCommandTool } from "./tools/execute-command"
 import { createWorkspaceForDir } from "./workspace-factory"
 
 /**
@@ -107,6 +108,18 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
           tools: restrictedWorkspaceToolsConfig(workspaceToolNames),
         })
       : undefined
+
+  // `createWorkspaceForDir` always disables the BUILT-IN execute_command (see
+  // its comment) in favour of demio's `description`-carrying replacement, which
+  // has to be registered as a plain agent tool and bound to the workspace by
+  // hand. Only add it when the caller's filter actually allowed the workspace
+  // shell tool, so a read-only recorder/narrator agent stays read-only.
+  if (
+    workspace &&
+    workspaceToolNames.includes("mastra_workspace_execute_command")
+  ) {
+    tools.mastra_workspace_execute_command = createExecuteCommandTool(workspace)
+  }
 
   return new Agent({
     id: "demio",
