@@ -46,7 +46,10 @@ import { z } from "zod"
 import { getModel } from "./providers"
 import { DEFAULT_MODEL_ID } from "./types"
 import { chatInstructions } from "./prompts"
-import { createDemioWorkspace } from "./workspace-factory"
+import {
+  createDemioWorkspace,
+  disposeDemioWorkspace,
+} from "./workspace-factory"
 import { createPresentFilesTool } from "./tools/present-files"
 import { createExecuteCommandTool } from "./tools/execute-command"
 import { ensureWorkspace } from "./workspace"
@@ -481,7 +484,18 @@ async function buildAndInitController(): Promise<
     },
     tools: ({ requestContext }) => {
       const threadId = threadIdFromCtx(readControllerCtx(requestContext))
-      const cwd = ensureWorkspace(threadId ?? "unknown")
+      // Fail loudly, matching the `workspace` factory above. The old
+      // `threadId ?? "unknown"` fallback silently bound present_files and the
+      // shell tool to ~/.demio/workspaces/unknown while the session's own
+      // workspace tools kept using the real thread directory — commands would
+      // run in a different cwd than the files the agent just read or wrote,
+      // with nothing to signal it.
+      if (!threadId) {
+        throw new Error(
+          "AgentController tools factory: no threadId in request context (scope was not set on the session)"
+        )
+      }
+      const cwd = ensureWorkspace(threadId)
       // Cast: ai-sdk v7's `tool()` widened `description` to
       // `string | ((options) => string)`; Mastra's vendored ToolsInput
       // union hasn't caught up and still expects a plain string — our
@@ -495,7 +509,7 @@ async function buildAndInitController(): Promise<
         // `createDemioWorkspace` is cached per thread, so this binds to the
         // same Workspace instance the session was created with.
         mastra_workspace_execute_command: createExecuteCommandTool(
-          createDemioWorkspace(threadId ?? "unknown")
+          createDemioWorkspace(threadId)
         ),
       } as ToolsInput
     },
@@ -570,4 +584,17 @@ export async function getOrCreateSession(
   }
   sessions.set(key, session)
   return session
+}
+
+/**
+ * Release the in-memory runtime for a thread that is gone for good.
+ *
+ * Called from the store IPC handlers when a thread — or the project owning it
+ * — is deleted. Drops the cached `Session` and tears down the thread's
+ * `Workspace`/`LocalSandbox`, which are otherwise pinned for the lifetime of
+ * the Electron main process. Safe to call for a thread that was never opened.
+ */
+export function disposeThread(projectId: string, threadId: string): void {
+  sessions.delete(`${projectId}:${threadId}`)
+  disposeDemioWorkspace(threadId)
 }

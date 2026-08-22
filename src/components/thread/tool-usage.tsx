@@ -402,10 +402,15 @@ function appendTerminalTranscript(
  * `FORCE_COLOR=1` (`electron/agent/workspace-factory.ts`), so shell output
  * arrives colourised — and this `<pre>` renders no ANSI, it would just print
  * the raw escape bytes as garbage.
+ *
+ * Kept byte-for-byte in sync with the main-process copy in
+ * `electron/agent/tools/execute-command.ts` (itself Mastra's own `ANSI_RE`):
+ * it covers OSC sequences terminated by BEL, ST or \u009C, which narrower
+ * patterns miss for tools emitting OSC-8 hyperlinks (`gh`, `ls --hyperlink`).
  */
 const ESC = String.fromCharCode(27)
 const ANSI_PATTERN = new RegExp(
-  `[${ESC}\\u009B][[\\]()#;?]*(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?\\u0007|(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])`,
+  `(?:${ESC}\\][\\s\\S]*?(?:\\u0007|${ESC}\\u005C|\\u009C))|(?:[${ESC}\\u009B][\\[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~])`,
   "g"
 )
 

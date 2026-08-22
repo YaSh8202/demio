@@ -186,6 +186,12 @@ export function createWorkspaceForDir(
  * would run against a second LocalSandbox with its own ProcessManager, leaving
  * `get_process_output`/`kill_process` unable to see the processes
  * execute_command spawned.
+ *
+ * Entries are held for the process lifetime unless `disposeDemioWorkspace` is
+ * called — each one pins a `LocalSandbox` and its `ProcessManager`, so a
+ * long-lived Electron session that opens many threads would otherwise
+ * accumulate sandboxes (possibly still holding spawned background processes)
+ * with nothing ever freeing them.
  */
 const workspaceCache = new Map<string, Workspace>()
 
@@ -201,4 +207,27 @@ export function createDemioWorkspace(threadId: string): Workspace {
   })
   workspaceCache.set(threadId, workspace)
   return workspace
+}
+
+/**
+ * Drop a thread's cached Workspace and tear down its sandbox.
+ *
+ * Call when a thread is gone for good (deleted, or its project deleted) —
+ * `electron/agent/controller.ts`'s `disposeThread` is the single entry point,
+ * so the cached `Session` is discarded alongside it. Destroying is
+ * best-effort: a failure here must not block the delete the user asked for.
+ */
+export function disposeDemioWorkspace(threadId: string): void {
+  const workspace = workspaceCache.get(threadId)
+  if (!workspace) return
+
+  workspaceCache.delete(threadId)
+  workspace
+    .destroy()
+    .catch((err: unknown) =>
+      log.error(
+        `[workspace-factory] failed to destroy workspace for thread ${threadId}:`,
+        err
+      )
+    )
 }

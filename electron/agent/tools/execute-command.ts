@@ -67,6 +67,9 @@ Usage:
 
 Every call MUST include \`description\`: a clear 5-10 word summary of what the command does. It is shown in the chat UI as the shell card's title — without it the user sees an unlabelled row.`
 
+/** Upstream's `NUMERIC_TIMEOUT_STRING_REGEX` (workspace-kJgXwpJp.js:7978). */
+const NUMERIC_TIMEOUT_STRING = /^\d+(?:\.\d+)?$/
+
 const inputSchema = z.object({
   command: z
     .string()
@@ -74,8 +77,17 @@ const inputSchema = z.object({
       'The shell command to execute (e.g. "npm install", "ls -la src/", "cat file.txt | grep error")'
     ),
   description: z.string().describe(DESCRIPTION_PARAM_DOC),
+  // Mirrors the built-in's `z.preprocess(...)` (workspace-kJgXwpJp.js:7983-7989)
+  // rather than a bare `z.number()`: models routinely emit `"timeout": "60"`,
+  // and the coercion is exactly why upstream wraps it. A plain number schema
+  // would reject the string form at the ai-sdk validation layer, failing calls
+  // the built-in ran fine.
   timeout: z
-    .number()
+    .preprocess((value) => {
+      if (typeof value !== "string") return value
+      const trimmed = value.trim()
+      return NUMERIC_TIMEOUT_STRING.test(trimmed) ? Number(trimmed) : value
+    }, z.number())
     .nullish()
     .describe("Maximum execution time in seconds. Example: 60 for 1 minute."),
   cwd: z.string().nullish().describe("Working directory for the command"),
@@ -95,13 +107,18 @@ const inputSchema = z.object({
 
 /**
  * ANSI escape sequences — the sandbox env sets FORCE_COLOR=1
- * (workspace-factory.ts), so raw command output is colourised. Same pattern
- * the `ansi-regex` package uses; the ESC byte is spliced in from a variable so
- * the source file itself stays free of control characters.
+ * (workspace-factory.ts), so raw command output is colourised.
+ *
+ * This is Mastra's own `ANSI_RE` (workspace-kJgXwpJp.js:7890) verbatim, since
+ * `toModelOutput` below replaces `sandboxToModelOutput` and is therefore the
+ * only stripper that runs. It covers OSC sequences terminated by BEL, ST or
+ * \u009C — narrower patterns leave escape garbage behind for tools that emit
+ * OSC-8 hyperlinks (`gh`, `ls --hyperlink`). The ESC byte is spliced in from a
+ * variable so this source file stays free of control characters.
  */
 const ESC = String.fromCharCode(27)
 const ANSI_PATTERN = new RegExp(
-  `[${ESC}\\u009B][[\\]()#;?]*(?:(?:(?:;[-a-zA-Z\\d/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d/#&.:=?%@~_]*)*)?\\u0007|(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])`,
+  `(?:${ESC}\\][\\s\\S]*?(?:\\u0007|${ESC}\\u005C|\\u009C))|(?:[${ESC}\\u009B][\\[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~])`,
   "g"
 )
 

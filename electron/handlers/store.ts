@@ -25,6 +25,7 @@ import {
   updateMessage,
 } from "../store"
 import { generateProjectTitles } from "../agent/title-generator"
+import { disposeThread } from "../agent/controller"
 import log from "../lib/logger"
 import type {
   StoredProject,
@@ -105,7 +106,11 @@ export const storeHandlers = {
   },
 
   deleteProject: (_event: Electron.IpcMainInvokeEvent, projectId: string) => {
+    // Enumerate BEFORE the delete — afterwards the thread index is gone and
+    // there is no way to know which per-thread runtimes to release.
+    const threadIds = listThreads(projectId).map((thread) => thread.id)
     const result = deleteProjectFull(projectId)
+    threadIds.forEach((threadId) => disposeThread(projectId, threadId))
     broadcastProjectsChanged()
     return result
   },
@@ -151,6 +156,10 @@ export const storeHandlers = {
     threadId: string
   ) => {
     const result = deleteThread(projectId, threadId)
+    // Release the thread's cached AgentController session and its
+    // Workspace/LocalSandbox — both are pinned for the life of the main
+    // process otherwise.
+    disposeThread(projectId, threadId)
     broadcastThreadsChanged(projectId)
     return result
   },
