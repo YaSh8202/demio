@@ -16,6 +16,7 @@
 //   are plain fields, no `stopWhen`/`stepCountIs` needed here).
 
 import path from "node:path"
+import { promises as fs } from "node:fs"
 import { WORKSPACE_TOOLS } from "@mastra/core/workspace"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
 import { shellQuote } from "../../lib/agent-browser/quote"
@@ -41,6 +42,34 @@ const RECORDER_TOOL_FILTER = [
 async function currentUrl(): Promise<string> {
   const r = await execAgentBrowser(["get url"], { timeout: 10_000 })
   return r.ok ? String(r.output).trim() : ""
+}
+
+/**
+ * Persist the recorder agent's own conversation for one attempt.
+ *
+ * The recorder runs as a bare `agent.generate()` — no memory, no threadId —
+ * so nothing about it reaches `mastra_messages` and it is invisible after the
+ * run. `generate()` does hand back `steps` (text + toolCalls + toolResults +
+ * usage per step), so we write that next to the scene's other artifacts
+ * (`<sceneId>.webm`, `<sceneId>.actions.jsonl`).
+ *
+ * Best-effort by construction: a failure to write a debug artifact must never
+ * fail the scene that produced it.
+ */
+async function writeAgentTranscript(
+  filePath: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8")
+  } catch (err) {
+    log.warn(
+      `[demo-workflow] could not write agent transcript ${filePath}: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    )
+  }
 }
 
 /**
@@ -82,19 +111,38 @@ export async function recordSceneWithRetry(opts: {
     if (signal.aborted) break
     attemptsMade = attempt
     const videoPath = path.join(workspace, "scenes", `${scene.id}.webm`)
-    const actionsPath = path.join(workspace, "scenes", `${scene.id}.actions.jsonl`)
+    const actionsPath = path.join(
+      workspace,
+      "scenes",
+      `${scene.id}.actions.jsonl`
+    )
+    const transcriptPath = path.join(
+      workspace,
+      "scenes",
+      `${scene.id}.attempt-${attempt}.agent.json`
+    )
 
     opts.onProgress?.({ sceneId: scene.id, attempt, phase: "recording" })
 
     // 1. Position the browser BEFORE recording so page-load isn't in the video.
-    const open = await execAgentBrowser([`open ${shellQuote(scene.startUrl)}`], {
-      timeout: 60_000,
-    })
+    const open = await execAgentBrowser(
+      [`open ${shellQuote(scene.startUrl)}`],
+      {
+        timeout: 60_000,
+      }
+    )
     if (!open.ok) {
       previousFailure = `failed before recording — could not open ${scene.startUrl}: ${open.error ?? "unknown error"}`
       lastReport = infraFailureReport(previousFailure)
-      log.warn(`[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`)
-      opts.onProgress?.({ sceneId: scene.id, attempt, phase: "failed", detail: previousFailure })
+      log.warn(
+        `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+      )
+      opts.onProgress?.({
+        sceneId: scene.id,
+        attempt,
+        phase: "failed",
+        detail: previousFailure,
+      })
       continue
     }
 
@@ -107,7 +155,9 @@ export async function recordSceneWithRetry(opts: {
     )
     if (!rec.ok) {
       // A stale recording session is the known failure mode — clear and retry.
-      const cleanup = await execAgentBrowser(["record stop"], { timeout: 15_000 })
+      const cleanup = await execAgentBrowser(["record stop"], {
+        timeout: 15_000,
+      })
       if (!cleanup.ok) {
         log.warn(
           `[demo-workflow] scene ${scene.id} attempt ${attempt} stale-session cleanup ` +
@@ -116,8 +166,15 @@ export async function recordSceneWithRetry(opts: {
       }
       previousFailure = `failed before recording — record start failed: ${rec.error ?? "unknown error"}`
       lastReport = infraFailureReport(previousFailure)
-      log.warn(`[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`)
-      opts.onProgress?.({ sceneId: scene.id, attempt, phase: "failed", detail: previousFailure })
+      log.warn(
+        `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+      )
+      opts.onProgress?.({
+        sceneId: scene.id,
+        attempt,
+        phase: "failed",
+        detail: previousFailure,
+      })
       continue
     }
 
@@ -138,12 +195,28 @@ export async function recordSceneWithRetry(opts: {
           previousFailure,
         }),
       })
-      await recorder.generate(`Record scene ${scene.id}: ${scene.title}`, {
-        abortSignal: signal,
-        maxSteps: 30,
+      const res = await recorder.generate(
+        `Record scene ${scene.id}: ${scene.title}`,
+        { abortSignal: signal, maxSteps: 30 }
+      )
+      await writeAgentTranscript(transcriptPath, {
+        sceneId: scene.id,
+        attempt,
+        modelId,
+        previousFailure: previousFailure || null,
+        text: res.text,
+        usage: res.usage,
+        steps: res.steps,
       })
     } catch (err) {
       agentFailure = err instanceof Error ? err.message : String(err)
+      await writeAgentTranscript(transcriptPath, {
+        sceneId: scene.id,
+        attempt,
+        modelId,
+        previousFailure: previousFailure || null,
+        error: agentFailure,
+      })
     } finally {
       // 4. Recording ALWAYS stops, agent success or not.
       const stop = await execAgentBrowser(["record stop"], { timeout: 30_000 })
@@ -157,13 +230,20 @@ export async function recordSceneWithRetry(opts: {
     if (agentFailure !== null) {
       previousFailure = `failed during recording — recorder agent error: ${agentFailure}`
       lastReport = infraFailureReport(previousFailure)
-      log.warn(`[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`)
+      log.warn(
+        `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+      )
       // Abort is not a retry case: the signal firing mid-generate is very
       // likely *why* the agent threw, so spending another attempt would
       // just throw again immediately. Stop and report what we have instead
       // of rethrowing — callers read `status: "failed"` either way.
       if (signal.aborted) break
-      opts.onProgress?.({ sceneId: scene.id, attempt, phase: "failed", detail: previousFailure })
+      opts.onProgress?.({
+        sceneId: scene.id,
+        attempt,
+        phase: "failed",
+        detail: previousFailure,
+      })
       continue
     }
 
@@ -173,7 +253,9 @@ export async function recordSceneWithRetry(opts: {
     lastReport = await verifyScene({ scene, videoPath, actionsPath, finalUrl })
 
     if (lastReport.ok) {
-      const duration = lastReport.checks.find((c) => c.name === "duration-range")
+      const duration = lastReport.checks.find(
+        (c) => c.name === "duration-range"
+      )
       opts.onProgress?.({ sceneId: scene.id, attempt, phase: "done" })
       return {
         status: "done",
@@ -181,7 +263,9 @@ export async function recordSceneWithRetry(opts: {
           sceneId: scene.id,
           videoPath,
           actionsPath,
-          durationSec: Number(duration?.detail.match(/duration ([\d.]+)s/)?.[1] ?? 0),
+          durationSec: Number(
+            duration?.detail.match(/duration ([\d.]+)s/)?.[1] ?? 0
+          ),
           endUrl: finalUrl,
           attempts: attempt,
           verify: lastReport,
@@ -195,8 +279,15 @@ export async function recordSceneWithRetry(opts: {
         .filter((c) => !c.ok)
         .map((c) => `${c.name}: ${c.detail}`)
         .join("; ")
-    log.warn(`[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`)
-    opts.onProgress?.({ sceneId: scene.id, attempt, phase: "failed", detail: previousFailure })
+    log.warn(
+      `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+    )
+    opts.onProgress?.({
+      sceneId: scene.id,
+      attempt,
+      phase: "failed",
+      detail: previousFailure,
+    })
   }
 
   return { status: "failed", lastReport, attempts: attemptsMade }
