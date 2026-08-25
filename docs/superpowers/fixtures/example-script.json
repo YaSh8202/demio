@@ -1,0 +1,54 @@
+{
+  "demoTitle": "Wikipedia search",
+  "targetUrl": "https://en.wikipedia.org",
+  "scenes": [
+    {
+      "id": "scene-01",
+      "title": "Search for a topic",
+      "goal": "Show search working from the main page",
+      "startUrl": "https://en.wikipedia.org/wiki/Main_Page",
+      "endUrl": "https://en.wikipedia.org/wiki/Main_Page",
+      "actions": ["type a query into search"],
+      "expectedOutcome": "search suggestions visible",
+      "narrationHint": "neutral, informative",
+      "script": {
+        "sceneId": "scene-01",
+        "continuity": "independent",
+        "oneShot": false,
+        "startUrl": "https://en.wikipedia.org/wiki/Main_Page",
+        "endUrl": "https://en.wikipedia.org/wiki/Main_Page",
+        "actions": [
+          {
+            "cmd": "find role searchbox fill \"Electron framework\"",
+            "assert": "--text \"Electron\"",
+            "settleMs": 1200
+          }
+        ]
+      }
+    },
+    {
+      "id": "scene-02",
+      "title": "Open the article",
+      "goal": "Land on the article page",
+      "startUrl": "https://en.wikipedia.org/wiki/Main_Page",
+      "endUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+      "actions": ["submit the search"],
+      "expectedOutcome": "article page visible",
+      "narrationHint": "neutral, informative",
+      "script": {
+        "sceneId": "scene-02",
+        "continuity": "chained",
+        "oneShot": false,
+        "startUrl": "https://en.wikipedia.org/wiki/Main_Page",
+        "endUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+        "actions": [
+          {
+            "cmd": "press Enter",
+            "assert": "--url 'https://en.wikipedia.org/wiki/'",
+            "settleMs": 2000
+          }
+        ]
+      }
+    }
+  ]
+}
