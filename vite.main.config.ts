@@ -2,8 +2,8 @@ import fs from "node:fs"
 import path from "node:path"
 import { defineConfig, type Plugin } from "vite"
 
-// Copies pure CommonJS workflow files (verify-pure.cjs, edl-pure.cjs) to the
-// build directory. These modules load at runtime via `createRequire()` — kept
+// Copies the pure CommonJS workflow files to the build directory. These
+// modules load at runtime via `createRequire()` — kept
 // as plain CommonJS so `node --test` can run them with zero build step. The
 // `require()` calls are runtime strings (invisible to Rollup's static
 // analysis), so they never get inlined; they resolve relative to the bundled
@@ -11,21 +11,27 @@ import { defineConfig, type Plugin } from "vite"
 // directory. Without this copy step, the siblings are simply absent from
 // `.vite/build/`, and the require throws MODULE_NOT_FOUND. Confirmed via a
 // standalone vite-build probe against this same rollup config.
+// The list is DERIVED from the source directory, never hardcoded: a hardcoded
+// list silently omits any newly added .cjs, and neither gate catches it —
+// `node --test` loads the .cjs straight from source, and tsc never checks a
+// runtime `require` string. The failure surfaces only when the app boots, as
+// `Cannot find module './<name>.cjs'`. That is exactly how replay-pure.cjs and
+// artifact-pure.cjs were missed when they were added.
 function copyPureCjs(): Plugin {
-  const files = ["verify-pure.cjs", "edl-pure.cjs"]
+  const srcDir = path.resolve(__dirname, "electron/agent/workflows")
   return {
     name: "copy-pure-cjs",
     closeBundle() {
       const outDir = path.resolve(__dirname, ".vite/build")
       fs.mkdirSync(outDir, { recursive: true })
+      const files = fs
+        .readdirSync(srcDir)
+        .filter((f) => f.endsWith(".cjs"))
       for (const filename of files) {
-        const src = path.resolve(
-          __dirname,
-          "electron/agent/workflows",
-          filename
+        fs.copyFileSync(
+          path.join(srcDir, filename),
+          path.join(outDir, filename)
         )
-        if (!fs.existsSync(src)) continue
-        fs.copyFileSync(src, path.join(outDir, filename))
       }
     },
   }
