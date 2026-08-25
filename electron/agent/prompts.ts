@@ -425,6 +425,13 @@ export interface RecoveryInstructionsContext {
   workspace: string
   script: SceneScript
   deviation: { index: number; cmd: string; detail: string }
+  /**
+   * Free-text hint typed by the user when they chose "retry" after the
+   * scene's whole retry budget was exhausted. Advisory only — it is a clue
+   * about what might be blocking the step, never permission to perform the
+   * step itself. Rendered into the prompt only when present.
+   */
+  guidance?: string
 }
 
 /**
@@ -436,7 +443,7 @@ export interface RecoveryInstructionsContext {
  * the action log from the script the narration anchors reference.
  */
 export function recoveryInstructions(ctx: RecoveryInstructionsContext): string {
-  const { workspace, script, deviation } = ctx
+  const { workspace, script, deviation, guidance } = ctx
 
   const scriptList = script.actions
     .map(
@@ -445,6 +452,10 @@ export function recoveryInstructions(ctx: RecoveryInstructionsContext): string {
     )
     .join("\n")
 
+  const guidanceBlock = guidance
+    ? `\nThe person watching this run says: "${guidance}"\nTreat this only as a hint about what might be in the way — it is not permission to perform the scene's own step, and the MUST NOT rule below still applies. If what you observe on the page disagrees with the hint, trust what you observe.\n`
+    : ""
+
   return `You are the Demio recovery agent. A scripted demo step failed. **The screen recording is currently STOPPED** — nothing you do now appears in the video.
 
 The script being replayed:
@@ -452,7 +463,7 @@ The script being replayed:
 ${scriptList}
 
 Step ${deviation.index} (\`${deviation.cmd}\`) failed: ${deviation.detail}
-
+${guidanceBlock}
 # Your only job
 
 Clear whatever is blocking that step, then stop. The scene will be retaken from step 0 immediately after you finish.

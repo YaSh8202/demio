@@ -21,6 +21,8 @@ export async function recoverFromDeviation(opts: {
   modelId: string
   script: SceneScript
   deviation: { index: number; cmd: string; detail: string }
+  /** User-typed hint from a prior "retry" resume — forwarded as advisory. */
+  guidance?: string
   signal: AbortSignal
 }): Promise<{ recovered: boolean; detail: string }> {
   try {
@@ -32,6 +34,7 @@ export async function recoverFromDeviation(opts: {
         workspace: opts.workspace,
         script: opts.script,
         deviation: opts.deviation,
+        guidance: opts.guidance,
       }),
     })
     const res = await agent.generate(

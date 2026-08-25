@@ -116,8 +116,9 @@ const sceneSuspendSchema = z.object({
  * Records (and mechanically verifies) exactly one scene, with the harness's
  * own internal retry loop (`recordSceneWithRetry`, up to its own
  * `maxAttempts`). Only suspends the WORKFLOW once that internal retry budget
- * is exhausted, asking the user to retry (optionally with guidance folded
- * into the next attempt's actions), skip this scene, or abort the whole run.
+ * is exhausted, asking the user to retry (optionally with guidance passed
+ * through to the off-camera recovery agent as a hint), skip this scene, or
+ * abort the whole run.
  *
  * Returns `null` for a skipped scene — filtered out by `collectResultsStep`.
  */
@@ -147,22 +148,19 @@ const sceneStep = createStep({
       return null
     }
 
-    const sceneToRecord =
-      resumeData?.action === "retry" && resumeData.guidance
-        ? {
-            ...scene,
-            actions: [
-              ...scene.actions,
-              `User guidance: ${resumeData.guidance}`,
-            ],
-          }
-        : scene
-
     const outcome = await recordSceneWithRetry({
-      scene: sceneToRecord,
+      scene,
       workspace: init.workspace,
       modelId: init.modelId,
-      voiceExpected: init.voiceId !== null,
+      // TTS and sync both run AFTER every scene is recorded (see the
+      // workflow chain below `sceneStep`), so a scene .webm never carries
+      // narration at verify time in this phase — an audio-track check would
+      // be unsatisfiable on every voiced run. Flip this back to
+      // `init.voiceId !== null` once a future phase moves TTS ahead of
+      // recording.
+      voiceExpected: false,
+      guidance:
+        resumeData?.action === "retry" ? resumeData.guidance : undefined,
       signal: abortSignal,
       onProgress: (u) => {
         void writer.write({

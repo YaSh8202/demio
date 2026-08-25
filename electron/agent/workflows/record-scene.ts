@@ -2,19 +2,19 @@
 //
 // Harness owns the recording lifecycle: open start URL (or continue on the
 // live page for a chained scene), replay the scene's script deterministically,
-// stop recording, mechanically verify. Retries with the failure report fed
-// back, max 3 attempts.
+// stop recording, mechanically verify. Up to `maxAttempts` (default 3)
+// attempts. Replay is deterministic, so a plain retry repeats the same
+// script byte-for-byte — the only thing that changes attempt-to-attempt is
+// a mid-take deviation triggering off-camera recovery (recovery.ts) before
+// the retake. `previousFailure` never changes what a later attempt does —
+// diagnostic only, surfacing via the per-attempt transcript, the log,
+// progress events, and the synthesized failure report.
 //
 // Reconciled against installed APIs (Task 11):
-// - `agent-browser url` does not exist — `execAgentBrowser(["get", "url"])`
-//   is the real subcommand (confirmed via the installed binary's
-//   `agent-browser get --help`: "url  Get current URL").
 // - `record start <path> [url] [flags]` accepts `--log-actions <path>`
-//   (confirmed via `agent-browser record --help`).
-// - `recorder.generate(message, { abortSignal, maxSteps })` matches the
-//   installed `@mastra/core@1.55.0` `AgentExecutionOptionsBase` shape
-//   (`agent/agent.types.d.ts:386,419` — both `abortSignal` and `maxSteps`
-//   are plain fields, no `stopWhen`/`stepCountIs` needed here).
+//   (confirmed via `agent-browser record --help`). `recordingBracket` in
+//   `replay-pure.cjs` builds the exact `open`/`record start`/`record
+//   restart` commands issued below.
 
 import path from "node:path"
 import { promises as fs } from "node:fs"
@@ -40,12 +40,12 @@ const pure = require("./replay-pure.cjs") as {
 const DEFAULT_MAX_ATTEMPTS = 3
 
 /**
- * Persist the recorder agent's own conversation for one attempt.
+ * Persist a debug artifact for one recording attempt.
  *
- * The recorder runs as a bare `agent.generate()` — no memory, no threadId —
- * so nothing about it reaches `mastra_messages` and it is invisible after the
- * run. `generate()` does hand back `steps` (text + toolCalls + toolResults +
- * usage per step), so we write that next to the scene's other artifacts
+ * Replay is a bare deterministic run — no agent, no memory, no threadId —
+ * so nothing about a given attempt reaches `mastra_messages` and it is
+ * otherwise invisible after the run. We write the replay outcome (and the
+ * failure context that led into it) next to the scene's other artifacts
  * (`<sceneId>.webm`, `<sceneId>.actions.jsonl`).
  *
  * Best-effort by construction: a failure to write a debug artifact must never
@@ -68,10 +68,11 @@ async function writeAgentTranscript(
 }
 
 /**
- * Synthesize a VerifyReport for a failure that happened before mechanical
- * verification ever ran (couldn't open the start URL, `record start`
- * failed, or the recorder agent itself threw). Without this, a run that
- * dies on every attempt at the `open`/`record start` step returns
+ * Synthesize a VerifyReport for a failure that happened before (or instead
+ * of) mechanical verification: the recording bracket failed to open or
+ * start, replay was aborted mid-take, or replay hit a deviation that
+ * recovery could not clear (the take is abandoned before `verifyScene` ever
+ * runs in that case). Without this, those paths would return
  * `{ ok: false, checks: [] }` — no diagnostic at all for the caller.
  */
 function infraFailureReport(detail: string): VerifyReport {
@@ -83,6 +84,13 @@ export async function recordSceneWithRetry(opts: {
   workspace: string
   modelId: string
   voiceExpected: boolean
+  /**
+   * Free-text hint the user typed when resuming a suspended scene with
+   * "retry". Forwarded to the off-camera recovery agent as advisory
+   * context, not consumed anywhere else — replay itself is deterministic
+   * and has no concept of a hint.
+   */
+  guidance?: string
   signal: AbortSignal
   maxAttempts?: number
   onProgress?: (u: {
@@ -142,6 +150,13 @@ export async function recordSceneWithRetry(opts: {
       actionsPath,
       isRetry: attempt > 1,
     })
+    // NOTE: execAgentBrowser takes ONE FULL COMMAND STRING per array
+    // element — a single-element array is tokenized as one command, but a
+    // multi-element array switches to `batch` mode, where `wrapBatchArgs`
+    // escapes `\` and `"` but NOT `'`. `recordingBracket` single-quotes its
+    // paths and URLs, and exec.ts spawns with no shell to strip them en
+    // route — so each bracket command MUST be issued as its own
+    // single-element call, never batched into one.
     let bracketFailed = false
     for (const cmd of bracket.commands) {
       const r = await execAgentBrowser([cmd], { timeout: 60_000 })
@@ -196,7 +211,14 @@ export async function recordSceneWithRetry(opts: {
       replay: outcome,
     })
 
-    if (outcome.status === "aborted") break
+    if (outcome.status === "aborted") {
+      previousFailure = `aborted mid-replay after ${outcome.steps.length} step(s)`
+      lastReport = infraFailureReport(previousFailure)
+      log.warn(
+        `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+      )
+      break
+    }
 
     // 4. Deviation: recover with the camera off, then retake.
     if (outcome.status === "deviation" && outcome.deviation) {
@@ -211,6 +233,7 @@ export async function recordSceneWithRetry(opts: {
         modelId,
         script,
         deviation: outcome.deviation,
+        guidance: opts.guidance,
         signal,
       })
       previousFailure =
