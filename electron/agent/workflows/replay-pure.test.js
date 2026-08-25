@@ -169,3 +169,81 @@ test("runScript: an aborted signal stops before the next step", async () => {
   assert.equal(r.steps.length, 1)
   assert.equal(r.status, "aborted")
 })
+
+const { recordingBracket } = require("./replay-pure.cjs")
+
+test("recordingBracket: independent scene opens the start URL then starts", () => {
+  const script = normalizeScript({
+    sceneId: "scene-01",
+    continuity: "independent",
+    startUrl: "https://example.com/boards",
+    endUrl: "https://example.com/b/1",
+    actions: [{ cmd: "click @e1" }],
+  })
+  const b = recordingBracket({
+    script,
+    videoPath: "/w/scenes/scene-01.webm",
+    actionsPath: "/w/scenes/scene-01.actions.jsonl",
+    isRetry: false,
+  })
+  assert.equal(b.resetsPage, true)
+  assert.equal(b.commands.length, 2)
+  assert.match(b.commands[0], /^open /)
+  assert.match(b.commands[1], /^record start /)
+  assert.match(b.commands[1], /--log-actions/)
+})
+
+test("recordingBracket: chained scene restarts without navigating", () => {
+  const script = normalizeScript({
+    sceneId: "scene-02",
+    continuity: "chained",
+    startUrl: "https://example.com/b/1",
+    endUrl: "https://example.com/b/1",
+    actions: [{ cmd: "click @e1" }],
+  })
+  const b = recordingBracket({
+    script,
+    videoPath: "/w/scenes/scene-02.webm",
+    actionsPath: "/w/scenes/scene-02.actions.jsonl",
+    isRetry: false,
+  })
+  assert.equal(b.resetsPage, false)
+  assert.equal(b.commands.length, 1)
+  assert.match(b.commands[0], /^record restart /)
+  assert.match(b.commands[0], /--log-actions/)
+})
+
+test("recordingBracket: a chained scene falls back to open+start on retry", () => {
+  const script = normalizeScript({
+    sceneId: "scene-02",
+    continuity: "chained",
+    startUrl: "https://example.com/b/1",
+    endUrl: "https://example.com/b/1",
+    actions: [{ cmd: "click @e1" }],
+  })
+  const b = recordingBracket({
+    script,
+    videoPath: "/w/scenes/scene-02.webm",
+    actionsPath: "/w/scenes/scene-02.actions.jsonl",
+    isRetry: true,
+  })
+  assert.equal(b.resetsPage, true)
+  assert.equal(b.commands.length, 2)
+  assert.match(b.commands[0], /^open /)
+})
+
+test("recordingBracket: quotes paths containing spaces", () => {
+  const script = normalizeScript({
+    sceneId: "scene-03",
+    startUrl: "https://example.com",
+    endUrl: "https://example.com",
+    actions: [{ cmd: "click @e1" }],
+  })
+  const b = recordingBracket({
+    script,
+    videoPath: "/my workspace/scenes/scene-03.webm",
+    actionsPath: "/my workspace/scenes/scene-03.actions.jsonl",
+    isRetry: false,
+  })
+  assert.match(b.commands[1], /'\/my workspace\/scenes\/scene-03\.webm'/)
+})

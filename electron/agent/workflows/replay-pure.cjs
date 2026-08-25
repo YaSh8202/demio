@@ -128,6 +128,49 @@ async function runScript({ script, exec, onStep, signal }) {
   return { status: "ok", steps }
 }
 
+/**
+ * Single-quote a value for agent-browser's `splitCommand` tokenizer, so
+ * paths and URLs containing spaces survive. Mirrors
+ * `electron/lib/agent-browser/quote.ts` — this file must stay import-free so
+ * `node --test` can load it directly, hence the duplicate.
+ */
+function quoteArg(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+/**
+ * The command(s) that open a take.
+ *
+ * A `chained` scene uses `record restart`, which re-attaches frame capture to
+ * the live page without creating a browser context or navigating — verified
+ * in agent-browser's `handle_recording_restart` (native/actions.rs:4719).
+ * `record start`, by contrast, creates a fresh context and navigates
+ * (native/actions.rs:4528), losing in-page state.
+ *
+ * A retry always falls back to open+start: scene N's half-executed wreckage
+ * is not a valid start state, so continuity is traded for idempotency on
+ * that take only.
+ *
+ * NOTE: `record restart <path> <url>` parses the URL and then ignores it —
+ * the handler never reads it. Never use restart to navigate.
+ */
+function recordingBracket({ script, videoPath, actionsPath, isRetry }) {
+  const logFlag = `--log-actions ${quoteArg(actionsPath)}`
+  if (script.continuity === "chained" && !isRetry) {
+    return {
+      commands: [`record restart ${quoteArg(videoPath)} ${logFlag}`],
+      resetsPage: false,
+    }
+  }
+  return {
+    commands: [
+      `open ${quoteArg(script.startUrl)}`,
+      `record start ${quoteArg(videoPath)} ${logFlag}`,
+    ],
+    resetsPage: true,
+  }
+}
+
 module.exports = {
   normalizeScript,
   buildStepCommands,
@@ -136,4 +179,6 @@ module.exports = {
   runScript,
   DEFAULT_SETTLE_MS,
   ACTION_BASELINE_MS,
+  recordingBracket,
+  quoteArg,
 }
