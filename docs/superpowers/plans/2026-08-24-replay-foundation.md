@@ -1788,7 +1788,7 @@ belong in the checklist, not in this plan document.
 
 - [ ] **Step 3: Run the checklist**
 
-Work through steps 1–7 above against a real browser. Record any deviation from the expected behaviour as a GitHub issue rather than patching inline — the plan's assumptions are what is being tested.
+Work through **items 25–31 (section E)** of `docs/superpowers/plans/manual-e2e-checklist.md` against a real browser. Record any deviation from the expected behaviour as a GitHub issue rather than patching inline — the plan's assumptions are what is being tested.
 
 - [ ] **Step 4: Commit**
 
