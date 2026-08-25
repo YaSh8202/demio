@@ -43,6 +43,14 @@ export function expectedDurationMs(script: SceneScript): number {
 /**
  * Replay one scene's script against the live browser. Stops at the first
  * deviation — the caller stops the recording and recovers off camera.
+ *
+ * **Exception behaviour:** This function resolves with a `ReplayOutcome` for
+ * every step-level and abort outcome. However, it throws (does not resolve)
+ * only when the agent-browser binary cannot be resolved — an environment
+ * failure that is deliberately not converted into a deviation. Recovery
+ * cannot fix a missing binary, and retaking the scene would repeat the same
+ * failure. Callers must let this exception propagate rather than treating it
+ * as a failed take.
  */
 export async function replayScene(opts: {
   script: SceneScript
