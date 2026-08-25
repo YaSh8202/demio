@@ -1,8 +1,9 @@
 // ── Record-scene step (ADR-003, ADR-005) ────────────────────────────────────
 //
-// Harness owns the recording lifecycle: open start URL, start recording,
-// run the recorder agent for ONE scene, stop recording, mechanically verify.
-// Retries with the failure report fed back, max 3 attempts.
+// Harness owns the recording lifecycle: open start URL (or continue on the
+// live page for a chained scene), replay the scene's script deterministically,
+// stop recording, mechanically verify. Retries with the failure report fed
+// back, max 3 attempts.
 //
 // Reconciled against installed APIs (Task 11):
 // - `agent-browser url` does not exist — `execAgentBrowser(["get", "url"])`
@@ -17,32 +18,26 @@
 
 import path from "node:path"
 import { promises as fs } from "node:fs"
-import { WORKSPACE_TOOLS } from "@mastra/core/workspace"
+import { createRequire } from "node:module"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
-import { shellQuote } from "../../lib/agent-browser/quote"
-import { createDemioAgent } from "../demio-agent"
+import { replayScene } from "./replay"
+import { recoverFromDeviation } from "./recovery"
 import { verifyScene } from "./verify"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
-import { recorderInstructions } from "../prompts"
+import type { SceneScript } from "./script-schema"
 import log from "../../lib/logger"
 
-const DEFAULT_MAX_ATTEMPTS = 3
-
-/** Recorder tool allowlist — execute/read/edit only, no present_files/synthesize_voiceover. */
-const RECORDER_TOOL_FILTER = [
-  WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND,
-  WORKSPACE_TOOLS.FILESYSTEM.READ_FILE,
-  WORKSPACE_TOOLS.FILESYSTEM.EDIT_FILE,
-]
-
-// NOTE: execAgentBrowser takes ONE FULL COMMAND STRING per array element
-// (single command → tokenized; multiple elements → `batch` mode, where a bare
-// URL becomes its own "Unknown command"). Variable parts go through
-// shellQuote so paths/URLs with spaces survive splitCommand.
-async function currentUrl(): Promise<string> {
-  const r = await execAgentBrowser(["get url"], { timeout: 10_000 })
-  return r.ok ? String(r.output).trim() : ""
+const require = createRequire(import.meta.url)
+const pure = require("./replay-pure.cjs") as {
+  recordingBracket: (o: {
+    script: SceneScript
+    videoPath: string
+    actionsPath: string
+    isRetry: boolean
+  }) => { commands: string[]; resetsPage: boolean }
 }
+
+const DEFAULT_MAX_ATTEMPTS = 3
 
 /**
  * Persist the recorder agent's own conversation for one attempt.
@@ -87,6 +82,7 @@ export async function recordSceneWithRetry(opts: {
   scene: Scene
   workspace: string
   modelId: string
+  voiceExpected: boolean
   signal: AbortSignal
   maxAttempts?: number
   onProgress?: (u: {
@@ -122,18 +118,43 @@ export async function recordSceneWithRetry(opts: {
       `${scene.id}.attempt-${attempt}.agent.json`
     )
 
+    const script = scene.script
+    if (!script) {
+      // Until rehearsal ships (plan 2), a scene without a script cannot be
+      // recorded. Fail loudly rather than silently falling back to the
+      // deleted recorder agent.
+      return {
+        status: "failed",
+        lastReport: infraFailureReport(
+          `scene ${scene.id} has no script — the record pass requires one`
+        ),
+        attempts: attemptsMade,
+      }
+    }
+
     opts.onProgress?.({ sceneId: scene.id, attempt, phase: "recording" })
 
-    // 1. Position the browser BEFORE recording so page-load isn't in the video.
-    const open = await execAgentBrowser(
-      [`open ${shellQuote(scene.startUrl)}`],
-      {
-        timeout: 60_000,
+    // 1. Open the take. A chained scene restarts on the live page; an
+    //    independent scene (or any retry) re-opens the start URL.
+    const bracket = pure.recordingBracket({
+      script,
+      videoPath,
+      actionsPath,
+      isRetry: attempt > 1,
+    })
+    let bracketFailed = false
+    for (const cmd of bracket.commands) {
+      const r = await execAgentBrowser([cmd], { timeout: 60_000 })
+      if (!r.ok) {
+        // A stale recording session is the known failure mode — clear it.
+        await execAgentBrowser(["record stop"], { timeout: 15_000 })
+        previousFailure = `failed before recording — \`${cmd}\` failed: ${r.error ?? "unknown error"}`
+        lastReport = infraFailureReport(previousFailure)
+        bracketFailed = true
+        break
       }
-    )
-    if (!open.ok) {
-      previousFailure = `failed before recording — could not open ${scene.startUrl}: ${open.error ?? "unknown error"}`
-      lastReport = infraFailureReport(previousFailure)
+    }
+    if (bracketFailed) {
       log.warn(
         `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
       )
@@ -146,98 +167,59 @@ export async function recordSceneWithRetry(opts: {
       continue
     }
 
-    // 2. Harness starts recording (ADR-005 — agent never touches the lifecycle).
-    const rec = await execAgentBrowser(
-      [
-        `record start ${shellQuote(videoPath)} --log-actions ${shellQuote(actionsPath)}`,
-      ],
-      { timeout: 30_000 }
-    )
-    if (!rec.ok) {
-      // A stale recording session is the known failure mode — clear and retry.
-      const cleanup = await execAgentBrowser(["record stop"], {
-        timeout: 15_000,
-      })
-      if (!cleanup.ok) {
-        log.warn(
-          `[demo-workflow] scene ${scene.id} attempt ${attempt} stale-session cleanup ` +
-            `record stop failed: ${cleanup.error}`
-        )
-      }
-      previousFailure = `failed before recording — record start failed: ${rec.error ?? "unknown error"}`
-      lastReport = infraFailureReport(previousFailure)
+    // 2. Deterministic replay. No LLM on the happy path.
+    const outcome = await replayScene({
+      script,
+      signal,
+      onStep: (step) =>
+        opts.onProgress?.({
+          sceneId: scene.id,
+          attempt,
+          phase: "recording",
+          detail: `step ${step.index + 1}/${script.actions.length}: ${step.cmd}`,
+        }),
+    })
+
+    // 3. Recording ALWAYS stops before anything else happens.
+    const stop = await execAgentBrowser(["record stop"], { timeout: 30_000 })
+    if (!stop.ok) {
       log.warn(
-        `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+        `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop failed: ${stop.error}`
       )
+    }
+
+    await writeAgentTranscript(transcriptPath, {
+      sceneId: scene.id,
+      attempt,
+      modelId,
+      previousFailure: previousFailure || null,
+      replay: outcome,
+    })
+
+    if (outcome.status === "aborted") break
+
+    // 4. Deviation: recover with the camera off, then retake.
+    if (outcome.status === "deviation" && outcome.deviation) {
       opts.onProgress?.({
         sceneId: scene.id,
         attempt,
-        phase: "failed",
-        detail: previousFailure,
+        phase: "verifying",
+        detail: `recovering: ${outcome.deviation.detail}`,
       })
-      continue
-    }
-
-    // 3. Recorder agent performs the scene's actions via execute_command.
-    // Track a thrown error (LLM/transport failure — the most likely
-    // retryable failure mode) separately from the try/finally so the
-    // `record stop` below always runs before we decide what to do next.
-    let agentFailure: string | null = null
-    try {
-      const recorder = createDemioAgent({
+      const recovery = await recoverFromDeviation({
         workspace,
         modelId,
-        toolFilter: RECORDER_TOOL_FILTER,
-        instructionsOverride: recorderInstructions({
-          workspace,
-          scene,
-          attempt,
-          previousFailure,
-        }),
+        script,
+        deviation: outcome.deviation,
+        signal,
       })
-      const res = await recorder.generate(
-        `Record scene ${scene.id}: ${scene.title}`,
-        { abortSignal: signal, maxSteps: 30 }
-      )
-      await writeAgentTranscript(transcriptPath, {
-        sceneId: scene.id,
-        attempt,
-        modelId,
-        previousFailure: previousFailure || null,
-        text: res.text,
-        usage: res.usage,
-        steps: res.steps,
-      })
-    } catch (err) {
-      agentFailure = err instanceof Error ? err.message : String(err)
-      await writeAgentTranscript(transcriptPath, {
-        sceneId: scene.id,
-        attempt,
-        modelId,
-        previousFailure: previousFailure || null,
-        error: agentFailure,
-      })
-    } finally {
-      // 4. Recording ALWAYS stops, agent success or not.
-      const stop = await execAgentBrowser(["record stop"], { timeout: 30_000 })
-      if (!stop.ok) {
-        log.warn(
-          `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop failed: ${stop.error}`
-        )
-      }
-    }
-
-    if (agentFailure !== null) {
-      previousFailure = `failed during recording — recorder agent error: ${agentFailure}`
+      previousFailure =
+        `deviated at step ${outcome.deviation.index} (${outcome.deviation.cmd}): ` +
+        `${outcome.deviation.detail}. Recovery ${recovery.recovered ? "cleared it" : "failed"}: ${recovery.detail}`
       lastReport = infraFailureReport(previousFailure)
       log.warn(
         `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
       )
-      // Abort is not a retry case: the signal firing mid-generate is very
-      // likely *why* the agent threw, so spending another attempt would
-      // just throw again immediately. Stop and report what we have instead
-      // of rethrowing — callers read `status: "failed"` either way.
-      if (signal.aborted) break
       opts.onProgress?.({
         sceneId: scene.id,
         attempt,
@@ -247,10 +229,13 @@ export async function recordSceneWithRetry(opts: {
       continue
     }
 
-    // 5. Mechanical verify (ADR-004 Layer 1).
+    // 5. Verify the artifact.
     opts.onProgress?.({ sceneId: scene.id, attempt, phase: "verifying" })
-    const finalUrl = await currentUrl()
-    lastReport = await verifyScene({ scene, videoPath, actionsPath, finalUrl })
+    lastReport = await verifyScene({
+      script,
+      videoPath,
+      voiceExpected: opts.voiceExpected,
+    })
 
     if (lastReport.ok) {
       const duration = lastReport.checks.find(
@@ -266,7 +251,7 @@ export async function recordSceneWithRetry(opts: {
           durationSec: Number(
             duration?.detail.match(/duration ([\d.]+)s/)?.[1] ?? 0
           ),
-          endUrl: finalUrl,
+          endUrl: script.endUrl,
           attempts: attempt,
           verify: lastReport,
         },

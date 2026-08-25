@@ -162,6 +162,7 @@ const sceneStep = createStep({
       scene: sceneToRecord,
       workspace: init.workspace,
       modelId: init.modelId,
+      voiceExpected: init.voiceId !== null,
       signal: abortSignal,
       onProgress: (u) => {
         void writer.write({
