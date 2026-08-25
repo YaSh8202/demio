@@ -78,6 +78,9 @@ function checkBlackFrames(spans, videoDurationSec) {
   if (spans.length === 0) {
     return { ok: true, detail: "no black frames detected" }
   }
+  // Zero or missing duration is the video-exists check's job, not ours. A
+  // file that cannot report duration is likely truncated or corrupted, but
+  // that is a different failure mode than "too much black content".
   const ok =
     videoDurationSec <= 0 || totalSec / videoDurationSec <= MAX_BLACK_FRACTION
   return {

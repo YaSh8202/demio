@@ -120,9 +120,14 @@ test("checkComputedDuration: far too short fails and reports both numbers", () =
   assert.match(r.detail, /10/)
 })
 
-test("checkComputedDuration: default tolerance is 0.5 (two arguments)", () => {
-  const r = checkComputedDuration(10.4, 10)
+test("checkComputedDuration: default tolerance is 0.5 (two args inside bound)", () => {
+  const r = checkComputedDuration(14, 10)
   assert.equal(r.ok, true)
+})
+
+test("checkComputedDuration: default tolerance is 0.5 (two args outside bound)", () => {
+  const r = checkComputedDuration(16, 10)
+  assert.equal(r.ok, false)
 })
 
 test("checkComputedDuration: far too long fails and reports both numbers", () => {
