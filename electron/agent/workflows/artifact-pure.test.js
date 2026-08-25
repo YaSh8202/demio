@@ -36,6 +36,35 @@ test("parseFreezeDetect: pairs start with duration", () => {
   assert.equal(spans[0].durationSec, 3.2)
 })
 
+test("parseFreezeDetect: no filter output returns empty", () => {
+  assert.deepEqual(parseFreezeDetect("nothing here"), [])
+})
+
+test("parseFreezeDetect: dangling freeze_start emitted as open", () => {
+  const stderr = "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 25.0"
+  const spans = parseFreezeDetect(stderr)
+  assert.equal(spans.length, 1)
+  assert.equal(spans[0].startSec, 25.0)
+  assert.equal(spans[0].durationSec, 0)
+  assert.equal(spans[0].open, true)
+})
+
+test("parseFreezeDetect: multiple spans with one dangling", () => {
+  const stderr = [
+    "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 5.1",
+    "[freezedetect @ 0x1] lavfi.freezedetect.freeze_duration: 3.2",
+    "[freezedetect @ 0x1] lavfi.freezedetect.freeze_start: 15.0",
+  ].join("\n")
+  const spans = parseFreezeDetect(stderr)
+  assert.equal(spans.length, 2)
+  assert.equal(spans[0].startSec, 5.1)
+  assert.equal(spans[0].durationSec, 3.2)
+  assert.equal(spans[0].open, undefined)
+  assert.equal(spans[1].startSec, 15.0)
+  assert.equal(spans[1].durationSec, 0)
+  assert.equal(spans[1].open, true)
+})
+
 test("hasAudioStream: detects an Audio stream line in ffmpeg -i output", () => {
   const withAudio = [
     "  Stream #0:0(und): Video: h264 (avc1 / 0x31637661), yuv420p, 1280x800, 30 fps",
@@ -69,6 +98,16 @@ test("checkBlackFrames: no black spans passes with a clean detail", () => {
   assert.match(r.detail, /no black/)
 })
 
+test("checkBlackFrames: exactly at half threshold passes", () => {
+  const r = checkBlackFrames([{ startSec: 0, endSec: 15, durationSec: 15 }], 30)
+  assert.equal(r.ok, true)
+})
+
+test("checkBlackFrames: zero duration passes (emptiness is video-exists job)", () => {
+  const r = checkBlackFrames([{ startSec: 0, endSec: 5, durationSec: 5 }], 0)
+  assert.equal(r.ok, true)
+})
+
 test("checkComputedDuration: within tolerance passes", () => {
   const r = checkComputedDuration(10.4, 10, 0.5)
   assert.equal(r.ok, true)
@@ -78,5 +117,17 @@ test("checkComputedDuration: far too short fails and reports both numbers", () =
   const r = checkComputedDuration(4, 10, 0.5)
   assert.equal(r.ok, false)
   assert.match(r.detail, /4/)
+  assert.match(r.detail, /10/)
+})
+
+test("checkComputedDuration: default tolerance is 0.5 (two arguments)", () => {
+  const r = checkComputedDuration(10.4, 10)
+  assert.equal(r.ok, true)
+})
+
+test("checkComputedDuration: far too long fails and reports both numbers", () => {
+  const r = checkComputedDuration(25, 10, 0.5)
+  assert.equal(r.ok, false)
+  assert.match(r.detail, /25/)
   assert.match(r.detail, /10/)
 })

@@ -34,7 +34,9 @@ function parseBlackDetect(stderr) {
 /**
  * freezedetect emits start / duration / end as separate lines, so pair them
  * by walking in order: a `freeze_start` opens a span and the next
- * `freeze_duration` closes it.
+ * `freeze_duration` closes it. If a freeze_start is never matched with a
+ * freeze_duration, the freeze was still happening when the recording ended —
+ * emit it as open: true with durationSec: 0.
  */
 function parseFreezeDetect(stderr) {
   const spans = []
@@ -50,6 +52,12 @@ function parseFreezeDetect(stderr) {
       spans.push({ startSec: pendingStart, durationSec: Number(duration[1]) })
       pendingStart = null
     }
+  }
+  // Emit any dangling freeze_start as unresolved. open: true means the freeze
+  // had not resolved when the recording ended. durationSec: 0 is intentional
+  // (not null) so Task 5's .toFixed(1) call doesn't throw.
+  if (pendingStart !== null) {
+    spans.push({ startSec: pendingStart, durationSec: 0, open: true })
   }
   return spans
 }
