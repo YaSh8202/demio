@@ -7,6 +7,7 @@
 import { createRequire } from "node:module"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
 import type { SceneScript } from "./script-schema"
+import log from "../../lib/logger"
 
 const require = createRequire(import.meta.url)
 
@@ -32,7 +33,6 @@ const pure = require("./replay-pure.cjs") as {
     signal?: AbortSignal
   }) => Promise<ReplayOutcome>
   expectedDurationMs: (s: SceneScript) => number
-  normalizeScript: (raw: unknown) => SceneScript
 }
 
 /** Predicted length of a clean take, in ms. */
@@ -57,6 +57,19 @@ export async function replayScene(opts: {
   signal?: AbortSignal
   onStep?: (step: ReplayStep) => void
 }): Promise<ReplayOutcome> {
+  // The deleted `end-url` check was unconditional; its replacement is the
+  // per-step `assert`, which `scriptedActionSchema` marks optional. So a
+  // script whose LAST action carries no assert ends the scene with no proof
+  // it landed anywhere in particular. Warn rather than reject: assert stays
+  // optional on purpose (hand-written scripts, including the shipped
+  // fixture, are allowed), but the gap should be visible rather than silent.
+  const last = opts.script.actions[opts.script.actions.length - 1]
+  if (last && !last.assert) {
+    log.warn(
+      `[demo-workflow] scene ${opts.script.sceneId}: final action \`${last.cmd}\` ` +
+        `has no \`assert\` — this take will finish with no end-state proof`
+    )
+  }
   return pure.runScript({
     script: opts.script,
     exec: execAgentBrowser,

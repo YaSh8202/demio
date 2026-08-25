@@ -168,6 +168,18 @@ This is deliberate — nothing generates scripts yet, and rehearsal (plan 2) is
 what will populate them. The fixture exists precisely because a script must be
 hand-written until then.
 
+**Known limitation:** A **state-dependent `chained` scene is effectively
+single-attempt.** Any retry — an internal one from `recordSceneWithRetry`, or a
+"retry" you choose on the suspension card — re-opens `script.startUrl` in a
+fresh recording context, because the previous attempt's half-executed page is
+not a valid start state. That fresh navigation throws away exactly the in-page
+state the chained scene continues from. So if `scene-02` fails, expect its
+attempts 2 and 3 to fail identically (on the fixture: Main_Page reloads with an
+empty search box, and `press Enter` does nothing), and expect a recovery LLM run
+before each. That is the designed behaviour, not a bug — do not read the
+repeated identical failures as a flaky browser. Skip such a scene rather than
+retrying it, and treat the FIRST attempt's failure as the one worth diagnosing.
+
 25. **Request a plan, suspend at submit_plan, inject the fixture.** In a fresh
     thread, ask the agent to "create a demo of https://en.wikipedia.org/wiki/Main_Page
     showing how search works." The agent explores plan mode, then suspends on
@@ -195,6 +207,19 @@ hand-written until then.
     the filled search box from scene-01**. If the page is blank or reloaded,
     `record restart` is not preserving state — stop and investigate before
     continuing.
+    Also confirm, in the same terminal, that `scenes/scene-02.actions.jsonl`
+    **exists** and that its **first entry's `tsMs` is near zero** (a second or
+    two at most, not tens of seconds):
+    `head -1 scenes/scene-02.actions.jsonl`
+    `record restart` is a different code path from `record start`, and its
+    handler is known to accept-and-ignore at least one of its arguments — so
+    `--log-actions` may be dropped, or timestamps may continue from the prior
+    recording's time base instead of restarting. Either would go unnoticed
+    until `sync.ts` runs `validateEdl`, which is **after every scene has
+    already been recorded** — `edl-pure.cjs`'s grouping math is relative to
+    the recording timeline. Catch it here, at scene 2, not at the end of the
+    run. If the file is missing or its first `tsMs` is large, stop and
+    investigate.
     Expected: scene chaining works via shared page state, not re-navigation.
     This single observation validates the continuity half of the entire design.
 
@@ -211,9 +236,12 @@ hand-written until then.
     any `.webm` or `.mp4`.
 
 29. **Confirm the recovery boundary.** Read `scenes/scene-01.attempt-1.agent.json`
-    (the recovery agent's run from the deviation). The agent's commands must
-    contain none of the script's own commands (must not include `find role searchbox`
-    or `press Enter`).
+    and look at its **`recovery.steps`** array — the recovery agent's own
+    generation steps, persisted there after recovery runs. (`replay` in the same
+    file is the deterministic replay that deviated; it is not the agent.) The
+    commands inside the agent's tool calls must contain none of the script's own
+    commands (must not include `find role searchbox` or `press Enter`), and
+    `recovery.detail` should read `CLEARED: …` or `BLOCKED: …`.
     Expected: recovery is scoped to clearing blockage, not re-performing the scene.
 
 30. **Check the artifact report.** After a clean run (with fixture restored),

@@ -37,7 +37,38 @@ const pure = require("./replay-pure.cjs") as {
   }) => { commands: string[]; resetsPage: boolean }
 }
 
+/**
+ * Attempts per scene before the workflow suspends and asks the user.
+ *
+ * **Known consequence for a state-dependent `chained` scene: it is
+ * effectively single-attempt.** `recordingBracket`'s retry path deliberately
+ * falls back to `open startUrl` + `record start` (attempt N-1's
+ * half-executed wreckage is not a valid start state), and that fresh
+ * navigation discards exactly the in-page state a chained scene continues
+ * from. So attempts 2 and 3 of such a scene are deterministically doomed —
+ * they burn two takes and up to two recovery LLM runs, and "retry with
+ * guidance" on the suspension card can never succeed for them either.
+ *
+ * On the shipped fixture this is concrete: retrying `scene-02` re-opens
+ * Main_Page with an empty search box, so `press Enter` does nothing.
+ *
+ * Not auto-failed on purpose: not every chained scene is state-dependent
+ * (one that merely avoids a redundant reload retries fine), and
+ * short-circuiting the budget would deny a working retry to those.
+ */
 const DEFAULT_MAX_ATTEMPTS = 3
+
+/**
+ * A scene id becomes a path segment (`scenes/<id>.webm`, `.actions.jsonl`,
+ * `.attempt-N.agent.json`), and scene plans are model-generated — so an id
+ * containing `../` or `/` would write outside the workspace.
+ *
+ * `toScenesStep` in demo-video.ts already rejects unsafe ids at the workflow's
+ * entry choke point; this is the same regex re-checked at the point of use,
+ * because `recordSceneWithRetry` is exported and nothing stops a future
+ * caller from bypassing that step. Keep the two in step.
+ */
+const SAFE_SCENE_ID = /^[a-zA-Z0-9._-]+$/
 
 /**
  * Persist a debug artifact for one recording attempt.
@@ -46,7 +77,13 @@ const DEFAULT_MAX_ATTEMPTS = 3
  * so nothing about a given attempt reaches `mastra_messages` and it is
  * otherwise invisible after the run. We write the replay outcome (and the
  * failure context that led into it) next to the scene's other artifacts
- * (`<sceneId>.webm`, `<sceneId>.actions.jsonl`).
+ * (`<sceneId>.webm`, `<sceneId>.actions.jsonl`), plus — when the attempt
+ * deviated — the recovery agent's own steps, which are the only on-disk
+ * proof that recovery stayed inside its boundary.
+ *
+ * Called at most twice per attempt against the same path: once right after
+ * `record stop`, and again with `recovery` merged in. The second write is a
+ * superset of the first, never a replacement for it.
  *
  * Best-effort by construction: a failure to write a debug artifact must never
  * fail the scene that produced it.
@@ -91,6 +128,17 @@ export async function recordSceneWithRetry(opts: {
    * and has no concept of a hint.
    */
   guidance?: string
+  /**
+   * True when this invocation is the workflow resuming a scene the user chose
+   * to retry. `sceneStep` re-runs from the top on resume, so the loop below
+   * restarts at `attempt = 1` and would otherwise treat a resumed retry as a
+   * first attempt — issuing `record restart` for a chained scene against
+   * whatever the *previous failed attempt* left on screen, rather than the
+   * previous scene's clean end state. That failure is silent: replay runs
+   * cleanly from the wrong page and the resulting video still passes
+   * video-exists / black-frames / duration-range.
+   */
+  resumedRetry?: boolean
   signal: AbortSignal
   maxAttempts?: number
   onProgress?: (u: {
@@ -104,6 +152,15 @@ export async function recordSceneWithRetry(opts: {
   | { status: "failed"; lastReport: VerifyReport; attempts: number }
 > {
   const { scene, workspace, modelId, signal } = opts
+  if (!SAFE_SCENE_ID.test(scene.id)) {
+    // Throw rather than return `failed`: a `failed` return feeds the
+    // suspend/retry loop, and retrying a traversal-shaped id can never
+    // succeed. Name the offending id; never silently rewrite it.
+    throw new Error(
+      `record-scene: scene id "${scene.id}" is not a safe filename slug ` +
+        `(must match ${SAFE_SCENE_ID})`
+    )
+  }
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
   let lastReport: VerifyReport = { ok: false, checks: [] }
   let previousFailure = ""
@@ -148,7 +205,10 @@ export async function recordSceneWithRetry(opts: {
       script,
       videoPath,
       actionsPath,
-      isRetry: attempt > 1,
+      // `opts.resumedRetry` ORed in: on a resumed retry the loop starts over
+      // at attempt 1, but the page is still whatever the last failed attempt
+      // left behind — not a valid chained start state.
+      isRetry: attempt > 1 || opts.resumedRetry === true,
     })
     // NOTE: execAgentBrowser takes ONE FULL COMMAND STRING per array
     // element — a single-element array is tokenized as one command, but a
@@ -183,33 +243,58 @@ export async function recordSceneWithRetry(opts: {
     }
 
     // 2. Deterministic replay. No LLM on the happy path.
-    const outcome = await replayScene({
-      script,
-      signal,
-      onStep: (step) =>
-        opts.onProgress?.({
-          sceneId: scene.id,
-          attempt,
-          phase: "recording",
-          detail: `step ${step.index + 1}/${script.actions.length}: ${step.cmd}`,
-        }),
-    })
-
-    // 3. Recording ALWAYS stops before anything else happens.
-    const stop = await execAgentBrowser(["record stop"], { timeout: 30_000 })
-    if (!stop.ok) {
-      log.warn(
-        `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop failed: ${stop.error}`
-      )
+    //
+    // 3. Recording ALWAYS stops before anything else happens — including
+    //    when replay throws. `replayScene` propagates an unresolvable
+    //    agent-browser binary (see its header), and `onStep` reaches
+    //    `writer.write` in the workflow, which can throw synchronously.
+    //    Either would escape past `record stop` and leave the camera rolling
+    //    for the rest of the run, so the stop lives in a `finally`.
+    let outcome: Awaited<ReturnType<typeof replayScene>>
+    try {
+      outcome = await replayScene({
+        script,
+        signal,
+        onStep: (step) =>
+          opts.onProgress?.({
+            sceneId: scene.id,
+            attempt,
+            phase: "recording",
+            detail: `step ${step.index + 1}/${script.actions.length}: ${step.cmd}`,
+          }),
+      })
+    } finally {
+      // Guarded so a throw from the stop itself cannot mask the original
+      // error on the way out of the `finally`.
+      try {
+        const stop = await execAgentBrowser(["record stop"], {
+          timeout: 30_000,
+        })
+        if (!stop.ok) {
+          log.warn(
+            `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop failed: ${stop.error}`
+          )
+        }
+      } catch (err) {
+        log.warn(
+          `[demo-workflow] scene ${scene.id} attempt ${attempt} record stop threw: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        )
+      }
     }
 
-    await writeAgentTranscript(transcriptPath, {
+    const transcript: Record<string, unknown> = {
       sceneId: scene.id,
       attempt,
       modelId,
       previousFailure: previousFailure || null,
       replay: outcome,
-    })
+    }
+    // Written now, before recovery: if recovery hangs or the run is killed
+    // mid-recovery, the replay evidence still survives on disk. Re-written
+    // as a superset below once recovery has a verdict.
+    await writeAgentTranscript(transcriptPath, transcript)
 
     if (outcome.status === "aborted") {
       previousFailure = `aborted mid-replay after ${outcome.steps.length} step(s)`
@@ -235,6 +320,21 @@ export async function recordSceneWithRetry(opts: {
         deviation: outcome.deviation,
         guidance: opts.guidance,
         signal,
+      })
+      // The recovery boundary — "may clear obstacles, must never perform the
+      // scene's own scripted actions" — is the load-bearing rule of this
+      // design, and this file is the only place it becomes checkable after
+      // the fact. Persist the agent's steps into the SAME attempt transcript
+      // (a superset of what was written above), so a reviewer can read one
+      // file and confirm none of the script's commands appear in the
+      // recovery agent's tool calls. See checklist item 29.
+      await writeAgentTranscript(transcriptPath, {
+        ...transcript,
+        recovery: {
+          recovered: recovery.recovered,
+          detail: recovery.detail,
+          steps: recovery.steps,
+        },
       })
       previousFailure =
         `deviated at step ${outcome.deviation.index} (${outcome.deviation.cmd}): ` +

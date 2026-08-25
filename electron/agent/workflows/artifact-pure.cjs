@@ -92,14 +92,34 @@ function checkBlackFrames(spans, videoDurationSec) {
 }
 
 /**
+ * Fixed slack added to the upper duration bound, on top of the relative
+ * tolerance. See `checkComputedDuration` for why the band is asymmetric.
+ */
+const UPPER_HEADROOM_SEC = 5
+
+/**
  * Replay is deterministic, so a take's length is predictable from the script.
  * This replaces the old planner-guessed range, whose max had to be clamped up
  * to 120s because raw recordings carried the recorder agent's think-time.
+ *
+ * **The band is deliberately asymmetric — do not "tidy" it back to
+ * symmetric.** `expectedDurationMs` models a take as
+ * `Σ(settleMs + ACTION_BASELINE_MS)`, which omits real per-take costs it
+ * cannot predict: page navigation, network latency, and one subprocess spawn
+ * per command (two when the action carries an `assert`). That error is
+ * strictly ONE-SIDED — actual is always ≥ expected, never below — and it is
+ * roughly *fixed* per command rather than proportional to settle time, so a
+ * purely relative upper bound fails good takes on short scripts (a 2.4s
+ * expectation against a real 3-4.5s take). `UPPER_HEADROOM_SEC` absorbs that
+ * un-modelled overhead.
+ *
+ * The lower bound stays purely relative on purpose: it guards truncation —
+ * a take cut short — which genuinely scales with the expected length.
  */
 function checkComputedDuration(actualSec, expectedSec, tolerance) {
   const t = typeof tolerance === "number" ? tolerance : 0.5
   const lo = expectedSec * (1 - t)
-  const hi = expectedSec * (1 + t)
+  const hi = expectedSec * (1 + t) + UPPER_HEADROOM_SEC
   const ok = actualSec >= lo && actualSec <= hi
   return {
     ok,
@@ -117,4 +137,5 @@ module.exports = {
   checkBlackFrames,
   checkComputedDuration,
   MAX_BLACK_FRACTION,
+  UPPER_HEADROOM_SEC,
 }

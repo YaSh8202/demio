@@ -161,6 +161,14 @@ const sceneStep = createStep({
       voiceExpected: false,
       guidance:
         resumeData?.action === "retry" ? resumeData.guidance : undefined,
+      // This step re-runs from the top on resume, so `recordSceneWithRetry`
+      // starts a fresh loop at attempt 1 and would otherwise open the take as
+      // if nothing had happened. It has: the previous invocation's last
+      // failed attempt left the browser mid-scene. Tell it so, or a chained
+      // scene's `record restart` continues from that wreckage instead of the
+      // previous scene's clean end state — silently, since replay then runs
+      // fine from the wrong page.
+      resumedRetry: resumeData?.action === "retry",
       signal: abortSignal,
       onProgress: (u) => {
         void writer.write({

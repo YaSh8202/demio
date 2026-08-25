@@ -6,6 +6,7 @@ const {
   hasAudioStream,
   checkBlackFrames,
   checkComputedDuration,
+  UPPER_HEADROOM_SEC,
 } = require("./artifact-pure.cjs")
 
 test("parseBlackDetect: extracts every span", () => {
@@ -126,8 +127,14 @@ test("checkComputedDuration: default tolerance is 0.5 (two args inside bound)", 
 })
 
 test("checkComputedDuration: default tolerance is 0.5 (two args outside bound)", () => {
-  const r = checkComputedDuration(16, 10)
+  // 10 * 1.5 + 5 = 20 is the upper bound, so the "outside" case must clear it.
+  const r = checkComputedDuration(21, 10)
   assert.equal(r.ok, false)
+})
+
+test("checkComputedDuration: exactly on the upper bound passes", () => {
+  const r = checkComputedDuration(20, 10)
+  assert.equal(r.ok, true)
 })
 
 test("checkComputedDuration: far too long fails and reports both numbers", () => {
@@ -135,4 +142,36 @@ test("checkComputedDuration: far too long fails and reports both numbers", () =>
   assert.equal(r.ok, false)
   assert.match(r.detail, /25/)
   assert.match(r.detail, /10/)
+})
+
+// The upper bound must absorb the per-command overhead `expectedDurationMs`
+// does not model (navigation, network, one subprocess spawn per command).
+// Numbers here are the shipped fixture's scene-02: one action, settleMs 2000,
+// ACTION_BASELINE_MS 400 → expected 2.4s, against a real take of 3-4.5s.
+test("checkComputedDuration: a short script's real take fits inside the headroom", () => {
+  for (const actual of [3.0, 4.0, 4.5]) {
+    const r = checkComputedDuration(actual, 2.4)
+    assert.equal(r.ok, true, `${actual}s should pass against 2.4s expected`)
+  }
+  // The headroom is what carries those: the relative-only band was
+  // [1.2, 3.6], so 4.0s and 4.5s would both have failed a good take. Tied to
+  // the exported constant so shrinking it re-breaks this test loudly.
+  assert.ok(2.4 * 1.5 < 4.0, "relative-only upper bound must be below 4.0s")
+  assert.ok(
+    2.4 * 1.5 + UPPER_HEADROOM_SEC >= 4.5,
+    "UPPER_HEADROOM_SEC must still cover a 4.5s take against 2.4s expected"
+  )
+})
+
+test("checkComputedDuration: a genuine hang still fails", () => {
+  const r = checkComputedDuration(60, 10)
+  assert.equal(r.ok, false)
+  assert.match(r.detail, /60/)
+})
+
+test("checkComputedDuration: headroom does not loosen the lower bound", () => {
+  // Truncation is proportional, so the lower bound is untouched: 1.1s against
+  // a 2.4s expectation is still short of 2.4 * 0.5 = 1.2s.
+  const r = checkComputedDuration(1.1, 2.4)
+  assert.equal(r.ok, false)
 })

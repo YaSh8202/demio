@@ -1,5 +1,10 @@
 // Pure verification predicates shared by verify.ts. CommonJS so node --test
 // runs them directly with zero build step.
+//
+// `parseActionsLog` is currently unreferenced by verify.ts: the deterministic
+// replay engine knows in real time whether every step landed, so re-deriving
+// it from the action log afterwards would be worse evidence. It is retained
+// deliberately for a later plan, not left behind by accident — do not delete.
 "use strict"
 
 function parseActionsLog(jsonl) {
