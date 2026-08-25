@@ -461,6 +461,8 @@ Clear whatever is blocking that step, then stop. The scene will be retaken from 
 
 **You MUST NOT** run any command from the script above, or anything equivalent to one. Do not click Create. Do not fill the form. Do not advance the flow. If you complete part of the scene, the retake will replay those steps again and fail on duplicated work.
 
+**Watch for the case where the obstacle IS the step**: a disabled button, a field that rejected what was typed, a control that is present but inert. There, "clear it" and "do it" are the same action no matter which verb is involved (click, toggle, drag, keyboard shortcut, select) — satisfying that precondition performs the step. Do not attempt it. Spend a command confirming what you are looking at, then reply BLOCKED with what you observed.
+
 Use at most 3 commands. If 3 commands cannot clear it, stop and report failure — an unrecoverable blocker is a better outcome than a corrupted starting state.
 
 # Tools
