@@ -2,6 +2,8 @@
 
 import { z } from "zod"
 
+import { sceneScriptSchema } from "./script-schema"
+
 export const sceneSchema = z.object({
   id: z.string().describe("Stable slug, e.g. scene-01"),
   title: z.string(),
@@ -14,6 +16,12 @@ export const sceneSchema = z.object({
     .array(z.string())
     .min(1)
     .describe("Ordered human-readable browser actions for the recorder agent"),
+  script: sceneScriptSchema
+    .optional()
+    .describe(
+      "Executable script produced by rehearsal. When present the record pass " +
+        "replays it deterministically and `actions` is documentation only."
+    ),
   expectedOutcome: z
     .string()
     .describe("Verifiable end-state assertion, e.g. 'board Demio QA visible with 3 lists'"),
@@ -38,7 +46,10 @@ export type Scene = z.infer<typeof sceneSchema>
 export const scenePlanSchema = z.object({
   demoTitle: z.string(),
   targetUrl: z.string(),
-  scenes: z.array(sceneSchema).min(1).max(12),
+  // No upper bound: scene count is a narrative decision the rehearsal agent
+  // makes per demo. Long flows are split into consecutive `chained` scenes
+  // rather than one long scene, which keeps the retake unit small.
+  scenes: z.array(sceneSchema).min(1),
 })
 export type ScenePlan = z.infer<typeof scenePlanSchema>
 
@@ -46,7 +57,15 @@ export const verifyReportSchema = z.object({
   ok: z.boolean(),
   checks: z.array(
     z.object({
-      name: z.enum(["video-exists", "duration-range", "actions-ok", "end-url"]),
+      name: z.enum([
+        "video-exists",
+        "duration-range",
+        "actions-ok",
+        "end-url",
+        "black-frames",
+        "freeze-frames",
+        "audio-track",
+      ]),
       ok: z.boolean(),
       detail: z.string(),
     })
