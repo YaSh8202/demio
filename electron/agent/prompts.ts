@@ -6,7 +6,7 @@
 //   3. Inlined agent-browser SKILL.md (LLMs don't know the CLI)
 
 import agentBrowserSkill from "./agent-browser-skill.md?raw"
-import type { Scene } from "./workflows/schemas"
+import type { SceneScript } from "./workflows/script-schema"
 
 /**
  * @deprecated No runtime caller since Task 7/12 — kept as reference for
@@ -421,83 +421,61 @@ ${agentBrowserSkill}
 `
 }
 
-// ── Recorder agent instructions (Task 11, ADR-003/ADR-005) ─────────────────
-//
-// The recorder is a short-lived Agent spun up per scene, per attempt, by
-// `recordSceneWithRetry` (workflows/record-scene.ts). The harness — not the
-// agent — owns the recording lifecycle: it opens the scene's start URL,
-// starts the recording, runs the recorder for exactly this one scene's
-// actions, then stops the recording and mechanically verifies the result.
-// So this prompt deliberately excludes: record start/stop, script/plan
-// drafting, phase machine, present_files, synthesize_voiceover. It carries
-// forward only the browser-interaction guidance a one-scene actor still
-// needs — the locator ladder, OAuth-redirect detection, and wait discipline
-// from rolePrompt's recording-phase section above — scoped to the tools the
-// recorder actually has (Workspace's execute_command/read_file/edit_file,
-// via `createDemioAgent`'s `toolFilter`).
-
-export interface RecorderInstructionsContext {
+export interface RecoveryInstructionsContext {
   workspace: string
-  scene: Scene
-  attempt: number
-  previousFailure?: string
+  script: SceneScript
+  deviation: { index: number; cmd: string; detail: string }
 }
 
-export function recorderInstructions(ctx: RecorderInstructionsContext): string {
-  const { workspace, scene, attempt, previousFailure } = ctx
+/**
+ * The recovery agent runs with the recording STOPPED. Its only job is to
+ * clear whatever blocked a scripted step so the scene can be retaken
+ * cleanly. It must never perform the scene's own actions: the retake replays
+ * the script from step 0, so any progress this agent makes turns into
+ * duplicate work ("board already exists") on the retake, and desynchronises
+ * the action log from the script the narration anchors reference.
+ */
+export function recoveryInstructions(ctx: RecoveryInstructionsContext): string {
+  const { workspace, script, deviation } = ctx
 
-  const actionsList = scene.actions
-    .map((action, i) => `${i + 1}. ${action}`)
+  const scriptList = script.actions
+    .map(
+      (a, i) =>
+        `${i}. ${a.cmd}${i === deviation.index ? "   ← FAILED HERE" : ""}`
+    )
     .join("\n")
 
-  // `previousFailure` already self-describes which phase it failed in
-  // (e.g. "failed before recording — ...", "failed during recording — ...",
-  // "failed verification — ...") — see record-scene.ts's failure-message
-  // construction — so this block doesn't hardcode a phase name itself.
-  const retryBlock =
-    attempt > 1 && previousFailure
-      ? `\n\nPrevious attempt ${previousFailure}. Adjust your approach accordingly.`
-      : ""
+  return `You are the Demio recovery agent. A scripted demo step failed. **The screen recording is currently STOPPED** — nothing you do now appears in the video.
 
-  return `You are the Demio recorder agent. You are recording ONE scene of a product demo. Recording is ALREADY running — do NOT run \`agent-browser record start\` or \`agent-browser record stop\`, and do NOT open a new page unless one of your actions explicitly requires navigation. Perform these actions smoothly and deliberately, in order:
+The script being replayed:
 
-${actionsList}
+${scriptList}
 
-Scene goal: ${scene.goal}
+Step ${deviation.index} (\`${deviation.cmd}\`) failed: ${deviation.detail}
+
+# Your only job
+
+Clear whatever is blocking that step, then stop. The scene will be retaken from step 0 immediately after you finish.
+
+**You MAY**: dismiss a cookie banner or modal, close an overlay, scroll an element into view, wait for a slow render, reload the page, or navigate back to \`${script.startUrl}\`.
+
+**You MUST NOT** run any command from the script above, or anything equivalent to one. Do not click Create. Do not fill the form. Do not advance the flow. If you complete part of the scene, the retake will replay those steps again and fail on duplicated work.
+
+Use at most 3 commands. If 3 commands cannot clear it, stop and report failure — an unrecoverable blocker is a better outcome than a corrupted starting state.
 
 # Tools
 
-You have workspace tools only: \`mastra_workspace_execute_command\` (run \`agent-browser\` and shell commands), \`mastra_workspace_read_file\`, \`mastra_workspace_edit_file\`. There is no \`present_files\` or \`synthesize_voiceover\` tool in this run — do not attempt to call them.
+\`mastra_workspace_execute_command\` only. Every call MUST pass a \`description\` — a clear 5-10 word summary shown as the shell card's title.
 
-Every \`mastra_workspace_execute_command\` call MUST pass a \`description\` — a clear 5-10 word summary of what the command does. It is shown in the chat UI as the shell card's title.
+Files live in \`${workspace}\`; \`$WORKSPACE\` is set in the shell environment.
 
-# Workspace
+# Locators
 
-Files live in \`${workspace}\`. The \`mastra_workspace_execute_command\` tool sets \`$WORKSPACE\` to this directory in its shell environment — reference it directly when a command needs an absolute path.
+Prefer a fresh \`agent-browser snapshot -i\` then \`click @eN\`, or \`find role button --name "..." --exact\`. Never \`find text\` for a clickable control, and never \`find nth\` with a positional guess.
 
-# Locator priority (highest reliability first)
+# Reply
 
-1. **Snapshot refs**: \`agent-browser snapshot -i\`, then \`click @eN\` against the ref shown in the tree. Most precise selector — never misfires on responsive duplicates or hydration ghosts.
-2. **Form submits**: for any button inside a \`<form>\` (login, sign-up, search), prefer \`agent-browser click 'form button[type="submit"]'\`. Dodges OAuth buttons (Google, GitHub), hydration-duplicate buttons, and shadcn responsive spans.
-3. **Other clickable controls** → \`find role button --name "Save" --exact click\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
-4. **Form inputs** → \`find label "Email" fill "..."\` or \`find placeholder "Search..."\`.
-5. **Non-interactive text waits** → \`find text "Loaded" --exact\`.
-
-**NEVER** \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button --name "Login" --exact click\` or a snapshot ref instead.
-
-**OAuth detection**: after every click that should keep you on the same origin, follow with \`agent-browser wait --url '<expected-pattern>' --timeout 5000\`. If the URL becomes \`accounts.google.com\` / \`github.com/login\` / similar, the click hit an OAuth button — re-open the original URL and switch to \`click 'form button[type="submit"]'\`.
-
-**DO NOT retry blindly** with another role or \`find nth N\` when a locator fails. If \`find role <X>\` returns "Ambiguous" or "Element not found", re-snapshot with \`agent-browser snapshot -i\` and use \`click @eN\` from the fresh snapshot. \`find nth\` with a positional guess is the leading cause of clicking the wrong button (most often an OAuth button next to the form submit).
-
-**Locator failure ≠ bad credentials.** If a click fails or auth seems to fail, you have NOT proven the user's input is wrong. Exhaust this list before saying so: (1) snapshot \`@eN\` ref, (2) \`click 'form button[type="submit"]'\`, (3) \`find role button --exact\`, (4) \`find label\` for inputs. Only after a successful submit produces an explicit on-page error message ("invalid email or password") may you conclude credentials are wrong.
-
-Prefer \`wait --stable <ms>\` or \`wait --text "<known>"\` over magic \`wait <ms>\` sleeps. Use \`wait --url '<pattern>' --timeout <ms>\` after any navigation-causing click to confirm you landed where expected before continuing — this is how continuity across the scene's actions is verified as you go.
-
-NEVER invent \`agent-browser\` flags — consult the CLI reference below.
-
-# Completion
-
-When every action above is complete and the page shows: ${scene.expectedOutcome}, verify the URL starts with ${scene.endUrl} using \`agent-browser get url\`, then reply exactly DONE. If you are irrecoverably stuck, reply exactly STUCK: <one-line reason>.${retryBlock}
+Reply exactly \`CLEARED: <what you did>\` if the blocker is gone, or exactly \`BLOCKED: <one-line reason>\` if it is not. Your reply IS read — it decides whether the scene is retaken or escalated to the user.
 
 # agent-browser CLI reference
 
