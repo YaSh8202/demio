@@ -3,14 +3,20 @@
 "use strict"
 
 function parseActionsLog(jsonl) {
-  const lines = String(jsonl).split("\n").filter((l) => l.trim().length > 0)
+  const lines = String(jsonl)
+    .split("\n")
+    .filter((l) => l.trim().length > 0)
   const failed = []
   lines.forEach((line, i) => {
     let entry
     try {
       entry = JSON.parse(line)
     } catch {
-      failed.push({ line: i + 1, action: "<unparseable>", error: "invalid JSON" })
+      failed.push({
+        line: i + 1,
+        action: "<unparseable>",
+        error: "invalid JSON",
+      })
       return
     }
     if (entry.ok !== true) {
@@ -24,38 +30,4 @@ function parseActionsLog(jsonl) {
   return { total: lines.length, failed }
 }
 
-function checkDurationRange(durationSec, scene) {
-  const min = scene.minDurationSec ?? 4
-  const max = scene.maxDurationSec ?? 90
-  const ok = durationSec >= min && durationSec <= max
-  return {
-    ok,
-    detail: ok
-      ? `duration ${durationSec}s within [${min}, ${max}]`
-      : `duration ${durationSec}s outside [${min}, ${max}]`,
-  }
-}
-
-function normalizeUrl(u) {
-  try {
-    const url = new URL(u)
-    url.hash = ""
-    return url.toString().replace(/\/+$/, "")
-  } catch {
-    return String(u).replace(/\/+$/, "")
-  }
-}
-
-function checkEndUrl(finalUrl, scene) {
-  const actual = normalizeUrl(finalUrl)
-  const expected = normalizeUrl(scene.endUrl)
-  const ok = actual.startsWith(expected)
-  return {
-    ok,
-    detail: ok
-      ? `final url matches ${expected}`
-      : `final url ${actual} does not start with ${expected}`,
-  }
-}
-
-module.exports = { parseActionsLog, checkDurationRange, checkEndUrl }
+module.exports = { parseActionsLog }
