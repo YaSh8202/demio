@@ -40,7 +40,7 @@
 | **Modify** `electron/agent/workflows/verify.ts` | Artifact-only. |
 | **Modify** `electron/agent/workflows/record-scene.ts` | Replay replaces the recorder agent; continuity bracket; camera-off recovery. |
 | **Modify** `electron/agent/prompts.ts` | `recorderInstructions()` → `recoveryInstructions()`, narrowly scoped. |
-| **Modify** `docs/manual-e2e-checklist.md` | Add the end-to-end replay walkthrough. |
+| **Modify** `docs/superpowers/plans/manual-e2e-checklist.md` | Add section E for the end-to-end replay walkthrough. |
 
 ---
 
@@ -1711,7 +1711,7 @@ git commit -m "feat: replay replaces the recorder agent in the scene step"
 
 **Files:**
 - Create: `docs/superpowers/fixtures/example-script.json`
-- Modify: `docs/manual-e2e-checklist.md`
+- Modify: `docs/superpowers/plans/manual-e2e-checklist.md` (add section E)
 
 This is the task that validates the whole plan. **Nothing here is automated** — there is no browser in CI, and the point is to prove the format against a real site before an agent starts generating it.
 
@@ -1822,7 +1822,7 @@ Work through steps 1–7 above against a real browser. Record any deviation from
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/fixtures/example-script.json docs/manual-e2e-checklist.md
+git add docs/superpowers/fixtures/example-script.json docs/superpowers/plans/manual-e2e-checklist.md
 git commit -m "docs: manual e2e walkthrough for deterministic replay"
 ```
 

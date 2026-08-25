@@ -157,3 +157,79 @@ existing pre-migration thread if available (for item 8).
     Expected: the demo still renders retimed (idle time cut, not raw-length
     passthrough) with a silent audio track, and the scene's `edl.json` has
     `segments: []`.
+
+## E. Replay foundation (plan: 2026-08-24-replay-foundation)
+
+Prerequisite: `bun start`, a thread open, a model configured. No rehearsal agent
+exists yet — the script is supplied by hand in the fixture.
+
+**Known limitation:** A scene with no `script` fails loudly, naming the scene id.
+This is deliberate — nothing generates scripts yet, and rehearsal (plan 2) is
+what will populate them. The fixture exists precisely because a script must be
+hand-written until then.
+
+25. **Request a plan, suspend at submit_plan, inject the fixture.** In a fresh
+    thread, ask the agent to "create a demo of https://en.wikipedia.org/wiki/Main_Page
+    showing how search works." The agent explores plan mode, then suspends on
+    `submit_plan` with a file path. Do not approve yet.
+    - Open a terminal and navigate to `~/.demio/workspaces/`
+    - Find the active thread's directory (workspace directories are named by threadId)
+    - Inside `plans/`, find the `.md` file the agent just wrote
+    - Replace the scene plan JSON (inside the fenced ` ```json ` block) with the
+      fixture from `docs/superpowers/fixtures/example-script.json`
+    - Save the file
+    - Approve the plan in the UI
+    Expected: the plan approval reads the updated file from disk, extracts the
+    fixture JSON, and mode flips to execute.
+
+26. **Watch scene-01 replay without snapshot.** Expect exactly one `open`, one
+    `record start`, one fill (semantic locator action), one wait (assertion).
+    Confirm in the shell cards that **no snapshot is taken** — replay must not
+    look at the page; it reads only the action log.
+    Expected: the scene runs deterministically from script alone, with no image
+    comparison or browser introspection during playback.
+
+27. **Confirm continuity on scene-02 via first frame.** Expect a single
+    `record restart` command and **no `open`** — the browser stays on the filled
+    search page. Play `scenes/scene-02.webm`: **the first frame must already show
+    the filled search box from scene-01**. If the page is blank or reloaded,
+    `record restart` is not preserving state — stop and investigate before
+    continuing.
+    Expected: scene chaining works via shared page state, not re-navigation.
+    This single observation validates the continuity half of the entire design.
+
+28. **Force a deviation to test recovery isolation.** Edit the fixture in the
+    thread's workspace (not the source file) so scene-01's `cmd` targets a role
+    that does not exist (e.g. change `find role searchbox` to `find role slider`).
+    Re-run `generate_demo`.
+    - Expect: replay stops at step 0, `record stop` runs immediately, the recovery
+      agent runs **after** the stop (with recording off), and a retake follows.
+    - Play any resulting video file: **the failed attempt must not appear in any
+      video file.** This is the single most important assertion in this checklist.
+      Failed recordings must be discarded, not leaked into output.
+    Expected: recovery isolation holds — no frame of the failed attempt reaches
+    any `.webm` or `.mp4`.
+
+29. **Confirm the recovery boundary.** Read `scenes/scene-01.attempt-1.agent.json`
+    (the recovery agent's run from the deviation). The agent's commands must
+    contain none of the script's own commands (must not include `find role searchbox`
+    or `press Enter`).
+    Expected: recovery is scoped to clearing blockage, not re-performing the scene.
+
+30. **Check the artifact report.** After a clean run (with fixture restored),
+    confirm the `VerifyReport` carries checks: `video-exists`, `duration-range`,
+    `black-frames`, `freeze-frames`. Confirm `duration-range` reports an *expected*
+    value derived from the script (sum of `settleMs` plus action baseline), not a
+    `[4, 120]` range.
+    Expected: verification knows the expected recording duration from the script,
+    and can flag recordings that deviate significantly from it.
+
+31. **Note audio-track absence (expected at this stage).** `audio-track` does not
+    appear in the `VerifyReport` at all — the check is skipped entirely because
+    `voiceExpected` is hard-coded `false` in `demo-video.ts`. This is correct:
+    TTS is synthesized and muxed *after* every scene records, so a raw scene
+    `.webm` can never carry narration at verify time. A later phase (plan 3) moves
+    TTS ahead of recording and flips `voiceExpected` to `init.voiceId !== null`.
+    Do not try to add audio to the scene at this stage; that work is planned.
+    Expected: audio absence is understood as a pipeline sequencing issue, not a
+    bug in replay or verification.
