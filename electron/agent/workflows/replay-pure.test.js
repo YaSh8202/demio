@@ -1,6 +1,12 @@
 const test = require("node:test")
 const assert = require("node:assert")
 const { normalizeScript } = require("./replay-pure.cjs")
+const {
+  buildStepCommands,
+  classifyStep,
+  expectedDurationMs,
+  runScript,
+} = require("./replay-pure.cjs")
 
 test("normalizeScript: applies settleMs and continuity defaults", () => {
   const s = normalizeScript({
@@ -12,6 +18,8 @@ test("normalizeScript: applies settleMs and continuity defaults", () => {
   assert.equal(s.continuity, "independent")
   assert.equal(s.oneShot, false)
   assert.equal(s.actions[0].settleMs, 600)
+  assert.equal(s.actions[0].assert, undefined)
+  assert.equal(s.actions[0].narrationAnchor, undefined)
 })
 
 test("normalizeScript: preserves explicit values", () => {
@@ -21,7 +29,9 @@ test("normalizeScript: preserves explicit values", () => {
     oneShot: true,
     startUrl: "https://example.com",
     endUrl: "https://example.com/done",
-    actions: [{ cmd: "click @e1", settleMs: 1500, assert: '--url "https://x"' }],
+    actions: [
+      { cmd: "click @e1", settleMs: 1500, assert: '--url "https://x"' },
+    ],
   })
   assert.equal(s.continuity, "chained")
   assert.equal(s.oneShot, true)
@@ -31,7 +41,131 @@ test("normalizeScript: preserves explicit values", () => {
 
 test("normalizeScript: rejects a script with no actions", () => {
   assert.throws(
-    () => normalizeScript({ sceneId: "s", startUrl: "u", endUrl: "u", actions: [] }),
+    () =>
+      normalizeScript({
+        sceneId: "s",
+        startUrl: "u",
+        endUrl: "u",
+        actions: [],
+      }),
     /at least one action/
   )
+})
+
+test("buildStepCommands: bare action is one command", () => {
+  const cmds = buildStepCommands({ cmd: "click @e1", settleMs: 600 })
+  assert.deepEqual(cmds, ["click @e1"])
+})
+
+test("buildStepCommands: assert becomes a following wait command", () => {
+  const cmds = buildStepCommands({
+    cmd: "click @e1",
+    assert: '--url "https://x/b/"',
+    settleMs: 600,
+  })
+  assert.deepEqual(cmds, ["click @e1", 'wait --url "https://x/b/"'])
+})
+
+test("classifyStep: command failure is a deviation", () => {
+  const r = classifyStep({
+    cmdResult: { ok: false, error: "Element not found" },
+    assertResult: null,
+  })
+  assert.equal(r.status, "deviation")
+  assert.match(r.detail, /Element not found/)
+})
+
+test("classifyStep: assertion failure is a deviation even when the command succeeded", () => {
+  const r = classifyStep({
+    cmdResult: { ok: true, output: "" },
+    assertResult: { ok: false, error: "timeout waiting for url" },
+  })
+  assert.equal(r.status, "deviation")
+  assert.match(r.detail, /assertion/)
+})
+
+test("classifyStep: both clean is ok", () => {
+  const r = classifyStep({
+    cmdResult: { ok: true, output: "" },
+    assertResult: { ok: true, output: "" },
+  })
+  assert.equal(r.status, "ok")
+})
+
+test("expectedDurationMs: sums settle time plus a per-action baseline", () => {
+  const script = normalizeScript({
+    sceneId: "s",
+    startUrl: "u",
+    endUrl: "u",
+    actions: [
+      { cmd: "a", settleMs: 1000 },
+      { cmd: "b", settleMs: 2000 },
+    ],
+  })
+  // 3000ms settle + 2 * 400ms baseline = 3800
+  assert.equal(expectedDurationMs(script), 3800)
+})
+
+test("runScript: every step ok returns ok with one entry per action", async () => {
+  const seen = []
+  const exec = async (cmds) => {
+    seen.push(cmds[0])
+    return { ok: true, output: "", exitCode: 0, durationMs: 10 }
+  }
+  const script = normalizeScript({
+    sceneId: "s",
+    startUrl: "u",
+    endUrl: "u",
+    actions: [
+      { cmd: "click @e1", settleMs: 0 },
+      { cmd: "click @e2", settleMs: 0 },
+    ],
+  })
+  const r = await runScript({ script, exec })
+  assert.equal(r.status, "ok")
+  assert.equal(r.steps.length, 2)
+  assert.deepEqual(seen, ["click @e1", "click @e2"])
+})
+
+test("runScript: stops at the first deviation and reports its index", async () => {
+  const exec = async (cmds) =>
+    cmds[0] === "click @e2"
+      ? { ok: false, error: "Element not found", exitCode: 1, durationMs: 5 }
+      : { ok: true, output: "", exitCode: 0, durationMs: 5 }
+  const script = normalizeScript({
+    sceneId: "s",
+    startUrl: "u",
+    endUrl: "u",
+    actions: [
+      { cmd: "click @e1", settleMs: 0 },
+      { cmd: "click @e2", settleMs: 0 },
+      { cmd: "click @e3", settleMs: 0 },
+    ],
+  })
+  const r = await runScript({ script, exec })
+  assert.equal(r.status, "deviation")
+  assert.equal(r.deviation.index, 1)
+  assert.equal(r.deviation.cmd, "click @e2")
+  // step 3 must not have run
+  assert.equal(r.steps.length, 2)
+})
+
+test("runScript: an aborted signal stops before the next step", async () => {
+  const controller = new AbortController()
+  const exec = async () => {
+    controller.abort()
+    return { ok: true, output: "", exitCode: 0, durationMs: 1 }
+  }
+  const script = normalizeScript({
+    sceneId: "s",
+    startUrl: "u",
+    endUrl: "u",
+    actions: [
+      { cmd: "a", settleMs: 0 },
+      { cmd: "b", settleMs: 0 },
+    ],
+  })
+  const r = await runScript({ script, exec, signal: controller.signal })
+  assert.equal(r.steps.length, 1)
+  assert.equal(r.status, "aborted")
 })
