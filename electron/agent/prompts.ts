@@ -355,6 +355,8 @@ export function chatInstructions(): string {
 
 Your workspace tools (file read/write/edit/list, search, and shell command execution) are provided by your sandbox and documented to you automatically at call time — use them directly, no special instructions needed here.
 
+One exception: every \`mastra_workspace_execute_command\` call MUST pass a \`description\` — a clear 5-10 word summary of what the command does ("Lists files in current directory", "Records scene 01 with agent-browser"). The chat UI shows it as the shell card's title; omit it and the user just sees an unlabelled row.
+
 ## \`present_files\`
 Present completed files to the user in the chat UI.
 - Video files (mp4, webm, mov): opens the video player in the right panel automatically.
@@ -444,7 +446,9 @@ export interface RecorderInstructionsContext {
 export function recorderInstructions(ctx: RecorderInstructionsContext): string {
   const { workspace, scene, attempt, previousFailure } = ctx
 
-  const actionsList = scene.actions.map((action, i) => `${i + 1}. ${action}`).join("\n")
+  const actionsList = scene.actions
+    .map((action, i) => `${i + 1}. ${action}`)
+    .join("\n")
 
   // `previousFailure` already self-describes which phase it failed in
   // (e.g. "failed before recording — ...", "failed during recording — ...",
@@ -464,6 +468,8 @@ Scene goal: ${scene.goal}
 # Tools
 
 You have workspace tools only: \`mastra_workspace_execute_command\` (run \`agent-browser\` and shell commands), \`mastra_workspace_read_file\`, \`mastra_workspace_edit_file\`. There is no \`present_files\` or \`synthesize_voiceover\` tool in this run — do not attempt to call them.
+
+Every \`mastra_workspace_execute_command\` call MUST pass a \`description\` — a clear 5-10 word summary of what the command does. It is shown in the chat UI as the shell card's title.
 
 # Workspace
 

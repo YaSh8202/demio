@@ -397,15 +397,44 @@ function appendTerminalTranscript(
     : `${transcript}\n${segment}`
 }
 
+/**
+ * ANSI escape sequences. The agent's sandbox runs commands with
+ * `FORCE_COLOR=1` (`electron/agent/workspace-factory.ts`), so shell output
+ * arrives colourised — and this `<pre>` renders no ANSI, it would just print
+ * the raw escape bytes as garbage.
+ *
+ * Kept byte-for-byte in sync with the main-process copy in
+ * `electron/agent/tools/execute-command.ts` (itself Mastra's own `ANSI_RE`):
+ * it covers OSC sequences terminated by BEL, ST or \u009C, which narrower
+ * patterns miss for tools emitting OSC-8 hyperlinks (`gh`, `ls --hyperlink`).
+ */
+const ESC = String.fromCharCode(27)
+const ANSI_PATTERN = new RegExp(
+  `(?:${ESC}\\][\\s\\S]*?(?:\\u0007|${ESC}\\u005C|\\u009C))|(?:[${ESC}\\u009B][\\[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~])`,
+  "g"
+)
+
+/**
+ * `rawOutput` is the tool part's `output` before `asObject` narrowing: the
+ * workspace shell tool (`mastra_workspace_execute_command`) resolves to a
+ * plain STRING — Mastra's `executeCommand` returns already-tailed, already-
+ * truncated text, not the `{stdout, stderr, exitCode}` record the deleted
+ * hand-rolled terminal tool returned. Without this branch every shell card
+ * fell through to "Command completed with no output."
+ */
 function getTerminalTranscript(
   output?: TerminalToolOutput,
-  errorText?: string
+  errorText?: string,
+  rawOutput?: unknown
 ): string {
   let transcript = ""
+  if (typeof rawOutput === "string") {
+    transcript = appendTerminalTranscript(transcript, rawOutput)
+  }
   transcript = appendTerminalTranscript(transcript, output?.stdout)
   transcript = appendTerminalTranscript(transcript, output?.stderr)
   transcript = appendTerminalTranscript(transcript, errorText)
-  return transcript
+  return transcript.replace(ANSI_PATTERN, "")
 }
 
 function getTerminalMetadata(output?: TerminalToolOutput): string[] {
@@ -513,9 +542,12 @@ function TerminalToolCard({ part }: { part: ThreadToolPart }) {
   const input = asObject<TerminalToolInput>(part.input)
   const output = asObject<TerminalToolOutput>(part.output)
   const command = input?.command?.trim()
-  const transcript = getTerminalTranscript(output, part.errorText)
+  const transcript = getTerminalTranscript(output, part.errorText, part.output)
   const metadata = getTerminalMetadata(output)
-  const summary = input?.description?.trim()
+  // Falls back to the command itself: messages persisted before the shell tool
+  // regained its `description` param have none, and an unlabelled "Shell" row
+  // tells the user nothing.
+  const summary = input?.description?.trim() || command
   // const rowMeta = isPendingToolState(part.state) ? ["Running command..."] : []
 
   useEffect(() => {

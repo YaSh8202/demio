@@ -126,6 +126,26 @@ export function createWorkspaceForDir(
   const shimDir = buildShimPath()
   const pathSep = process.platform === "win32" ? ";" : ":"
 
+  // Disable the BUILT-IN execute_command everywhere. Demio registers its own
+  // tool under the same exposed name so the model has to pass a `description`
+  // (the chat UI's "Shell" card title) — see
+  // `electron/agent/tools/execute-command.ts`. Leaving both registered would
+  // collide: workspace tools are spread LAST into the Agent's tool map, so the
+  // built-in would silently win. This must be the last key in the object so it
+  // beats any per-tool entry a caller passed in (per-tool config overrides the
+  // top-level default, and later keys override earlier ones).
+  const callerTools = (opts?.tools ?? {}) as Record<string, unknown>
+  const callerExecConfig = callerTools["mastra_workspace_execute_command"]
+  const tools = {
+    ...callerTools,
+    mastra_workspace_execute_command: {
+      ...(typeof callerExecConfig === "object" && callerExecConfig !== null
+        ? callerExecConfig
+        : {}),
+      enabled: false,
+    },
+  } as WorkspaceToolsConfig
+
   return new Workspace({
     id: opts?.id,
     filesystem: new LocalFilesystem({
@@ -151,13 +171,63 @@ export function createWorkspaceForDir(
         NONINTERACTIVE: "1",
       },
     }),
-    tools: opts?.tools,
+    tools,
   })
 }
 
+/**
+ * One Workspace instance per thread, cached.
+ *
+ * The cache is load-bearing now, not just an optimisation: the controller
+ * hands the session a Workspace, while the `description`-carrying
+ * execute_command replacement is registered as a plain agent tool and has to
+ * be bound to a Workspace explicitly (assigned tools get no workspace in their
+ * execution context). Both must resolve to the SAME instance or shell commands
+ * would run against a second LocalSandbox with its own ProcessManager, leaving
+ * `get_process_output`/`kill_process` unable to see the processes
+ * execute_command spawned.
+ *
+ * Entries are held for the process lifetime unless `disposeDemioWorkspace` is
+ * called — each one pins a `LocalSandbox` and its `ProcessManager`, so a
+ * long-lived Electron session that opens many threads would otherwise
+ * accumulate sandboxes (possibly still holding spawned background processes)
+ * with nothing ever freeing them.
+ */
+const workspaceCache = new Map<string, Workspace>()
+
 export function createDemioWorkspace(threadId: string): Workspace {
+  const cached = workspaceCache.get(threadId)
+  if (cached) return cached
+
   const cwd = ensureWorkspace(threadId)
   // Stable id per thread — reuse preserves ProcessManager (background
   // processes) across turns.
-  return createWorkspaceForDir(cwd, { id: `demio-workspace-${threadId}` })
+  const workspace = createWorkspaceForDir(cwd, {
+    id: `demio-workspace-${threadId}`,
+  })
+  workspaceCache.set(threadId, workspace)
+  return workspace
+}
+
+/**
+ * Drop a thread's cached Workspace and tear down its sandbox.
+ *
+ * Call when a thread is gone for good (deleted, or its project deleted) —
+ * `electron/agent/controller.ts`'s `disposeThread` is the single entry point,
+ * so the cached `Session` is discarded alongside it. Destroying is
+ * best-effort: a failure here must not block the delete the user asked for.
+ */
+export function disposeDemioWorkspace(threadId: string): void {
+  const workspace = workspaceCache.get(threadId)
+  if (!workspace) return
+
+  workspaceCache.delete(threadId)
+  workspace
+    .destroy()
+    .catch((err: unknown) =>
+      log.error(
+        `[workspace-factory] failed to destroy workspace for thread ${threadId}:`,
+        err
+      )
+    )
 }

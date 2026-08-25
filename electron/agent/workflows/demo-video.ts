@@ -295,7 +295,7 @@ const narrateStep = createStep({
         }
       })
     )
-    const { object } = await narrator.generate(
+    const narrationRun = await narrator.generate(
       `Write voiceover narration for this demo: ${inputData.plan.demoTitle}.
 Scene data (goals, hints, numbered action lists):
 ${JSON.stringify(
@@ -310,7 +310,28 @@ ${JSON.stringify(
 )}`,
       { structuredOutput: { schema: narrationSegmentsSchema }, abortSignal }
     )
-    return { ...inputData, narration: object }
+    // Same blind spot as the recorder (see `writeAgentTranscript` in
+    // `./record-scene`): the narrator is a bare `generate()` with no memory,
+    // so its conversation is otherwise unrecoverable after the run.
+    try {
+      await fs.writeFile(
+        path.join(inputData.workspace, "narration.agent.json"),
+        JSON.stringify(
+          {
+            modelId: inputData.modelId,
+            usage: narrationRun.usage,
+            steps: narrationRun.steps,
+            object: narrationRun.object,
+          },
+          null,
+          2
+        ),
+        "utf8"
+      )
+    } catch {
+      // debug artifact only — never fail narration over it
+    }
+    return { ...inputData, narration: narrationRun.object }
   },
 })
 
