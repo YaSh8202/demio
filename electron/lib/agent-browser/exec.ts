@@ -41,6 +41,19 @@ export interface ExecOptions {
    * Callback for streaming stderr lines as they arrive.
    */
   onStderr?: (line: string) => void
+  /**
+   * Text written to the child's stdin, which is then closed.
+   *
+   * The default (`undefined`) keeps stdin at `"ignore"` — i.e. /dev/null —
+   * which is what every command except the auth vault wants. `auth save
+   * --password-stdin` is the one caller that needs a real pipe: it is how a
+   * password reaches the vault without ever appearing in argv, in a process
+   * listing, in demio's logs, or in an agent-browser action log.
+   *
+   * An empty string is meaningful (it writes nothing and closes), so this is
+   * checked with `!== undefined`, never for truthiness.
+   */
+  stdin?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +179,7 @@ export async function execAgentBrowser(
   commands: string[],
   options: ExecOptions = {}
 ): Promise<ExecResult> {
-  const { timeout = 30_000, onStdout, onStderr } = options
+  const { timeout = 30_000, onStdout, onStderr, stdin } = options
   const binPath = resolveBinaryPath()
   const argv = buildArgv(commands)
   const start = Date.now()
@@ -176,15 +189,25 @@ export async function execAgentBrowser(
 
   return new Promise<ExecResult>((resolve) => {
     const child = spawn(binPath, argv, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       // Ensure the child inherits PATH for Chrome discovery
       env: { ...process.env },
     })
 
+    if (stdin !== undefined) {
+      // A child that exits before reading (bad flags, unknown subcommand)
+      // makes this write EPIPE. Unhandled, that is an uncaught error event
+      // on a stream in the Electron MAIN process — it takes the whole app
+      // down. Swallow it: the real failure is already on its way to us as a
+      // non-zero exit code plus stderr, which is what the caller reads.
+      child.stdin?.on("error", () => {})
+      child.stdin?.end(stdin)
+    }
+
     const stdoutChunks: string[] = []
     const stderrChunks: string[] = []
 
-    child.stdout.on("data", (data: Buffer) => {
+    child.stdout?.on("data", (data: Buffer) => {
       const text = data.toString()
       stdoutChunks.push(text)
       if (onStdout) {
@@ -196,7 +219,7 @@ export async function execAgentBrowser(
       }
     })
 
-    child.stderr.on("data", (data: Buffer) => {
+    child.stderr?.on("data", (data: Buffer) => {
       const text = data.toString()
       stderrChunks.push(text)
       if (onStderr) {
