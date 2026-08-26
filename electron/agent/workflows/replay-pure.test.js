@@ -6,6 +6,7 @@ const {
   classifyStep,
   expectedDurationMs,
   runScript,
+  resolveParams,
 } = require("./replay-pure.cjs")
 
 test("normalizeScript: applies settleMs and continuity defaults", () => {
@@ -246,4 +247,81 @@ test("recordingBracket: quotes paths containing spaces", () => {
     isRetry: false,
   })
   assert.match(b.commands[1], /'\/my workspace\/scenes\/scene-03\.webm'/)
+})
+
+test("resolveParams: substitutes in cmd and assert", () => {
+  const out = resolveParams({
+    sceneId: "scene-01",
+    continuity: "independent",
+    oneShot: false,
+    startUrl: "https://example.com",
+    endUrl: "https://example.com/b",
+    params: { boardName: "Demio QA" },
+    actions: [
+      {
+        cmd: 'find role textbox --name "Board title" fill "{{boardName}}"',
+        assert: '--text "{{boardName}}"',
+        settleMs: 400,
+      },
+    ],
+  })
+  assert.equal(
+    out.actions[0].cmd,
+    'find role textbox --name "Board title" fill "Demio QA"'
+  )
+  assert.equal(out.actions[0].assert, '--text "Demio QA"')
+})
+
+test("resolveParams: a script with no placeholders is returned unchanged", () => {
+  const script = {
+    sceneId: "scene-01",
+    continuity: "independent",
+    oneShot: false,
+    startUrl: "https://example.com",
+    endUrl: "https://example.com/b",
+    params: {},
+    actions: [{ cmd: "click @e1", settleMs: 600 }],
+  }
+  const out = resolveParams(script)
+  assert.equal(out.actions[0].cmd, "click @e1")
+  assert.equal(out.actions[0].assert, undefined)
+})
+
+test("resolveParams: an unresolved placeholder throws, naming scene, index and key", () => {
+  assert.throws(
+    () =>
+      resolveParams({
+        sceneId: "scene-07",
+        continuity: "independent",
+        oneShot: false,
+        startUrl: "u",
+        endUrl: "u",
+        params: { other: "x" },
+        actions: [{ cmd: "type {{boardName}}", settleMs: 600 }],
+      }),
+    /scene-07.*action 0.*boardName/
+  )
+})
+
+test("resolveParams: a value containing braces is not re-expanded", () => {
+  const out = resolveParams({
+    sceneId: "scene-01",
+    continuity: "independent",
+    oneShot: false,
+    startUrl: "u",
+    endUrl: "u",
+    params: { a: "{{b}}", b: "SHOULD NOT APPEAR" },
+    actions: [{ cmd: "type {{a}}", settleMs: 600 }],
+  })
+  assert.equal(out.actions[0].cmd, "type {{b}}")
+})
+
+test("normalizeScript: params default to an empty object", () => {
+  const s = normalizeScript({
+    sceneId: "scene-01",
+    startUrl: "https://example.com",
+    endUrl: "https://example.com/done",
+    actions: [{ cmd: "click @e1" }],
+  })
+  assert.deepEqual(s.params, {})
 })

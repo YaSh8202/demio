@@ -52,6 +52,16 @@ export const sceneScriptSchema = z.object({
     .describe(
       "Observed during rehearsal, not guessed. Used to re-position on retry."
     ),
+  params: z
+    .record(z.string(), z.string())
+    .default({})
+    .describe(
+      "Values for the `{{name}}` placeholders in this script's commands. " +
+        "Rehearsal proves a flow with one set of values and writes a DIFFERENT " +
+        "set here for the record pass, so a write flow is never run twice with " +
+        "the same data. Keys are bare identifiers: `{{boardName}}`, not " +
+        "`{{ boardName }}`."
+    ),
   actions: z.array(scriptedActionSchema).min(1),
 })
 export type SceneScript = z.infer<typeof sceneScriptSchema>

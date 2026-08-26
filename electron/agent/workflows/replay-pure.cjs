@@ -21,12 +21,58 @@ function normalizeScript(raw) {
     oneShot: raw.oneShot === true,
     startUrl: String(raw.startUrl),
     endUrl: String(raw.endUrl),
+    params:
+      raw.params && typeof raw.params === "object" ? { ...raw.params } : {},
     actions: raw.actions.map((a) => ({
       cmd: String(a.cmd),
       assert: typeof a.assert === "string" ? a.assert : undefined,
       settleMs: typeof a.settleMs === "number" ? a.settleMs : DEFAULT_SETTLE_MS,
       narrationAnchor:
         typeof a.narrationAnchor === "number" ? a.narrationAnchor : undefined,
+    })),
+  }
+}
+
+/**
+ * Placeholder syntax: `{{name}}`, bare identifier, no inner spaces. Kept
+ * deliberately narrow so a literal `{{` in a command (rare, but legal in a
+ * search box) cannot be mistaken for a placeholder unless it names a valid
+ * identifier.
+ */
+const PARAM_RE = /\{\{([A-Za-z0-9_]+)\}\}/g
+
+/**
+ * Substitute `{{name}}` placeholders from `script.params` (spec §11).
+ *
+ * Single-pass: a param VALUE containing `{{...}}` is left alone rather than
+ * re-expanded. `String.replace` with a function already gives this — the
+ * property is asserted by a test so a later rewrite cannot lose it.
+ *
+ * Throws on an unresolved placeholder rather than leaving it in the command.
+ * A literal `{{boardName}}` typed into a form field is a silent wrong take:
+ * every assertion could still pass while the video shows nonsense.
+ */
+function resolveParams(script) {
+  const params = script.params || {}
+  const substitute = (value, where) =>
+    value.replace(PARAM_RE, (_whole, key) => {
+      if (!Object.prototype.hasOwnProperty.call(params, key)) {
+        throw new Error(
+          `script ${script.sceneId}: ${where} references {{${key}}}, ` +
+            `but the script defines no param by that name`
+        )
+      }
+      return params[key]
+    })
+  return {
+    ...script,
+    actions: script.actions.map((a, i) => ({
+      ...a,
+      cmd: substitute(a.cmd, `action ${i} cmd`),
+      assert:
+        a.assert === undefined
+          ? undefined
+          : substitute(a.assert, `action ${i} assert`),
     })),
   }
 }
@@ -173,6 +219,7 @@ function recordingBracket({ script, videoPath, actionsPath, isRetry }) {
 
 module.exports = {
   normalizeScript,
+  resolveParams,
   buildStepCommands,
   classifyStep,
   expectedDurationMs,

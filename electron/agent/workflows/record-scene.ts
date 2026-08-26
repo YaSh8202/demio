@@ -35,6 +35,7 @@ const pure = require("./replay-pure.cjs") as {
     actionsPath: string
     isRetry: boolean
   }) => { commands: string[]; resetsPage: boolean }
+  resolveParams: (script: SceneScript) => SceneScript
 }
 
 /**
@@ -183,16 +184,33 @@ export async function recordSceneWithRetry(opts: {
       `${scene.id}.attempt-${attempt}.agent.json`
     )
 
-    const script = scene.script
-    if (!script) {
-      // Until rehearsal ships (plan 2), a scene without a script cannot be
-      // recorded. Fail loudly rather than silently falling back to the
-      // deleted recorder agent.
+    const rawScript = scene.script
+    if (!rawScript) {
+      // A scene without a script cannot be recorded. Rehearsal produces it;
+      // `toScenesStep` merges it in. Fail loudly rather than silently
+      // falling back to the deleted recorder agent.
       return {
         status: "failed",
         lastReport: infraFailureReport(
           `scene ${scene.id} has no script — the record pass requires one`
         ),
+        attempts: attemptsMade,
+      }
+    }
+
+    // Resolved BEFORE the recording bracket opens, so a script that names a
+    // param it never defines fails with the camera off. Treated as a failed
+    // take (matching the no-script case above) rather than thrown: it
+    // surfaces on the suspension card where the user can read it, and the
+    // wasted work is one loop iteration, not a killed run.
+    let script: SceneScript
+    try {
+      script = pure.resolveParams(rawScript)
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err)
+      return {
+        status: "failed",
+        lastReport: infraFailureReport(detail),
         attempts: attemptsMade,
       }
     }
