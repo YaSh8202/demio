@@ -1440,6 +1440,15 @@ function createRehearsalTools(workspace: string, flowId: string) {
               `"${flowId}" — scenes of this flow are named ${scenePrefix}01, ${scenePrefix}02, …`
           )
         }
+        // Same pattern `demo-video.ts:86` enforces at record time. Checked
+        // again here so a bad id fails while the model can still fix it,
+        // rather than two tasks downstream when every scene id is frozen into
+        // an approved plan.
+        if (!/^[a-zA-Z0-9._-]+$/.test(input.sceneId)) {
+          throw new Error(
+            `record_scene_script: sceneId "${input.sceneId}" is not a safe filename slug`
+          )
+        }
         await recordScript(workspace, input)
         return { ok: true, actions: input.actions.length }
       },
@@ -2034,7 +2043,14 @@ export function disposeThread(projectId: string, threadId: string): void {
 
 - [ ] **Step 4: Widen the mode's tool allowlist**
 
-Rename `PLAN_MODE_TOOLS` to `REHEARSE_MODE_TOOLS` and add the two new tool names. `availableTools` is a *visibility* allowlist applied over everything registered — a tool added via `additionalTools` but absent from this list would be registered and then hidden, so both names must appear here as well.
+Rename `PLAN_MODE_TOOLS` to `REHEARSE_MODE_TOOLS` and add the two new tool names.
+
+**Both new names MUST appear here even though they arrive via `additionalTools`.** No existing mode sets both fields, so this composition is untested in this codebase — verified against the compiled controller (`node_modules/@mastra/core/dist/agent-controller-ByW51eCC.js`):
+
+- `buildToolsets` (`:5377`) puts `currentMode.tools ?? currentMode.additionalTools` into the toolsets as `modeTools`, so the tool is *registered*.
+- `resolveModeActiveTools` (`:5176-5188`) returns the mode's `availableTools` verbatim (minus denied categories) and `buildAgentMessageStreamOptions` (`:5232-5233`) assigns it to `streamOptions.activeTools` — an allowlist over *every* registered tool name, regardless of where it came from.
+
+So a tool registered via `additionalTools` and missing from `availableTools` is registered and then hidden from the model. Related: setting both `tools` and `additionalTools` on one mode throws at construction (`:4108`) — use `additionalTools` only.
 
 ```ts
 const REHEARSE_MODE_TOOLS = [
