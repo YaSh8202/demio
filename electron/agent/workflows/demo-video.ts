@@ -53,6 +53,7 @@ import { parseActionEntries, renderScene } from "./sync"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
 import { hasProfile, loginProfile } from "./credentials"
+import { readScripts } from "./rehearsal"
 import log from "../../lib/logger"
 
 const execFileAsync = promisify(execFile)
@@ -100,7 +101,33 @@ const toScenesStep = createStep({
         )
       }
     }
-    return inputData.plan.scenes
+
+    // Attach each scene's proven script from rehearsal. A script written
+    // inline on the scene wins: explicit beats derived, and a hand-written
+    // script (manual-checklist section E) must keep working with no
+    // rehearsal artifacts present at all.
+    const doc = await readScripts(inputData.workspace)
+    const byId = new Map(doc.scripts.map((s) => [s.sceneId, s]))
+    const scenes = inputData.plan.scenes.map((scene) =>
+      scene.script ? scene : { ...scene, script: byId.get(scene.id) }
+    )
+
+    // Fail here rather than per scene. `recordSceneWithRetry` also refuses a
+    // scene with no script, but by then the run has already recorded
+    // everything before it — and the cause is always the same one thing: the
+    // plan named a scene id that rehearsal never produced. Say so once, with
+    // both lists, before a single frame is captured.
+    const missing = scenes.filter((s) => !s.script).map((s) => s.id)
+    if (missing.length > 0) {
+      throw new Error(
+        `generate_demo: no rehearsed script for scene(s) ${missing.join(", ")}. ` +
+          `Rehearsal proved: ${
+            doc.scripts.map((s) => s.sceneId).join(", ") || "(nothing)"
+          }. Scene ids in the plan must be exactly the sceneIds rehearse_flow returned.`
+      )
+    }
+
+    return scenes
   },
 })
 

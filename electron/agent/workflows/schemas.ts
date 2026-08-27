@@ -11,11 +11,19 @@ export const sceneSchema = z.object({
   startUrl: z.string().describe("URL the browser must be on before recording"),
   endUrl: z
     .string()
-    .describe("URL prefix expected when the scene completes (continuity contract)"),
+    .describe(
+      "URL prefix expected when the scene completes. Documentation only — the " +
+        "authoritative end state is the last scripted action's `assert`, observed " +
+        "during rehearsal rather than guessed here."
+    ),
   actions: z
     .array(z.string())
     .min(1)
-    .describe("Ordered human-readable browser actions for the recorder agent"),
+    .describe(
+      "Ordered human-readable summary of what happens in this scene. " +
+        "Documentation for the reviewer and the narrator; the executable form " +
+        "is `script`."
+    ),
   script: sceneScriptSchema
     .optional()
     .describe(
@@ -26,20 +34,6 @@ export const sceneSchema = z.object({
     .string()
     .describe("Verifiable end-state assertion, e.g. 'board Demio QA visible with 3 lists'"),
   narrationHint: z.string().describe("Tone/content cue for the voiceover writer"),
-  minDurationSec: z
-    .number()
-    .default(4)
-    .describe(
-      "Minimum RAW recording length in seconds — catches broken/instant recordings"
-    ),
-  maxDurationSec: z
-    .number()
-    .default(90)
-    .describe(
-      "Maximum RAW recording length in seconds. The raw capture includes the " +
-        "recording agent's think-time between actions, so set this generously " +
-        "(60-120s typical) — verification clamps it up to at least 120s anyway"
-    ),
 })
 export type Scene = z.infer<typeof sceneSchema>
 
