@@ -107,11 +107,20 @@ const toScenesStep = createStep({
 /**
  * Camera-off login, once per run, before the first frame (spec §12).
  *
- * `auth login` waits for the login form to appear, so on a session that is
- * still authenticated it is expected to time out rather than succeed — which
- * is why a failure here is logged and not thrown. A session that really is
- * dead surfaces at scene 1's first assertion, and takes the ordinary
- * deviation → recovery → suspend path where the user can act on it.
+ * "Advisory, never fatal" applies only to the login OUTCOME: `auth login`
+ * waits for the login form to appear, so on a session that is still
+ * authenticated it is expected to time out rather than succeed, resolving
+ * `{ ok: false }` — which is why that case is logged and not thrown. A
+ * session that really is dead surfaces at scene 1's first assertion, and
+ * takes the ordinary deviation → recovery → suspend path where the user can
+ * act on it.
+ *
+ * A THROWN error is different and is deliberately left to propagate and fail
+ * the run: `hasProfile`/`loginProfile` throw when the agent-browser binary
+ * can't be resolved, or when the workspace path's basename sanitises to
+ * empty (`vaultProfileName`). Either means every scene in the run is doomed
+ * regardless — failing once, here, with the camera off, beats failing at
+ * every scene's recording bracket with muddier diagnostics.
  *
  * Passes scenes through untouched; it exists purely for the side effect.
  */
