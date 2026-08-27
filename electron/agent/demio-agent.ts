@@ -85,6 +85,14 @@ export interface CreateDemioAgentOpts {
    * access needed).
    */
   toolFilter?: string[]
+  /**
+   * Tools registered on this agent in addition to whatever `toolFilter`
+   * selects. Merged AFTER filtering on purpose: `toolFilter` is a visibility
+   * allowlist over tools the factory already knows about, while these are
+   * handed in explicitly by the caller — filtering them would mean naming
+   * them twice, and a typo would silently drop the tool.
+   */
+  extraTools?: Record<string, unknown>
 }
 
 export function createDemioAgent(opts: CreateDemioAgentOpts) {
@@ -120,6 +128,8 @@ export function createDemioAgent(opts: CreateDemioAgentOpts) {
   ) {
     tools.mastra_workspace_execute_command = createExecuteCommandTool(workspace)
   }
+
+  Object.assign(tools, opts.extraTools ?? {})
 
   return new Agent({
     id: "demio",
