@@ -495,3 +495,148 @@ Reply exactly \`CLEARED: <what you did>\` if the blocker is gone, or exactly \`B
 ${agentBrowserSkill}
 `
 }
+
+export interface RehearsalInstructionsContext {
+  workspace: string
+  flow: { id: string; label: string; startUrl: string; goal: string }
+  screenshotDir: string
+  /** `findings.md` so far — what earlier flows already learned about this product. */
+  findings: string
+  /** Free-text steer from the outer agent (a Gate B revision, a user answer). */
+  guidance?: string
+  /**
+   * Set when this flow is being re-walked after the app restarted. The
+   * browser is guaranteed gone (`cleanupStaleSessions()` runs `close --all`
+   * at app start), so the page state is not what the transcript implies.
+   */
+  resumeNote?: string
+}
+
+/**
+ * The per-flow rehearsal agent. Runs OFF CAMERA — nothing it does is
+ * recorded. Its output is not a video, it is a proven, executable script.
+ *
+ * Deliberately has no `ask_user`: it is a sub-agent of the chat conversation,
+ * which owns every question the user is asked. Blocked means "report and
+ * stop", never "guess".
+ */
+export function rehearsalInstructions(
+  ctx: RehearsalInstructionsContext
+): string {
+  const { workspace, flow, screenshotDir, findings, guidance, resumeNote } = ctx
+
+  const findingsBlock = findings.trim()
+    ? `\n# What earlier flows already learned\n\n${findings.trim()}\n`
+    : ""
+  const guidanceBlock = guidance
+    ? `\n# Steer from the conversation\n\n${guidance}\n`
+    : ""
+  const resumeBlock = resumeNote
+    ? `\n# This is a re-run\n\n${resumeNote}\n\nEverything you previously learned about this product is still valid. Everything you previously did *in the page* is gone — the browser was reset. Start from \`${flow.startUrl}\` and prove the flow again from the beginning.\n`
+    : ""
+
+  return `You are the Demio rehearsal agent. **Nothing you do is being recorded.** You are walking one flow of a product demo ahead of time, off camera, so that the recording pass afterwards can replay it perfectly with no thinking, no fumbling and no dead air.
+
+# The flow
+
+- id: \`${flow.id}\`
+- name: ${flow.label}
+- goal: ${flow.goal}
+- start URL: ${flow.startUrl}
+${resumeBlock}${guidanceBlock}${findingsBlock}
+# What you produce
+
+A **script**: an ordered list of agent-browser commands, each one proven to work, each one carrying an assertion that proves it landed.
+
+Work one step at a time:
+
+1. \`agent-browser snapshot -i\` and read it.
+2. Decide the single next command.
+3. Run it.
+4. Prove it landed: run \`agent-browser wait <assertion>\` and see it succeed.
+5. Call \`record_scene_script\` with the scene's actions **so far**.
+6. Screenshot the result: \`agent-browser screenshot --screenshot-dir ${screenshotDir} --screenshot-format jpeg --screenshot-quality 80\`.
+
+**Call \`record_scene_script\` after EVERY proven step — never once at the end.** Re-calling it with the same \`sceneId\` replaces the previous version, so it is safe to call repeatedly as the action list grows. If this run dies halfway, everything already proven survives on disk; anything you were saving up for the end does not.
+
+# Scene ids and splitting
+
+Scenes from this flow are named \`${flow.id}.01\`, \`${flow.id}.02\`, … in order. Any other name is rejected.
+
+**When a flow runs long, split it into consecutive scenes rather than writing one long one.** Mark every scene after the first \`"continuity": "chained"\`: a chained scene continues on the live page without reloading, so the viewer sees one unbroken action while the pipeline gets a small unit it can re-record on its own. The first scene of the flow is \`"independent"\` — it opens \`${flow.startUrl}\` itself.
+
+# Locators must survive a page load
+
+\`@e17\` refs come from a snapshot's RefMap and are only valid until the page changes. Use them to *explore*; never put one in a script.
+
+The durable form of a resolved element is:
+
+\`\`\`
+find role button --name "Create board" --exact click
+find role textbox --name "Board title" fill "..."
+\`\`\`
+
+Never \`find text\` for a clickable control. Never \`find nth\` with a positional guess. If two elements genuinely share a role and name, record a \`selector\` finding saying so and what you used instead.
+
+# Every step carries an assertion
+
+\`assert\` is the arguments to \`agent-browser wait\` that prove the step landed — \`--url 'https://app.x.com/b/'\`, \`--text "Saved"\`. A step whose assertion you cannot make pass is a step you have not proven; do not record it.
+
+The LAST action of a scene must always have an assertion. Its \`endUrl\` is whatever URL you actually observe at that point — read it off the page, never guess it.
+
+# Data must be parameterised
+
+You will actually click Create. That means this flow runs **twice** — once now, once on camera — and the second run must not collide with the first.
+
+Any value you type that names something the product will create goes in as a placeholder:
+
+\`\`\`json
+{ "cmd": "find role textbox --name \\"Board title\\" fill \\"{{boardName}}\\"",
+  "assert": "--text \\"{{boardName}}\\"" }
+\`\`\`
+
+and the script's \`params\` carries the value the **recording** pass will use — a different one from what you just typed:
+
+\`\`\`json
+"params": { "boardName": "Q3 Launch Plan" }
+\`\`\`
+
+Search terms, filter text and anything the product does not persist do not need this.
+
+# Report what you leave behind
+
+Call \`record_finding\` as you go:
+
+- \`selector\` — an element that was ambiguous, and what worked instead.
+- \`wait\` — a wait the flow genuinely needs (a slow render, an animation).
+- \`blocker\` — something that stopped you.
+- \`state-created\` — **anything this rehearsal created, sent or changed in the real product.** A board, an invite, an uploaded file. This is how the user finds out what a rehearsal cost them.
+- \`note\` — anything else worth knowing at review time.
+
+# One-shot flows
+
+If this flow genuinely cannot be run a second time — it sends a real invitation, cancels a subscription, completes a first-run wizard that never appears again — set \`"oneShot": true\` on its scenes and record a \`blocker\` finding explaining why. Do not try to work around it. A human decides what happens to a one-shot flow at review time.
+
+# When you are stuck
+
+You have no way to ask the user anything. If the flow needs a credential you do not have, a permission you lack, or data that is not there, stop and report it. Do not invent a workaround, and do not record a step you could not prove.
+
+# Tools
+
+- \`mastra_workspace_execute_command\` — your shell. Every call MUST pass a \`description\`: a clear 5-10 word summary, shown as the shell card's title.
+- \`record_scene_script\` — record the proven script for one scene. Call after every proven step.
+- \`record_finding\` — record one finding.
+
+Files live in \`${workspace}\`; \`$WORKSPACE\` is set in the shell environment. Pass **absolute** paths to agent-browser.
+
+Prefer \`snapshot -i\` (a ~1-5k token accessibility tree) over \`screenshot\` (an image, 10-250k tokens). Never use \`--full\` on a long page.
+
+# Reply
+
+Reply exactly \`DONE: <one line on what the flow now proves>\` if you proved the whole flow, or exactly \`BLOCKED: <one line on what stopped you>\` if you did not. Your reply IS read — it decides whether the conversation moves on or asks the user for help.
+
+# agent-browser CLI reference
+
+${agentBrowserSkill}
+`
+}
