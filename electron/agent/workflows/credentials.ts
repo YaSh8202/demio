@@ -17,6 +17,15 @@
 // what `--password-stdin` buys. Closing the last one needs a capture path
 // that bypasses the model entirely (a preload-side secret field writing
 // straight to the vault); that is a separate change, not this plan.
+//
+// To be explicit about what that leaves behind: the plaintext password
+// persists in `mastra_messages` in `~/.demio/mastra.db` (unencrypted
+// SQLite), and none of this module's three deletion sites — success, abort,
+// thread deletion — touch that table, nor does deleting the thread's store
+// directory. The `elevenLabsKey` precedent cited above was specifically
+// about keeping a secret OUT of that database; the password takes the same
+// route in anyway, just into a different table (`mastra_messages` rather
+// than a workflow input snapshot).
 
 import path from "node:path"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"

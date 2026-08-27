@@ -260,7 +260,7 @@ const rehearseFlowTool = createTool({
 const saveLoginTool = createTool({
   id: "save_login",
   description:
-    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The credentials are deleted when the run finishes or the thread is deleted.",
+    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The vault profile is deleted when the run finishes or the thread is deleted.",
   inputSchema: z.object({
     loginUrl: z.string().describe("The login page URL"),
     username: z.string(),
@@ -408,7 +408,13 @@ const generateDemoTool = createTool({
         // a later resume could reconnect to a dead run instead of failing
         // clearly.
         activeDemoRuns.delete(threadId)
-        void deleteProfile(workspace)
+        // Spec §12 names three deletion sites — success, abort, thread
+        // deletion — not "any throw". A plain failure's natural next step is
+        // a retry, and there is no second capture path (`save_login` is
+        // registered only on the rehearse mode, with no transition back from
+        // execute), so deleting the profile here would strand the thread
+        // logged out with no way to re-authenticate.
+        if (context.abortSignal?.aborted) void deleteProfile(workspace)
         throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
@@ -437,7 +443,9 @@ const generateDemoTool = createTool({
         })
       } catch (err) {
         activeDemoRuns.delete(threadId)
-        void deleteProfile(workspace)
+        // See the matching comment in the resume branch's catch above: a
+        // plain failure keeps the profile so a retry can still log in.
+        if (context.abortSignal?.aborted) void deleteProfile(workspace)
         throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
@@ -472,10 +480,17 @@ const generateDemoTool = createTool({
     }
 
     activeDemoRuns.delete(threadId)
-    // The run reached a terminal state — success or failure, abort included.
+    // Spec §12 names three deletion sites — success, abort, thread deletion —
+    // not "any terminal state". A plain `failed` result deliberately keeps
+    // the profile: the natural next step after a failed run is a retry, and
+    // there is no second capture path (`save_login` lives only on the
+    // rehearse mode, with no transition back from execute) — deleting here
+    // would strand the thread logged out with no way back in.
     // `deleteProfile` is idempotent and never throws (credentials.ts), so
     // fire-and-forget is safe and keeps cleanup off the result path.
-    void deleteProfile(workspace)
+    if (result.status === "success" || context.abortSignal?.aborted) {
+      void deleteProfile(workspace)
+    }
 
     if (result.status !== "success") {
       const detail = result.status === "failed" ? `: ${result.error.message}` : ""

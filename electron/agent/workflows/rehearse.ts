@@ -17,6 +17,7 @@ import { z } from "zod"
 import { createDemioAgent } from "../demio-agent"
 import { rehearsalInstructions } from "../prompts"
 import { sceneScriptSchema } from "./script-schema"
+import { hasProfile, loginProfile } from "./credentials"
 import {
   beginFlow,
   dropFlowScripts,
@@ -160,6 +161,24 @@ export async function rehearseFlow(opts: {
   let text = ""
   let steps: unknown[] = []
   try {
+    // A login-gated product cannot be rehearsed logged out, and the sub-agent
+    // has no way to authenticate itself: it has no `ask_user` and no access to
+    // the credentials. `save_login` (controller.ts) stored them in the vault
+    // before the first flow; this is where they get used. Mirrors
+    // `preflightStep` in demo-video.ts, which does the same thing for the
+    // record pass — see its comment for why a failure here is advisory rather
+    // than fatal.
+    if (await hasProfile(workspace)) {
+      const auth = await loginProfile(workspace)
+      if (!auth.ok) {
+        log.info(
+          `[rehearsal] vault login did not complete for flow ${flow.id} ` +
+            `(${auth.detail}) — expected when the session is already ` +
+            `authenticated; continuing`
+        )
+      }
+    }
+
     const agent = createDemioAgent({
       workspace,
       modelId: opts.modelId,
@@ -211,10 +230,23 @@ export async function rehearseFlow(opts: {
   const claimsDone = text.startsWith("DONE")
   const status: "done" | "blocked" =
     claimsDone && sceneIds.length > 0 ? "done" : "blocked"
-  const detail =
+  let detail =
     claimsDone && sceneIds.length === 0
       ? `${text} — but no scene script was recorded, so nothing was actually proven`
       : text || "rehearsal agent returned nothing"
+
+  // A blocked result that also exhausted the step budget is not a real
+  // blocker the outer agent can resolve with guidance — re-invoking restarts
+  // under the same ceiling (dropFlowScripts wipes the partial progress) and
+  // can never converge. Say so plainly so the outer agent splits the flow
+  // instead of retrying it unchanged.
+  if (status === "blocked" && steps.length >= REHEARSAL_MAX_STEPS) {
+    detail =
+      `${detail} — step budget (${REHEARSAL_MAX_STEPS} steps) exhausted after ` +
+      `proving ${sceneIds.length} scene(s); this flow needs more steps than one ` +
+      `rehearsal call allows, so split it into smaller flows rather than retrying ` +
+      `it unchanged`
+  }
 
   await finishFlow(workspace, { id: flow.id, status, sceneIds, detail })
   return { status, detail, sceneIds }
