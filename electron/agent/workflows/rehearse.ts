@@ -91,13 +91,7 @@ function createRehearsalTools(workspace: string, flowId: string) {
       description:
         "Record one rehearsal finding: an ambiguous selector, a required wait, a blocker, or state this rehearsal created in the real product.",
       inputSchema: z.object({
-        kind: z.enum([
-          "selector",
-          "wait",
-          "blocker",
-          "state-created",
-          "note",
-        ]),
+        kind: z.enum(["selector", "wait", "blocker", "state-created", "note"]),
         text: z.string().describe("One sentence. Concrete, not a summary."),
       }),
       outputSchema: z.object({ ok: z.boolean() }),

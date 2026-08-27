@@ -73,7 +73,9 @@ export async function saveCredentials(opts: {
   // and never the password. Verified against the installed binary.
   return {
     ok: res.ok,
-    detail: res.ok ? `saved vault profile ${profile}` : res.error || "auth save failed",
+    detail: res.ok
+      ? `saved vault profile ${profile}`
+      : res.error || "auth save failed",
   }
 }
 
@@ -101,7 +103,10 @@ export async function loginProfile(
   const res = await execAgentBrowser([`auth login ${shellQuote(profile)}`], {
     timeout: 45_000,
   })
-  return { ok: res.ok, detail: res.ok ? "logged in" : res.error || "auth login failed" }
+  return {
+    ok: res.ok,
+    detail: res.ok ? "logged in" : res.error || "auth login failed",
+  }
 }
 
 /**
@@ -120,8 +125,13 @@ export async function deleteProfile(workspace: string): Promise<void> {
     const res = await execAgentBrowser([`auth delete ${shellQuote(profile)}`], {
       timeout: 10_000,
     })
-    if (!res.ok && !/not found/i.test(`${res.error ?? ""}${res.output ?? ""}`)) {
-      log.warn(`[credentials] failed to delete vault profile ${profile}: ${res.error}`)
+    if (
+      !res.ok &&
+      !/not found/i.test(`${res.error ?? ""}${res.output ?? ""}`)
+    ) {
+      log.warn(
+        `[credentials] failed to delete vault profile ${profile}: ${res.error}`
+      )
     }
   } catch (err) {
     log.warn(
