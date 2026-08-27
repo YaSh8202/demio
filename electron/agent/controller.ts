@@ -260,7 +260,7 @@ const rehearseFlowTool = createTool({
 const saveLoginTool = createTool({
   id: "save_login",
   description:
-    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The vault profile is deleted when the run finishes or the thread is deleted.",
+    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The vault profile is deleted when the run succeeds or is aborted, or when the thread is deleted.",
   inputSchema: z.object({
     loginUrl: z.string().describe("The login page URL"),
     username: z.string(),
