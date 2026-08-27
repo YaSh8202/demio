@@ -52,6 +52,8 @@ import { createDemioAgent } from "../demio-agent"
 import { parseActionEntries, renderScene } from "./sync"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
+import { hasProfile, loginProfile } from "./credentials"
+import log from "../../lib/logger"
 
 const execFileAsync = promisify(execFile)
 
@@ -99,6 +101,35 @@ const toScenesStep = createStep({
       }
     }
     return inputData.plan.scenes
+  },
+})
+
+/**
+ * Camera-off login, once per run, before the first frame (spec §12).
+ *
+ * `auth login` waits for the login form to appear, so on a session that is
+ * still authenticated it is expected to time out rather than succeed — which
+ * is why a failure here is logged and not thrown. A session that really is
+ * dead surfaces at scene 1's first assertion, and takes the ordinary
+ * deviation → recovery → suspend path where the user can act on it.
+ *
+ * Passes scenes through untouched; it exists purely for the side effect.
+ */
+const preflightStep = createStep({
+  id: "preflight-login",
+  inputSchema: z.array(sceneSchema),
+  outputSchema: z.array(sceneSchema),
+  execute: async ({ inputData, getInitData }) => {
+    const init = getInitData<DemoVideoInit>()
+    if (!(await hasProfile(init.workspace))) return inputData
+    const res = await loginProfile(init.workspace)
+    if (!res.ok) {
+      log.info(
+        `[demo-workflow] preflight auth login did not complete (${res.detail}) — ` +
+          `expected when the session is still authenticated; continuing`
+      )
+    }
+    return inputData
   },
 })
 
@@ -482,6 +513,7 @@ export const demoVideoWorkflow = createWorkflow({
   outputSchema: composeStep.outputSchema,
 })
   .then(toScenesStep)
+  .then(preflightStep)
   .foreach(sceneStep, { concurrency: 1 })
   .then(collectResultsStep)
   .then(narrateStep)
