@@ -261,3 +261,84 @@ retrying it, and treat the FIRST attempt's failure as the one worth diagnosing.
     Do not try to add audio to the scene at this stage; that work is planned.
     Expected: audio absence is understood as a pipeline sequencing issue, not a
     bug in replay or verification.
+
+## F. Rehearse → Gate B → record (phase 2)
+
+Prerequisites: a product with a login and at least one multi-step write flow.
+Do **not** clean `~/.demio` — it holds your encrypted provider keys.
+
+32. `bun start`. New project, new thread. Ask for a demo of two flows on the
+    product, one of which requires logging in.
+
+33. **Credentials.** The agent should ask for the username and the password in
+    two SEPARATE questions, then call `save_login` once. Confirm with
+    `agent-browser auth list` that a profile named `demio-<threadId>` exists,
+    and with `agent-browser auth show demio-<threadId>` that **no password is
+    printed**.
+
+34. **One flow at a time.** Watch the tool cards: `rehearse_flow` must be
+    called once per flow and awaited before the next. Two in flight at once
+    is a prompt failure — report it.
+
+35. **Incremental writing — the load-bearing one.** While a `rehearse_flow`
+    call is still running, `cat ~/.demio/workspaces/<threadId>/rehearsal/scripts.json`.
+    It must already contain the steps proven so far. If it is empty until the
+    flow finishes, the agent is batching and spec §9's rule is violated: a
+    crash would lose every locator.
+
+36. **Durable locators.** Grep the finished `scripts.json` for `@e`. There must
+    be **no** `@eN` ref in any `cmd`. Refs do not survive a page load and a
+    script full of them will fail on replay in a way that looks random.
+
+37. **Parameterisation.** For each write flow, confirm the script uses
+    `{{name}}` in `cmd` and carries a `params` value that is **different** from
+    what you watched it type during rehearsal. Same value means the record pass
+    will collide with the rehearsal's own leftovers.
+
+38. **Findings.** `cat rehearsal/findings.md`. It must have a `state-created`
+    entry for everything rehearsal actually made in the product. Cross-check
+    against the product itself — anything present there and missing from the
+    file is a real gap, not a cosmetic one.
+
+39. **Resume (spec §10, Case B).** Mid-way through the second flow, quit the
+    app. Reopen it, reopen the thread, and ask it to continue.
+    - `rehearsal/checkpoint.json` must show that flow as `in-progress` with its
+      `startUrl`.
+    - The re-run must re-open that URL and prove the flow from its start.
+    - Afterwards, `scripts.json` must contain **no orphan** scene from the
+      abandoned attempt — if the first attempt reached `flow.03` and the second
+      only `flow.02`, there must be no `flow.03`.
+
+40. **Gate B.** The plan file must contain a `## Rehearsal report` naming any
+    blocked flow, any `oneShot` flow, and the state rehearsal created. A
+    one-shot flow that reaches recording without being called out here is the
+    failure this gate exists to prevent.
+
+41. **No script in the plan.** The fenced json in the plan file must have no
+    `script` field on any scene, and its scene ids must be exactly the ones
+    `rehearse_flow` returned.
+
+42. **Wrong scene id fails early.** Before approving, edit one scene's `id` in
+    the plan file to something rehearsal never produced and approve it. The run
+    must fail immediately with a message naming that id and listing what
+    rehearsal did prove — **before any recording starts**. Restore the id and
+    re-approve.
+
+43. **Preflight.** Watch the log at the start of the run for the camera-off
+    `auth login`. It must happen **before** the first `record start`, and a
+    failure must be logged and not stop the run.
+
+44. **Chained scenes really chain.** Play the second scene of a multi-scene
+    flow. Its first frame must already show the end state of the previous
+    scene — not a reloaded page. *(This is the check Phase 1's item 27 parked:
+    it also proves `record restart` honours `--log-actions`, since the scene's
+    `.actions.jsonl` must be non-empty.)*
+
+45. **The record pass used the record-pass data.** After compose, check the
+    product: the thing the video created must carry the `params` value, not the
+    value rehearsal used. Both should now exist.
+
+46. **Credentials are gone.** `agent-browser auth list` must no longer show
+    `demio-<threadId>`. Repeat for the abort path: start a second run, cancel
+    it mid-way, and confirm the profile is deleted then too. Repeat once more
+    by deleting the thread.
