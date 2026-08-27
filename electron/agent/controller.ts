@@ -52,8 +52,10 @@ import {
 } from "./workspace-factory"
 import { createPresentFilesTool } from "./tools/present-files"
 import { createExecuteCommandTool } from "./tools/execute-command"
-import { ensureWorkspace } from "./workspace"
+import { ensureWorkspace, getWorkspace } from "./workspace"
 import { scenePlanSchema } from "./workflows/schemas"
+import { rehearseFlow } from "./workflows/rehearse"
+import { saveCredentials, deleteProfile } from "./workflows/credentials"
 import { mastra, mastraStore } from "./mastra"
 import { getProject } from "../store"
 import log from "../lib/logger"
@@ -82,24 +84,27 @@ const stateSchema = z.object({
 export type DemioControllerState = z.infer<typeof stateSchema>
 
 /**
- * Plan mode's tool visibility allowlist (`availableTools`). Built-in
+ * Rehearse mode's tool visibility allowlist (`availableTools`). Built-in
  * interaction/task tools (`ask_user`, `submit_plan`, `task_*`) use their
  * documented short names; workspace tools use the exposed names
  * `createWorkspaceTools()` actually registers in this @mastra/core version
  * (no short-name rewriting is applied — see file header).
  *
- * write_file/edit_file/mkdir are additions beyond the brief: plan mode's
+ * write_file/edit_file/mkdir are additions beyond the brief: the mode's
  * instructions require writing the plan file under `plans/` and revising it
  * in place, which needs them.
  *
- * execute_command is also a required addition (found in review): plan
- * mode's own instructions say "explore the target site read-only if
- * needed" — that discovery happens via the `agent-browser` CLI, which only
- * exists as a PATH-shimmed binary the agent invokes through
- * mastra_workspace_execute_command. Without it in the allowlist plan mode
- * cannot do the discovery its instructions describe.
+ * execute_command is still needed for the mode's own light discovery — a
+ * quick, read-only look around the target site via the `agent-browser` CLI,
+ * PATH-shimmed and invoked through mastra_workspace_execute_command — but
+ * the heavy work of actually walking a flow and proving it is delegated to
+ * `rehearse_flow`, which must ALSO be in this list (see Step 4 of
+ * task-8-brief.md): it arrives via `additionalTools`, and a tool registered
+ * that way but missing from `availableTools` is registered and then hidden
+ * from the model (`resolveModeActiveTools`/`buildAgentMessageStreamOptions`
+ * in the compiled controller — see the brief for line citations).
  */
-const PLAN_MODE_TOOLS = [
+const REHEARSE_MODE_TOOLS = [
   "mastra_workspace_read_file",
   "mastra_workspace_list_files",
   "mastra_workspace_grep",
@@ -109,6 +114,8 @@ const PLAN_MODE_TOOLS = [
   "mastra_workspace_execute_command",
   "ask_user",
   "submit_plan",
+  "rehearse_flow",
+  "save_login",
   "task_write",
   "task_update",
   "task_complete",
@@ -189,6 +196,91 @@ function threadIdFromCtx(
 // `tool_suspended` event's `suspendPayload` all the way to the renderer and
 // back, and so survives exactly the restart this map doesn't.
 const activeDemoRuns = new Map<string, string>()
+
+/**
+ * Walk one flow off camera and prove it. Defined here rather than in
+ * `rehearse.ts` because it needs `readControllerCtx` / `threadIdFromCtx` /
+ * `ensureWorkspace`, which are this module's — importing them out would make
+ * a cycle with `rehearse.ts`. The runner itself lives in `rehearse.ts`.
+ */
+const rehearseFlowTool = createTool({
+  id: "rehearse_flow",
+  description:
+    "Walk one flow of the product off camera and prove every step, producing an executable script. Call once per flow, one flow at a time, and read the result before starting the next.",
+  inputSchema: z.object({
+    flowId: z
+      .string()
+      .describe(
+        "Kebab-case slug, e.g. `create-board`. Scenes from this flow are named <flowId>.01, <flowId>.02, …"
+      ),
+    label: z.string().describe("Short human name, e.g. 'Create a board'"),
+    startUrl: z.string().describe("URL the flow starts from"),
+    goal: z.string().describe("What this flow demonstrates, one sentence"),
+    guidance: z
+      .string()
+      .optional()
+      .describe(
+        "Anything the rehearsal agent cannot discover for itself — an answer the user gave you, or a correction after a previous attempt."
+      ),
+  }),
+  outputSchema: z.object({
+    status: z.enum(["done", "blocked"]),
+    detail: z.string(),
+    sceneIds: z.array(z.string()),
+  }),
+  execute: async (input, context) => {
+    const ctx = readControllerCtx(context.requestContext)
+    const threadId = threadIdFromCtx(ctx)
+    if (!threadId) {
+      throw new Error("rehearse_flow: no threadId in request context")
+    }
+    return rehearseFlow({
+      workspace: ensureWorkspace(threadId),
+      modelId: ctx?.session.modelId || DEFAULT_MODEL_ID,
+      flow: {
+        id: input.flowId,
+        label: input.label,
+        startUrl: input.startUrl,
+        goal: input.goal,
+      },
+      guidance: input.guidance,
+      signal: context.abortSignal,
+    })
+  },
+})
+
+/**
+ * Save this run's login into agent-browser's vault (spec §12).
+ *
+ * The password reaches the vault through the child's stdin and is never
+ * written to demio's own storage. It does still pass through this tool's
+ * arguments, which the controller persists — see the header comment in
+ * `credentials.ts` for exactly what that does and does not protect.
+ */
+const saveLoginTool = createTool({
+  id: "save_login",
+  description:
+    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The credentials are deleted when the run finishes or the thread is deleted.",
+  inputSchema: z.object({
+    loginUrl: z.string().describe("The login page URL"),
+    username: z.string(),
+    password: z.string(),
+    usernameSelector: z
+      .string()
+      .optional()
+      .describe("CSS selector for the username field, if you discovered one"),
+    passwordSelector: z.string().optional(),
+    submitSelector: z.string().optional(),
+  }),
+  outputSchema: z.object({ ok: z.boolean(), detail: z.string() }),
+  execute: async (input, context) => {
+    const threadId = threadIdFromCtx(readControllerCtx(context.requestContext))
+    if (!threadId) {
+      throw new Error("save_login: no threadId in request context")
+    }
+    return saveCredentials({ workspace: ensureWorkspace(threadId), ...input })
+  },
+})
 
 const generateDemoTool = createTool({
   id: "generate_demo",
@@ -316,6 +408,7 @@ const generateDemoTool = createTool({
         // a later resume could reconnect to a dead run instead of failing
         // clearly.
         activeDemoRuns.delete(threadId)
+        void deleteProfile(workspace)
         throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
@@ -344,6 +437,7 @@ const generateDemoTool = createTool({
         })
       } catch (err) {
         activeDemoRuns.delete(threadId)
+        void deleteProfile(workspace)
         throw err
       } finally {
         context.abortSignal?.removeEventListener("abort", onAbort)
@@ -378,6 +472,10 @@ const generateDemoTool = createTool({
     }
 
     activeDemoRuns.delete(threadId)
+    // The run reached a terminal state — success or failure, abort included.
+    // `deleteProfile` is idempotent and never throws (credentials.ts), so
+    // fire-and-forget is safe and keeps cleanup off the result path.
+    void deleteProfile(workspace)
 
     if (result.status !== "success") {
       const detail = result.status === "failed" ? `: ${result.error.message}` : ""
@@ -516,23 +614,43 @@ async function buildAndInitController(): Promise<
     modes: [
       {
         id: "plan",
-        name: "Plan",
+        name: "Rehearse",
         metadata: { default: true },
         transitionsTo: "execute",
-        availableTools: PLAN_MODE_TOOLS,
-        instructions: [
-          "Understand the user's demo request and explore the target site read-only if needed.",
-          "Write the scene-by-scene demo plan to a markdown file under plans/ in the workspace,",
-          "then call submit_plan({ path }) with the path to that file — never the plan body.",
-          "Do NOT output the plan as text. To revise after 'Request changes', edit the same",
-          "file in place and call submit_plan again with the same path.",
-          "The plan file must contain a fenced json block matching the scene plan schema",
-          "(scenes with id/title/goal/startUrl/endUrl/actions/expectedOutcome/narrationHint).",
-          "Do NOT write a `script` field on any scene: the executable script is produced by",
-          "rehearsal against the live page, never guessed here, and inventing selectors would",
-          "be worse than omitting it — a scene with no script fails loudly by design.",
-          "Do not record anything in this mode.",
-        ].join(" "),
+        availableTools: REHEARSE_MODE_TOOLS,
+        additionalTools: {
+          rehearse_flow: rehearseFlowTool,
+          save_login: saveLoginTool,
+        } as ToolsInput,
+        instructions: `Rehearse the demo before anything is recorded, then submit a plan for approval.
+
+Discovery is yours; walking flows is not. Open the product and look around with the shell tool if you need to — a handful of pages, snapshots not screenshots — enough to see what flows exist. Then hand each flow to \`rehearse_flow\`, one at a time, and read its result before starting the next. Do not walk a flow yourself; \`rehearse_flow\` is what produces the executable script the recording pass replays.
+
+If the product needs a login: ask for the username with one \`ask_user\` call and the password with a second, then call \`save_login\` once. Do this BEFORE the first \`rehearse_flow\` call. Never put a password in any other tool call, and never write one to a file.
+
+If scope is ambiguous — you found eight flows and the user asked for "a demo" — ask early with \`ask_user\`, after a light look around and before rehearsing anything. That one question is what stops you spending an hour proving the wrong flows.
+
+If you are picking up a thread that already has work in it, read \`rehearsal/checkpoint.json\` before doing anything else. A flow still marked \`in-progress\` was interrupted and must be rehearsed again — call \`rehearse_flow\` for it first. Flows marked \`done\` are done; do not re-walk them.
+
+A \`rehearse_flow\` result of \`blocked\` is information, not a dead end. Read the detail. If a person can unblock it, ask them and call \`rehearse_flow\` again with what they told you as \`guidance\`. If nobody can, leave it out of the plan and say so in the report.
+
+When every flow you intend to use is rehearsed, write the plan to a markdown file under plans/ and call \`submit_plan({ path })\` with the path — never the plan body, and never as chat text. To revise after "Request changes", edit the same file and call \`submit_plan\` again with the same path.
+
+The plan file must contain a fenced json block matching the scene plan schema (scenes with id/title/goal/startUrl/endUrl/actions/expectedOutcome/narrationHint).
+
+- Scene \`id\`s must be **exactly** the sceneIds \`rehearse_flow\` returned, in the order it returned them. They are how the harness attaches each proven script to its scene; an id you invent will fail the run.
+- Do NOT write a \`script\` field on any scene. The proven scripts already live in \`rehearsal/scripts.json\` and the harness merges them in. Copying them into the plan would create a second, stale copy.
+
+The plan file must ALSO contain a "## Rehearsal report" section, in prose, covering:
+
+- **Flows that could not be completed**, and what stopped each one.
+- **One-shot flows** — any flow marked \`oneShot\` because it cannot be run a second time (a real invitation, a cancelled subscription, a first-run wizard). Name each one and say what recording it will actually do. The user needs to decide before approving, not after.
+- **What this rehearsal already did to their product** — every \`state-created\` finding. Boards created, invites sent, files uploaded.
+- **Anything that deviated from what the user asked for.**
+
+\`rehearsal/findings.md\` in the workspace has all of this; read it before writing the report rather than reconstructing it from memory.
+
+Do not record anything in this mode.`,
       },
       {
         id: "execute",
@@ -596,5 +714,8 @@ export async function getOrCreateSession(
  */
 export function disposeThread(projectId: string, threadId: string): void {
   sessions.delete(`${projectId}:${threadId}`)
+  // Spec §12's third deletion site. Sync function, async cleanup: the profile
+  // name is derived from the workspace path, which is still computable here.
+  void deleteProfile(getWorkspace(threadId))
   disposeDemioWorkspace(threadId)
 }
