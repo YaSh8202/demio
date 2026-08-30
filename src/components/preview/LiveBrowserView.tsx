@@ -29,6 +29,11 @@ interface LiveBrowserViewProps {
    * the same port).
    */
   refreshNonce?: number
+  /**
+   * Called with the URL of the page currently shown in the stream, and with
+   * null when there is no stream (or none reported yet).
+   */
+  onPageUrl?: (url: string | null) => void
 }
 
 export function LiveBrowserView({
@@ -36,7 +41,18 @@ export function LiveBrowserView({
   className,
   onStaleUrl,
   refreshNonce = 0,
+  onPageUrl,
 }: LiveBrowserViewProps) {
+  // Keep the parent's URL in sync with the presence of a stream: without a
+  // wsUrl there is no page to report.
+  const onPageUrlRef = useRef(onPageUrl)
+  useEffect(() => {
+    onPageUrlRef.current = onPageUrl
+  }, [onPageUrl])
+  useEffect(() => {
+    if (!wsUrl) onPageUrlRef.current?.(null)
+  }, [wsUrl])
+
   // When wsUrl is null, show idle placeholder.
   // When wsUrl is set, render the StreamCanvas keyed by the URL
   // so React naturally resets all state on URL change.
@@ -52,6 +68,7 @@ export function LiveBrowserView({
           key={`${wsUrl}#${refreshNonce}`}
           wsUrl={wsUrl}
           onStaleUrl={onStaleUrl}
+          onPageUrl={onPageUrl}
         />
       ) : (
         <Placeholder />
@@ -67,9 +84,11 @@ export function LiveBrowserView({
 function StreamCanvas({
   wsUrl,
   onStaleUrl,
+  onPageUrl,
 }: {
   wsUrl: string
   onStaleUrl?: () => void
+  onPageUrl?: (url: string | null) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -91,6 +110,12 @@ function StreamCanvas({
   useEffect(() => {
     onStaleUrlRef.current = onStaleUrl
   }, [onStaleUrl])
+
+  // Page-URL callback ref — same reasoning
+  const onPageUrlRef = useRef(onPageUrl)
+  useEffect(() => {
+    onPageUrlRef.current = onPageUrl
+  }, [onPageUrl])
 
   // ---------------------------------------------------------------------------
   // Canvas sizing — maintain viewport aspect ratio within container
@@ -217,6 +242,10 @@ function StreamCanvas({
       onStaleUrlRef.current?.()
     })
 
+    const unsubPageUrl = stream.onPageUrl((url) => {
+      onPageUrlRef.current?.(url)
+    })
+
     stream.connect(wsUrl)
 
     return () => {
@@ -224,6 +253,7 @@ function StreamCanvas({
       unsubViewport()
       unsubFrame()
       unsubStale()
+      unsubPageUrl()
       stream.disconnect()
       streamRef.current = null
     }

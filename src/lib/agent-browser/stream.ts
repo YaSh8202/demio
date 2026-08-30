@@ -25,6 +25,7 @@ type FrameCallback = (img: HTMLImageElement) => void
 type StatusCallback = (status: StreamStatus) => void
 type ViewportCallback = (width: number, height: number) => void
 type StaleUrlCallback = () => void
+type PageUrlCallback = (url: string | null) => void
 
 /**
  * Number of failed reconnects (close events without an intervening open) before
@@ -36,14 +37,25 @@ type StaleUrlCallback = () => void
  */
 const MAX_RECONNECT_BEFORE_REFRESH = 3
 
+/** A single tab entry from a `tabs` snapshot message. */
+interface StreamTab {
+  url?: string
+  title?: string
+  active?: boolean
+}
+
 /** JSON message from the agent-browser WebSocket stream. */
 interface StreamMessage {
-  type: "status" | "tabs" | "frame"
+  type: "status" | "tabs" | "frame" | "url"
   // status fields
   connected?: boolean
   viewportWidth?: number
   viewportHeight?: number
   screencasting?: boolean
+  // url fields — main-frame navigation of the active tab
+  url?: string
+  // tabs fields — snapshot sent on connect
+  tabs?: StreamTab[]
   // frame fields
   data?: string // base64 JPEG
   metadata?: {
@@ -73,11 +85,13 @@ export class BrowserStream {
   private statusCallbacks = new Set<StatusCallback>()
   private viewportCallbacks = new Set<ViewportCallback>()
   private staleUrlCallbacks = new Set<StaleUrlCallback>()
+  private pageUrlCallbacks = new Set<PageUrlCallback>()
 
   private _status: StreamStatus = "idle"
   private _viewportWidth = 1280
   private _viewportHeight = 720
   private _browserConnected = false
+  private _pageUrl: string | null = null
 
   // Reusable Image element for decoding frames — avoids GC pressure
   // from creating a new Image per frame.
@@ -102,6 +116,11 @@ export class BrowserStream {
   /** Whether the agent-browser daemon has a browser connected. */
   get browserConnected(): boolean {
     return this._browserConnected
+  }
+
+  /** URL of the active tab's main frame, or null before the first report. */
+  get pageUrl(): string | null {
+    return this._pageUrl
   }
 
   // ---------------------------------------------------------------------------
@@ -179,6 +198,7 @@ export class BrowserStream {
     }
 
     this._browserConnected = false
+    this.setPageUrl(null)
     this.setStatus("idle")
   }
 
@@ -215,6 +235,18 @@ export class BrowserStream {
     return () => this.staleUrlCallbacks.delete(callback)
   }
 
+  /**
+   * Fired when the active tab navigates. The daemon sends a `url` message on
+   * every main-frame navigation and a `tabs` snapshot on connect, so a fresh
+   * subscriber gets the current page without waiting for the next navigation.
+   */
+  onPageUrl(callback: PageUrlCallback): () => void {
+    this.pageUrlCallbacks.add(callback)
+    // Fire immediately with the last known URL
+    callback(this._pageUrl)
+    return () => this.pageUrlCallbacks.delete(callback)
+  }
+
   // ---------------------------------------------------------------------------
   // Internals
   // ---------------------------------------------------------------------------
@@ -223,6 +255,12 @@ export class BrowserStream {
     if (this._status === status) return
     this._status = status
     this.statusCallbacks.forEach((cb) => cb(status))
+  }
+
+  private setPageUrl(url: string | null): void {
+    if (this._pageUrl === url) return
+    this._pageUrl = url
+    this.pageUrlCallbacks.forEach((cb) => cb(url))
   }
 
   private handleTextMessage(raw: string): void {
@@ -249,13 +287,26 @@ export class BrowserStream {
         }
         break
 
+      case "url":
+        if (msg.url) {
+          this.setPageUrl(msg.url)
+        }
+        break
+
+      case "tabs": {
+        // Snapshot sent on connect — seeds the URL before any navigation.
+        const active = msg.tabs?.find((t) => t.active) ?? msg.tabs?.[0]
+        if (active?.url) {
+          this.setPageUrl(active.url)
+        }
+        break
+      }
+
       case "frame":
         if (msg.data) {
           this.decodeFrame(msg.data)
         }
         break
-
-      // "tabs" messages are informational — we ignore them for now
     }
   }
 

@@ -18,6 +18,16 @@ interface ThreadRightPanelProps {
 
 // ── Browser view ────────────────────────────────────────────────────────────
 
+/**
+ * Trim a URL down to what fits a narrow chrome bar: drop the scheme and a
+ * leading "www.", and drop a bare trailing slash. Anything left over is
+ * truncated by CSS, with the full URL kept in the title attribute.
+ */
+function formatPageUrl(raw: string): string {
+  const trimmed = raw.replace(/^https?:\/\//, "").replace(/^www\./, "")
+  return trimmed.length > 1 ? trimmed.replace(/\/$/, "") : trimmed
+}
+
 function BrowserView({
   wsUrl,
   refreshNonce,
@@ -29,7 +39,15 @@ function BrowserView({
   onStaleUrl: () => void
   domain: string | null | undefined
 }) {
-  const url = domain ? `${domain}/...` : "loading..."
+  // Live URL reported by the stream; falls back to the project domain until
+  // the browser reports its first page.
+  const [pageUrl, setPageUrl] = useState<string | null>(null)
+  const url = pageUrl
+    ? formatPageUrl(pageUrl)
+    : domain
+      ? `${domain}/...`
+      : "loading..."
+
   return (
     <div className="flex h-full flex-col gap-2.5 p-4">
       {/* URL bar */}
@@ -39,7 +57,10 @@ function BrowserView({
           <span className="size-2 rounded-full bg-white/15" />
           <span className="size-2 rounded-full bg-white/15" />
         </span>
-        <span className="flex-1 truncate font-mono text-[11px] text-white/70">
+        <span
+          className="flex-1 truncate font-mono text-[11px] text-white/70"
+          title={pageUrl ?? undefined}
+        >
           {url}
         </span>
         <span className="flex items-center gap-1.5">
@@ -57,6 +78,7 @@ function BrowserView({
           className="size-full"
           onStaleUrl={onStaleUrl}
           refreshNonce={refreshNonce}
+          onPageUrl={setPageUrl}
         />
       </div>
 
