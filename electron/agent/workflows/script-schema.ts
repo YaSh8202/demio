@@ -14,6 +14,19 @@ export const scriptedActionSchema = z.object({
         "Must use a durable locator (role + name), never a snapshot ref like @e17 — " +
         "refs are resolved against a live RefMap that does not survive a page load."
     ),
+  waitBefore: z
+    .string()
+    .optional()
+    .describe(
+      "Arguments to `agent-browser wait` that must PASS BEFORE this command " +
+        "runs, e.g. `--text \"new\"` or `--selector '.project-card'`. Record one " +
+        "whenever the step is only valid on a settled page: replay arrives " +
+        "cold (it opens startUrl and fires the first command ~100ms later), " +
+        "whereas you proved the step after seconds of snapshotting, by which " +
+        "time every async list had rendered. Without it the step fails as a " +
+        "flat `Element not found` that no retry can fix. If you proved the " +
+        "step as `wait X && <cmd>`, the `wait X` half belongs here."
+    ),
   assert: z
     .string()
     .optional()

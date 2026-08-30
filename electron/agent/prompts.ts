@@ -432,6 +432,14 @@ export interface RecoveryInstructionsContext {
    * step itself. Rendered into the prompt only when present.
    */
   guidance?: string
+  /**
+   * agent-browser vault profile for this run, when one exists. Recovery is
+   * the only place a signed-out browser can be signed back in mid-run, and
+   * unlike page state a session survives the retake's re-`open`.
+   */
+  vaultProfile?: string | null
+  /** True when the `amend_scene_script` tool is available this run. */
+  canAmend?: boolean
 }
 
 /**
@@ -444,6 +452,8 @@ export interface RecoveryInstructionsContext {
  */
 export function recoveryInstructions(ctx: RecoveryInstructionsContext): string {
   const { workspace, script, deviation, guidance } = ctx
+  const vaultProfile = ctx.vaultProfile ?? null
+  const canAmend = ctx.canAmend === true
 
   const scriptList = script.actions
     .map(
@@ -468,11 +478,37 @@ ${guidanceBlock}
 
 Clear whatever is blocking that step, then stop. The scene will be retaken from step 0 immediately after you finish.
 
-**You MAY**: dismiss a cookie banner or modal, close an overlay, scroll an element into view, wait for a slow render, reload the page, or navigate back to \`${script.startUrl}\`.
+**You MAY**: dismiss a cookie banner or modal, close an overlay, scroll an element into view, wait for a slow render, reload the page, or navigate back to \`${script.startUrl}\`.${
+    vaultProfile
+      ? `
+
+**If the page is a sign-in screen, sign in with \`agent-browser auth login ${vaultProfile}\`** and nothing else — never type a username or password yourself. This script was proven in a signed-in browser; a run that starts signed out fails its very first step, and this is the one repair that survives the retake, because a session is not page state. (If step 0 above IS \`auth login\`, this is the scene's own step — do not run it; reply BLOCKED.)`
+      : ""
+  }
 
 **You MUST NOT** run any command from the script above, or anything equivalent to one. Do not click Create. Do not fill the form. Do not advance the flow. If you complete part of the scene, the retake will replay those steps again and fail on duplicated work.
 
-**Watch for the case where the obstacle IS the step**: a disabled button, a field that rejected what was typed, a control that is present but inert. There, "clear it" and "do it" are the same action no matter which verb is involved (click, toggle, drag, keyboard shortcut, select) — satisfying that precondition performs the step. Do not attempt it. Spend a command confirming what you are looking at, then reply BLOCKED with what you observed.
+${
+  canAmend
+    ? `# Or: the script is what is wrong
+
+Two different things can have gone wrong here, and they need opposite responses.
+
+- **The page is wrong.** A modal is covering the control, the list has not rendered, you are signed out. Clear it with the shell, as above. The script is fine.
+- **The script is wrong.** The step names a selector that matches nothing, or asserts something that can never become true, or acts on an element before the page could possibly have it. Nothing you do to the page fixes that — the retake replays the same broken command and fails identically.
+
+For the second case, call \`amend_scene_script\` with the scene's COMPLETE action list and your fix applied. The usual fixes are small: add a \`waitBefore\` so the step waits for what it needs, correct a selector to one you have just confirmed in a snapshot, or relax an assertion to something the page actually reaches.
+
+Rules:
+
+- **Confirm before you rewrite.** Spend a command looking at the page and check your replacement matches something real. A guessed selector is how the script got here.
+- **Never delete the failing step.** A shorter action list is rejected outright. If that step genuinely cannot be performed, that is a BLOCKED, not an amendment.
+- **Change only what is broken.** Leave the steps that worked exactly as they are.
+- Your rewrite is replayed from \`${script.startUrl}\` with the camera off before any retake. If it does not replay, it is discarded and the scene fails — so amend on evidence, not on a hunch.
+
+**Watch for the case where the obstacle IS the step**`
+    : `**Watch for the case where the obstacle IS the step**`
+}: a disabled button, a field that rejected what was typed, a control that is present but inert. There, "clear it" and "do it" are the same action no matter which verb is involved (click, toggle, drag, keyboard shortcut, select) — satisfying that precondition performs the step. Do not attempt it. Spend a command confirming what you are looking at, then reply BLOCKED with what you observed.
 
 Use at most 3 commands. If 3 commands cannot clear it, stop and report failure — an unrecoverable blocker is a better outcome than a corrupted starting state.
 
@@ -505,6 +541,12 @@ export interface RehearsalInstructionsContext {
   /** Free-text steer from the outer agent (a Gate B revision, a user answer). */
   guidance?: string
   /**
+   * agent-browser vault profile holding this run's login, when one was saved
+   * (`save_login` in controller.ts). Null means the run has no credentials at
+   * all — which is a different instruction, not a softer one.
+   */
+  vaultProfile?: string | null
+  /**
    * Set when this flow is being re-walked after the app restarted. The
    * browser is guaranteed gone (`cleanupStaleSessions()` runs `close --all`
    * at app start), so the page state is not what the transcript implies.
@@ -524,6 +566,7 @@ export function rehearsalInstructions(
   ctx: RehearsalInstructionsContext
 ): string {
   const { workspace, flow, screenshotDir, findings, guidance, resumeNote } = ctx
+  const vaultProfile = ctx.vaultProfile ?? null
 
   const findingsBlock = findings.trim()
     ? `\n# What earlier flows already learned\n\n${findings.trim()}\n`
@@ -550,12 +593,13 @@ A **script**: an ordered list of agent-browser commands, each one proven to work
 
 Work one step at a time:
 
-1. \`agent-browser snapshot -i\` and read it.
+1. \`agent-browser snapshot -i\` and read it. **Straight after an \`open\`, that snapshot comes back nearly empty** — the document exists but the app has not rendered. Follow every \`open\` with \`agent-browser wait --load complete\` (the state argument is required; a bare \`--load\` is a usage error) and snapshot again, rather than re-opening the page and hoping.
 2. Decide the single next command.
-3. Run it.
-4. Prove it landed: run \`agent-browser wait <assertion>\` and see it succeed.
-5. Call \`record_scene_script\` with the scene's actions **so far**.
-6. Screenshot the result: \`agent-browser screenshot --screenshot-dir ${screenshotDir} --screenshot-format jpeg --screenshot-quality 80\`.
+3. Decide what must already be on screen for it to work, and prove that with \`agent-browser wait <precondition>\`.
+4. Run the command.
+5. Prove it landed: run \`agent-browser wait <assertion>\` and see it succeed.
+6. Call \`record_scene_script\` with the scene's actions **so far**.
+7. Screenshot the result: \`agent-browser screenshot --screenshot-dir ${screenshotDir} --screenshot-format jpeg --screenshot-quality 80\`.
 
 **Call \`record_scene_script\` after EVERY proven step — never once at the end.** Re-calling it with the same \`sceneId\` replaces the previous version, so it is safe to call repeatedly as the action list grows. If this run dies halfway, everything already proven survives on disk; anything you were saving up for the end does not.
 
@@ -577,6 +621,27 @@ find role textbox --name "Board title" fill "..."
 \`\`\`
 
 Never \`find text\` for a clickable control. Never \`find nth\` with a positional guess. If two elements genuinely share a role and name, record a \`selector\` finding saying so and what you used instead.
+
+# Every step carries a precondition
+
+**You are working on a page that has been open and settled for a long time. Replay is not.** The recording pass opens \`startUrl\` and fires your first command about a tenth of a second later — before an async list has fetched, before a route has lazily mounted, before a modal has finished animating in. Every one of those renders is already long done by the time you see it in a snapshot.
+
+So a command that works for you can fail flat for replay, as \`Element not found\`, on every attempt. That failure mode is invisible from here and unfixable later: nothing about a retry makes the page load faster.
+
+\`waitBefore\` is how a step says *"only valid once X is on screen"*. It is the arguments to \`agent-browser wait\`, run before the command:
+
+\`\`\`json
+{ "cmd": "click \\"xpath=//p[text()='new']\\"",
+  "waitBefore": "--text \\"new\\"",
+  "assert": "--url \\"https://app.x.com/project/\\"" }
+\`\`\`
+
+Rules:
+
+- **If you proved a step as \`wait X && <cmd>\`, the \`wait X\` half is a precondition — put it in \`waitBefore\`.** Chaining it into \`cmd\` does not work: \`cmd\` is one command, not a shell line.
+- The **first action of every scene** almost always needs one. It runs against a page that has just this moment finished navigating.
+- Wait for the thing you are about to act on, not for a proxy. \`--text "new"\` before clicking \`new\`; not \`wait 3000\`, which is a guess that is either too short on a slow day or dead air on a fast one.
+- A step that needs no precondition simply omits it. Do not invent one.
 
 # Every step carries an assertion
 
@@ -608,7 +673,7 @@ Search terms, filter text and anything the product does not persist do not need 
 Call \`record_finding\` as you go:
 
 - \`selector\` — an element that was ambiguous, and what worked instead.
-- \`wait\` — a wait the flow genuinely needs (a slow render, an animation).
+- \`wait\` — a render the flow genuinely has to wait for. Record the executable form in that step's \`waitBefore\`; the finding is for the human reading the report, not a substitute for it.
 - \`blocker\` — something that stopped you.
 - \`state-created\` — **anything this rehearsal created, sent or changed in the real product.** A board, an invite, an uploaded file. This is how the user finds out what a rehearsal cost them.
 - \`note\` — anything else worth knowing at review time.
@@ -616,6 +681,43 @@ Call \`record_finding\` as you go:
 # One-shot flows
 
 If this flow genuinely cannot be run a second time — it sends a real invitation, cancels a subscription, completes a first-run wizard that never appears again — set \`"oneShot": true\` on its scenes and record a \`blocker\` finding explaining why. Do not try to work around it. A human decides what happens to a one-shot flow at review time.
+
+# Credentials
+
+**Never type a username, password, OTP or API key into a command, and never record one in a script.** A script is replayed on camera: a password typed by a scripted \`fill\` is a password rendered into the demo video, keystroke by keystroke. It is also written to \`scripts.json\` in the clear and kept for the life of the thread.
+
+If a credential appears anywhere in your context — a steer, a finding, an earlier transcript — that is not permission to use it. It is a leak to route around.
+
+${
+  vaultProfile
+    ? `**You are already signed in.** This run's login is held in agent-browser's own vault as \`${vaultProfile}\`, and it was replayed into the browser before you started.
+
+- **Do not sign out.** The session you were handed is the one the recording uses. Signing out to "prove the login flow" destroys it, costs you the steps to get back in, and is the single most expensive mistake available to you here.
+- If the demo genuinely needs the sign-in on camera, the scene has **one** action and the credentials never appear in it:
+
+\`\`\`json
+{ "cmd": "auth login ${vaultProfile}",
+  "assert": "--url \\"https://app.example.com/home\\"",
+  "settleMs": 1500 }
+\`\`\`
+
+  Prove it exactly like any other step, and only if the demo calls for it. A flow that starts from an already-signed-in page needs no login scene at all.`
+    : `**This run has no saved credentials**, and you have no way to obtain any. If the flow needs a sign-in, record a \`blocker\` finding saying so and reply \`BLOCKED\`. Do not look for credentials, and do not type any you happen to find.`
+}
+
+# Your script is replayed cold before this flow counts
+
+When you reply \`DONE\`, the harness replays every script you recorded — from \`startUrl\`, with the camera off, using the exact commands the recording pass will use. If any step fails there, the flow comes back \`blocked\` and your work is thrown away.
+
+This exists because the two things are not the same artifact. You prove a flow by *driving the page*: you snapshot, you look, you try, you adjust — and by the time you click, the page has been open for a minute and everything has rendered. The script gets none of that. It arrives on a cold page and fires the first command a tenth of a second later.
+
+So as you write each action, ask: *would this work if it were the only thing that happened?* Concretely —
+
+- Anything you waited for, even implicitly, belongs in \`waitBefore\`. If you ran \`wait X && cmd\`, that is a precondition, not a convenience.
+- A step that worked because of something you did earlier and did NOT record is a step that will fail.
+- If the flow is behind a sign-in, the script cannot assume you are signed in just because you are. Either the scene starts from a page that does not need auth, or its first action is the vault sign-in.
+
+The replay runs the flow for real, a second time. A scene that CREATES something the product keeps — a board, a session, a message — must therefore be parameterised (so the replay uses different data) or marked \`oneShot\` (so it is skipped). Getting that wrong does not break anything, but it leaves an extra copy behind in the user's account, and they find out from your \`state-created\` findings.
 
 # When you are stuck
 

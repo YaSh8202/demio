@@ -49,6 +49,27 @@ export function vaultProfileName(workspace: string): string {
   return `demio-${threadId}`
 }
 
+/**
+ * Positive evidence that a login form is on screen.
+ *
+ * Answers the one question `auth login`'s exit code cannot: did we actually
+ * get in? Exit 0 is not proof — observed on workik.com, where `auth login`
+ * filled both fields, found no submit control it recognised, and exited 0
+ * with the form sitting there unsubmitted.
+ *
+ * Only ever true on evidence. A probe that cannot run returns false, so an
+ * unrelated fault is never reported as an authentication failure.
+ */
+async function loginFormVisible(): Promise<boolean> {
+  const probe = await execAgentBrowser(
+    [`eval "!!document.querySelector('input[type=password]')"`],
+    { timeout: 10_000 }
+  )
+  // `output` is `string | Record<string, unknown>` — agent-browser JSON-parses
+  // stdout when it can, so `true` arrives as a boolean, not the string "true".
+  return probe.ok && /\btrue\b/.test(JSON.stringify(probe.output))
+}
+
 export async function saveCredentials(opts: {
   workspace: string
   loginUrl: string
@@ -57,7 +78,7 @@ export async function saveCredentials(opts: {
   usernameSelector?: string
   passwordSelector?: string
   submitSelector?: string
-}): Promise<{ ok: boolean; detail: string }> {
+}): Promise<{ ok: boolean; detail: string; verified: boolean }> {
   const profile = vaultProfileName(opts.workspace)
   const parts = [
     `auth save ${shellQuote(profile)}`,
@@ -80,11 +101,41 @@ export async function saveCredentials(opts: {
   })
   // `res.error`/`res.output` are safe to surface: `auth save` echoes "✓ Done"
   // and never the password. Verified against the installed binary.
+  if (!res.ok) {
+    return {
+      ok: false,
+      verified: false,
+      detail: res.error || "auth save failed",
+    }
+  }
+
+  // Save, then PROVE it. `auth save` only writes a file — it never touches a
+  // browser, so on its own it cannot tell whether the stored selectors match
+  // the product's login form. That gap is what let a broken login sit
+  // undetected: every later `auth login` timed out, and every caller read the
+  // timeout as "already signed in".
+  //
+  // Proving it HERE is what makes it fixable. This runs while the caller still
+  // has the login page open and the context to inspect it, so a failure comes
+  // back as something the model can act on — read the form's DOM, find the real
+  // control, call save_login again — instead of as a scene deviation twenty
+  // minutes later with the camera rolling.
+  const login = await loginProfile(opts.workspace)
+  if (!login.stillOnLoginForm) {
+    return {
+      ok: true,
+      verified: true,
+      detail: `saved vault profile ${profile} and verified a test login`,
+    }
+  }
   return {
-    ok: res.ok,
-    detail: res.ok
-      ? `saved vault profile ${profile}`
-      : res.error || "auth save failed",
+    ok: true,
+    verified: false,
+    detail:
+      `saved vault profile ${profile}, but a test login did NOT sign in ` +
+      `(${login.detail}) — a password field is still on screen. The stored ` +
+      `selectors do not match this login form. Inspect the form and call ` +
+      `save_login again with the selectors you read off the page.`,
   }
 }
 
@@ -100,21 +151,45 @@ export async function hasProfile(workspace: string): Promise<boolean> {
  * Log in using the saved profile. Camera-off only — never call this with a
  * recording running.
  *
- * `auth login` "waits for form fields to appear before filling/clicking"
- * (its own `--help`), so on a session that is ALREADY logged in there is no
- * form to wait for and it is expected to time out rather than succeed. That
- * is why callers treat a failure here as advisory: see the preflight step.
+ * `auth login` navigates to the profile's URL and then waits for the username
+ * field (`handle_auth_login`, agent-browser `native/actions.rs:8394`). On a
+ * session that is ALREADY logged in that URL redirects away, there is no form
+ * to wait for, and it times out rather than succeeding — which is why callers
+ * historically treated any failure here as advisory.
+ *
+ * **That conflation hid a total outage.** A wrong `--username-selector`
+ * produces the identical timeout, and every caller logged it as "expected
+ * when the session is already authenticated" and carried on. The two cases
+ * are distinguishable and this function now distinguishes them: after a
+ * failure, probe for a visible password field. `auth login` has just
+ * navigated to the login URL, so a password field on screen means we are
+ * sitting on the login form — not signed in, and the timeout was real.
+ *
+ * `stillOnLoginForm` is only ever true on positive evidence, and it is probed
+ * on EVERY outcome — including exit 0. A zero exit is not proof of a login: on
+ * workik.com `auth login` filled both fields, could not match a submit control
+ * against its three auto-detect patterns, and exited 0 anyway. Replay read
+ * that as success and failed one step later on the assertion instead, with the
+ * camera rolling.
  */
 export async function loginProfile(
   workspace: string
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; stillOnLoginForm: boolean }> {
   const profile = vaultProfileName(workspace)
   const res = await execAgentBrowser([`auth login ${shellQuote(profile)}`], {
     timeout: 45_000,
   })
+  const stillOnLoginForm = await loginFormVisible()
+  if (res.ok && !stillOnLoginForm) {
+    return { ok: true, detail: "logged in", stillOnLoginForm: false }
+  }
   return {
-    ok: res.ok,
-    detail: res.ok ? "logged in" : res.error || "auth login failed",
+    ok: false,
+    detail: stillOnLoginForm
+      ? res.error ||
+        "auth login exited 0 but a password field is still on screen"
+      : res.error || "auth login failed",
+    stillOnLoginForm,
   }
 }
 

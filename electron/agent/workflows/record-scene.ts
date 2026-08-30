@@ -11,10 +11,12 @@
 // progress events, and the synthesized failure report.
 //
 // Reconciled against installed APIs (Task 11):
-// - `record start <path> [url] [flags]` accepts `--log-actions <path>`
+// - `record restart <path> [flags]` accepts `--log-actions <path>`
 //   (confirmed via `agent-browser record --help`). `recordingBracket` in
-//   `replay-pure.cjs` builds the exact `open`/`record start`/`record
-//   restart` commands issued below.
+//   `replay-pure.cjs` builds the exact `open` / `wait` / `record restart`
+//   commands issued below, and its header documents why `record start` is
+//   never used: it re-navigates inside a fresh context, putting the app's
+//   cold boot on camera.
 
 import path from "node:path"
 import { promises as fs } from "node:fs"
@@ -34,7 +36,11 @@ const pure = require("./replay-pure.cjs") as {
     videoPath: string
     actionsPath: string
     isRetry: boolean
-  }) => { commands: string[]; resetsPage: boolean }
+  }) => {
+    commands: string[]
+    resetsPage: boolean
+    preRollIndex: number | null
+  }
   resolveParams: (script: SceneScript) => SceneScript
 }
 
@@ -43,12 +49,12 @@ const pure = require("./replay-pure.cjs") as {
  *
  * **Known consequence for a state-dependent `chained` scene: it is
  * effectively single-attempt.** `recordingBracket`'s retry path deliberately
- * falls back to `open startUrl` + `record start` (attempt N-1's
- * half-executed wreckage is not a valid start state), and that fresh
- * navigation discards exactly the in-page state a chained scene continues
- * from. So attempts 2 and 3 of such a scene are deterministically doomed —
- * they burn two takes and up to two recovery LLM runs, and "retry with
- * guidance" on the suspension card can never succeed for them either.
+ * re-opens `startUrl` before recording (attempt N-1's half-executed wreckage
+ * is not a valid start state), and that fresh navigation discards exactly the
+ * in-page state a chained scene continues from. So attempts 2 and 3 of such
+ * a scene are deterministically doomed — they burn two takes and up to two
+ * recovery LLM runs, and "retry with guidance" on the suspension card can
+ * never succeed for them either.
  *
  * On the shipped fixture this is concrete: retrying `scene-02` re-opens
  * Main_Page with an empty search box, so `press Enter` does nothing.
@@ -168,6 +174,11 @@ export async function recordSceneWithRetry(opts: {
   // Attempts *started*, not `maxAttempts` — an abort before attempt 1 (or
   // between attempts) must not be reported as if all `maxAttempts` ran.
   let attemptsMade = 0
+  // The script in force for the NEXT attempt. Starts as the rehearsed one and
+  // is replaced when off-camera recovery amends it — an amendment only ever
+  // arrives already proven by a cold replay (see `recoverFromDeviation`), so
+  // there is nothing to re-validate here.
+  let activeScript = scene.script
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (signal.aborted) break
@@ -184,7 +195,7 @@ export async function recordSceneWithRetry(opts: {
       `${scene.id}.attempt-${attempt}.agent.json`
     )
 
-    const rawScript = scene.script
+    const rawScript = activeScript
     if (!rawScript) {
       // A scene without a script cannot be recorded. Rehearsal produces it;
       // `toScenesStep` merges it in. Fail loudly rather than silently
@@ -217,8 +228,10 @@ export async function recordSceneWithRetry(opts: {
 
     opts.onProgress?.({ sceneId: scene.id, attempt, phase: "recording" })
 
-    // 1. Open the take. A chained scene restarts on the live page; an
-    //    independent scene (or any retry) re-opens the start URL.
+    // 1. Open the take. A chained scene picks up on the live page; an
+    //    independent scene (or any retry) re-opens the start URL first.
+    //    Either way the camera is only started once the scene's opening
+    //    precondition holds.
     const bracket = pure.recordingBracket({
       script,
       videoPath,
@@ -235,19 +248,84 @@ export async function recordSceneWithRetry(opts: {
     // paths and URLs, and exec.ts spawns with no shell to strip them en
     // route — so each bracket command MUST be issued as its own
     // single-element call, never batched into one.
+    //
+    // The bracket may include a camera-off pre-roll `wait` (the first
+    // action's precondition). Its failure lands here as "failed before
+    // recording", which is accurate: the page never reached the state the
+    // scene starts from, and nothing was captured.
     let bracketFailed = false
-    for (const cmd of bracket.commands) {
+    let failedIndex = -1
+    let failedError = ""
+    for (const [i, cmd] of bracket.commands.entries()) {
       const r = await execAgentBrowser([cmd], { timeout: 60_000 })
       if (!r.ok) {
         // A stale recording session is the known failure mode — clear it.
         await execAgentBrowser(["record stop"], { timeout: 15_000 })
-        previousFailure = `failed before recording — \`${cmd}\` failed: ${r.error ?? "unknown error"}`
+        failedIndex = i
+        failedError = r.error ?? "unknown error"
+        previousFailure = `failed before recording — \`${cmd}\` failed: ${failedError}`
         lastReport = infraFailureReport(previousFailure)
         bracketFailed = true
         break
       }
     }
     if (bracketFailed) {
+      // A failed PRECONDITION is not an infrastructure failure — it means the
+      // page was not in the state this scene starts from. That is the one
+      // pre-recording failure recovery can act on, and the one where acting
+      // sticks: signing in or clearing an interstitial is session state, which
+      // survives the next attempt's re-`open`, unlike page state.
+      //
+      // Without this branch the loop is unwinnable by construction. Every
+      // attempt reruns the identical bracket against the identical page and
+      // fails identically, the user's "Retry scene" does the same, and because
+      // the transcript is only written after replay, three attempts leave no
+      // artifact at all. That is exactly what a script rehearsed in an
+      // authenticated browser does when the record pass starts logged out.
+      if (failedIndex === bracket.preRollIndex) {
+        const deviation = {
+          index: 0,
+          cmd: script.actions[0].cmd,
+          detail: `precondition \`${bracket.commands[failedIndex]}\` failed: ${failedError}`,
+        }
+        opts.onProgress?.({
+          sceneId: scene.id,
+          attempt,
+          phase: "verifying",
+          detail: `recovering: ${deviation.detail}`,
+        })
+        const recovery = await recoverFromDeviation({
+          workspace,
+          modelId,
+          script,
+          deviation,
+          guidance: opts.guidance,
+          signal,
+        })
+        // The plain-bracket path below writes no transcript because nothing
+        // ran; here an agent did, and its steps are the only record of it.
+        await writeAgentTranscript(transcriptPath, {
+          sceneId: scene.id,
+          attempt,
+          modelId,
+          previousFailure: previousFailure || null,
+          replay: { status: "not-started", steps: [] },
+          preRoll: {
+            command: bracket.commands[failedIndex],
+            error: failedError,
+          },
+          recovery: {
+            recovered: recovery.recovered,
+            detail: recovery.detail,
+            steps: recovery.steps,
+          },
+        })
+        if (recovery.amendedScript) activeScript = recovery.amendedScript
+        previousFailure =
+          `${deviation.detail} Recovery ` +
+          `${recovery.recovered ? "cleared it" : "failed"}: ${recovery.detail}`
+        lastReport = infraFailureReport(previousFailure)
+      }
       log.warn(
         `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
       )
@@ -354,6 +432,8 @@ export async function recordSceneWithRetry(opts: {
           steps: recovery.steps,
         },
       })
+      // The retake replays THIS, not the script the attempt started with.
+      if (recovery.amendedScript) activeScript = recovery.amendedScript
       previousFailure =
         `deviated at step ${outcome.deviation.index} (${outcome.deviation.cmd}): ` +
         `${outcome.deviation.detail}. Recovery ${recovery.recovered ? "cleared it" : "failed"}: ${recovery.detail}`

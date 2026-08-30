@@ -4,10 +4,16 @@
 // the video. Deliberately narrow: see recoveryInstructions() for why it must
 // not perform the scene's own steps.
 
+import { createTool } from "@mastra/core/tools"
 import { WORKSPACE_TOOLS } from "@mastra/core/workspace"
+import { z } from "zod"
 import { createDemioAgent } from "../demio-agent"
 import { recoveryInstructions } from "../prompts"
-import type { SceneScript } from "./script-schema"
+import { hasProfile, vaultProfileName } from "./credentials"
+import { scriptedActionSchema } from "./script-schema"
+import type { SceneScript, ScriptedAction } from "./script-schema"
+import { isSafeToReplayOffCamera, replayScriptOffCamera } from "./replay"
+import { recordScript } from "./rehearsal"
 import log from "../../lib/logger"
 
 /** Shell only — recovery reads and writes nothing on disk. */
@@ -19,6 +25,18 @@ const RECOVERY_MAX_STEPS = 6
 export interface RecoveryOutcome {
   recovered: boolean
   detail: string
+  /**
+   * The scene's script, rewritten by the recovery agent and PROVEN by a cold
+   * off-camera replay. Present only when an amendment was made and accepted;
+   * the caller retakes with this instead of the original.
+   *
+   * Recovery has always been able to change the world — dismiss a modal, sign
+   * in — but never the plan. Most of what actually breaks a take is in the
+   * plan: a missing precondition, a selector that moved. Without this the
+   * agent could see the fix and had no way to apply it, so the retake replayed
+   * the same broken script and failed the same way.
+   */
+  amendedScript?: SceneScript
   /**
    * The agent's raw generation steps, returned so the caller can persist
    * them next to the scene's other artifacts.
@@ -33,6 +51,60 @@ export interface RecoveryOutcome {
   steps: unknown[]
 }
 
+/**
+ * The amendment tool, bound to ONE scene.
+ *
+ * Deliberately narrow: `actions` only. `startUrl`, `endUrl`, `continuity`,
+ * `oneShot` and `params` are the scene's contract with the rest of the
+ * pipeline — `endUrl` is the next chained scene's start state, `continuity`
+ * decides the recording bracket — and a six-step agent looking at one failed
+ * step has no business renegotiating them. Every failure this exists for
+ * lives inside `actions`.
+ *
+ * The candidate is held in memory, not written: it reaches `scripts.json`
+ * only after `recoverFromDeviation` replays it cold and it passes. A rejected
+ * amendment therefore leaves no trace, and there is no revert path to get
+ * wrong if the run dies mid-recovery.
+ */
+function createAmendTool(
+  script: SceneScript,
+  capture: (actions: ScriptedAction[]) => void
+) {
+  return {
+    amend_scene_script: createTool({
+      id: "amend_scene_script",
+      description:
+        "Rewrite this scene's actions when the script itself is what is wrong — a missing `waitBefore`, a selector that no longer matches, an assertion that can never pass. Pass the COMPLETE action list, not just the changed step. The rewrite is replayed cold before any retake, so a bad one is rejected rather than filmed. Use this only when the page is fine and the script is wrong; if the page is what is blocking, clear it with the shell instead.",
+      inputSchema: z.object({
+        actions: z
+          .array(scriptedActionSchema)
+          .min(1)
+          .describe("The scene's full action list, with your fix applied."),
+        reason: z
+          .string()
+          .describe("One sentence: what was wrong with the old script."),
+      }),
+      outputSchema: z.object({ ok: z.boolean(), actions: z.number() }),
+      execute: async (input) => {
+        // A script cannot be "fixed" by deleting the step that failed. That
+        // would pass every check below — cold replay, verification, duration
+        // — and produce a scene that films nothing. Amendments may change or
+        // add steps; they may not quietly drop the flow's content.
+        if (input.actions.length < script.actions.length) {
+          throw new Error(
+            `amend_scene_script: the amended script has ${input.actions.length} ` +
+              `action(s), fewer than the ${script.actions.length} it started with. ` +
+              `Fix the failing step; do not remove it. If the step genuinely ` +
+              `cannot be performed, reply BLOCKED instead.`
+          )
+        }
+        capture(input.actions as ScriptedAction[])
+        return { ok: true, actions: input.actions.length }
+      },
+    }),
+  }
+}
+
 export async function recoverFromDeviation(opts: {
   workspace: string
   modelId: string
@@ -43,15 +115,36 @@ export async function recoverFromDeviation(opts: {
   signal: AbortSignal
 }): Promise<RecoveryOutcome> {
   try {
+    // Resolved on the failure path only — one `auth show` on a run that has
+    // already gone wrong. Recovery is the only stage that can sign a
+    // signed-out browser back in, and it needs the profile NAME to do it
+    // without ever handling the password.
+    let vaultProfile: string | null = null
+    try {
+      if (await hasProfile(opts.workspace)) {
+        vaultProfile = vaultProfileName(opts.workspace)
+      }
+    } catch {
+      // A vault that cannot be read is not a reason to skip recovery — the
+      // agent simply loses the sign-in option.
+      vaultProfile = null
+    }
+
+    let amendedActions: ScriptedAction[] | null = null
     const agent = createDemioAgent({
       workspace: opts.workspace,
       modelId: opts.modelId,
       toolFilter: RECOVERY_TOOL_FILTER,
+      extraTools: createAmendTool(opts.script, (a) => {
+        amendedActions = a
+      }),
       instructionsOverride: recoveryInstructions({
         workspace: opts.workspace,
         script: opts.script,
         deviation: opts.deviation,
         guidance: opts.guidance,
+        vaultProfile,
+        canAmend: true,
       }),
     })
     const res = await agent.generate(
@@ -60,8 +153,72 @@ export async function recoverFromDeviation(opts: {
     )
     const text = (res.text ?? "").trim()
     const steps = (res.steps ?? []) as unknown[]
+
+    // Validate and persist an amendment before deciding the outcome. A
+    // rewritten script that has not been replayed is exactly the artifact
+    // this whole design exists to stop trusting.
+    let amendedScript: SceneScript | undefined
+    // TS narrows the closure-assigned local to `null` without this: the
+    // callback that sets it is not visible to the control-flow analysis.
+    const captured = amendedActions as ScriptedAction[] | null
+    if (captured) {
+      const candidate: SceneScript = { ...opts.script, actions: captured }
+      if (!isSafeToReplayOffCamera(candidate)) {
+        // A oneShot or parameterised scene must not be run an extra time just
+        // to check it. Accept the amendment unverified and say so — the
+        // retake is then its first and only test.
+        amendedScript = candidate
+        await recordScript(opts.workspace, candidate)
+        log.info(
+          `[demo-workflow] scene ${candidate.sceneId}: script amended, NOT ` +
+            `cold-replayed (oneShot/parameterised) — the retake is its first test`
+        )
+      } else {
+        // `isRetry: true` — what follows this is a retake, and a retake always
+        // re-opens `startUrl`. Validating under any other assumption would
+        // prove a script the retake is not going to run.
+        const proof = await replayScriptOffCamera({
+          script: candidate,
+          isRetry: true,
+          signal: opts.signal,
+        })
+        if (proof.ok) {
+          amendedScript = candidate
+          // Persisted only now, and to the same file rehearsal writes, so a
+          // later run of this thread gets the fix too.
+          await recordScript(opts.workspace, candidate)
+          log.info(
+            `[demo-workflow] scene ${candidate.sceneId}: script amended and ` +
+              `proven off camera (${proof.detail})`
+          )
+        } else {
+          log.warn(
+            `[demo-workflow] scene ${candidate.sceneId}: amended script ` +
+              `REJECTED — ${proof.detail}`
+          )
+          return {
+            recovered: false,
+            detail: `the amended script does not replay either: ${proof.detail}`,
+            steps,
+          }
+        }
+      }
+    }
     // Unlike the old recorder's DONE/STUCK protocol — which nothing ever
     // parsed — this reply is genuinely read: it decides retake vs escalate.
+    // An accepted amendment IS a recovery, whatever the agent's prose says:
+    // the script it produced has been replayed cold and works, which is
+    // stronger evidence than the word CLEARED.
+    if (amendedScript) {
+      return {
+        recovered: true,
+        detail: text.startsWith("CLEARED")
+          ? text
+          : `CLEARED: script amended and proven off camera. ${text}`.trim(),
+        steps,
+        amendedScript,
+      }
+    }
     if (text.startsWith("CLEARED")) {
       return { recovered: true, detail: text, steps }
     }

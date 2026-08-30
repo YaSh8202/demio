@@ -15,7 +15,7 @@
 // `electron/handlers/agent.ts`: Maps -> plain objects, Errors -> {name,
 // message, stack}, Dates -> ISO strings.
 
-import { useCallback, useEffect, useReducer } from "react"
+import { useCallback, useEffect, useReducer, useRef } from "react"
 import { apis, events } from "@/types/electron-api"
 import log from "@/lib/logger"
 import type { UIMessage } from "../../electron/store/types"
@@ -610,14 +610,38 @@ export function useAgentEvents(
   cancel: () => Promise<void>
 } {
   const [state, dispatch] = useReducer(reducer, initial)
+  // The thread this reducer's state belongs to. Compared against the current
+  // key below so a reset fires on a real thread CHANGE and not merely on an
+  // effect re-run — see there for why the difference matters.
+  const boundKeyRef = useRef<string | null>(null)
 
   useEffect(() => {
-    // Every (projectId, threadId) change starts from a clean slate — without
-    // this, switching threads appends the new thread's hydrated messages
-    // onto the previous thread's `messages` array (upsert-by-id never
-    // collides across threads), and `suspension`/`displayState`/`usage`/
-    // `shellOutput` all carry over too.
-    dispatch({ type: "reset" })
+    const boundKey = threadId ? `${projectId}:${threadId}` : null
+
+    // Switching threads starts from a clean slate — without it, the new
+    // thread's hydrated messages append onto the previous thread's
+    // `messages` array (upsert-by-id never collides across threads), and
+    // `suspension`/`displayState`/`usage`/`shellOutput` all carry over too.
+    //
+    // Guarded on an actual change rather than fired unconditionally, because
+    // this state is the ONLY copy of an in-flight turn. `listMessages` reads
+    // `mastra_messages`, which gains a row when a message COMPLETES — so
+    // while a long turn is streaming (a rehearsal is ten minutes inside one
+    // assistant message) storage holds nothing for it, and the legacy
+    // JSON-store fallback is empty too (nothing has called
+    // `apis.store.appendMessage` since the controller migration). An
+    // unconditional reset on a re-run for the SAME thread therefore wipes
+    // the visible conversation and re-hydrates zero messages: the thread
+    // reads as "Send a message to start the conversation" while the run is
+    // still going, and the transcript is gone for good.
+    //
+    // Nothing is lost by keeping it: hydration is insert-if-absent and
+    // `display_state_changed` is an authoritative snapshot, so a re-run for
+    // the same thread reconciles onto the existing state correctly.
+    if (boundKeyRef.current !== boundKey) {
+      if (boundKeyRef.current !== null) dispatch({ type: "reset" })
+      boundKeyRef.current = boundKey
+    }
 
     if (!threadId || !apis || !events) return
     const key = `${projectId}:${threadId}`

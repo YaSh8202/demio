@@ -17,7 +17,8 @@ import { z } from "zod"
 import { createDemioAgent } from "../demio-agent"
 import { rehearsalInstructions } from "../prompts"
 import { sceneScriptSchema } from "./script-schema"
-import { hasProfile, loginProfile } from "./credentials"
+import { isSafeToReplayOffCamera, replayScriptOffCamera } from "./replay"
+import { hasProfile, loginProfile, vaultProfileName } from "./credentials"
 import {
   beginFlow,
   dropFlowScripts,
@@ -37,11 +38,93 @@ import log from "../../lib/logger"
 const REHEARSAL_TOOL_FILTER = [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]
 
 /**
- * Step ceiling for one flow. Spec §8 budgets ~30-40 steps per flow; each
- * proven step costs roughly snapshot + command + assert + record + screenshot,
- * so this is about eight proven steps' worth of room plus exploration.
+ * Replay a flow's proven scripts cold, off camera, before the flow may be
+ * called `done`.
+ *
+ * **This is the gate the design was missing.** Rehearsal proves a *sequence of
+ * interactive actions* and then writes down a *script*; those are two different
+ * artifacts, and until now nothing executed the second one until the camera was
+ * already rolling. Every difference between the two — a wait the agent made
+ * interactively but never recorded, a step that only worked because the agent
+ * had been on the page for a minute, a login the run does not actually have —
+ * surfaced at record time, in the one place where nothing can be fixed and the
+ * only options are three identical retries and a suspension card.
+ *
+ * Running it here moves those failures to where they are cheap: the agent is
+ * still alive, still has the product open, and still has budget to fix its own
+ * script.
+ *
+ * Positioning comes from `positioningCommands`, the exact function the
+ * recording bracket uses, and the step loop is the exact `replayScene` the
+ * record pass runs — so a pass here means the same commands in the same order
+ * against the same page. A test pins the two together.
+ *
+ * **Skipped, per scene, when replaying would not be safe:** a `oneShot` scene
+ * cannot be run twice at all, and a scene with `params` deliberately runs with
+ * DIFFERENT values on the record pass, so replaying it here would either
+ * consume those values early or create a third copy of whatever it creates.
+ * Skips are reported, never silent — an unproven script should not read as a
+ * proven one.
  */
-export const REHEARSAL_MAX_STEPS = 40
+async function dressRehearse(
+  workspace: string,
+  flowId: string,
+  signal: AbortSignal | undefined
+): Promise<{ ok: boolean; detail: string }> {
+  const doc = await readScripts(workspace)
+  const scripts = doc.scripts.filter((s) => s.sceneId.startsWith(`${flowId}.`))
+  if (scripts.length === 0) return { ok: true, detail: "no scenes to replay" }
+
+  const skipped: string[] = []
+  const replayed: string[] = []
+
+  for (const script of scripts) {
+    if (signal?.aborted) return { ok: true, detail: "aborted before replay" }
+    if (!isSafeToReplayOffCamera(script)) {
+      skipped.push(
+        `${script.sceneId} (${script.oneShot ? "oneShot" : "parameterised"})`
+      )
+      continue
+    }
+
+    // `isRetry: false` — this simulates a fresh run of the whole flow, so a
+    // chained scene continues from the scene this loop just replayed, exactly
+    // as it will during recording.
+    const res = await replayScriptOffCamera({ script, isRetry: false, signal })
+    if (!res.ok) {
+      return {
+        ok: false,
+        detail:
+          `${script.sceneId} does not replay: ${res.detail}. It worked while ` +
+          `you were driving the page by hand, but not as a script run cold ` +
+          `from ${script.startUrl}.`,
+      }
+    }
+    replayed.push(script.sceneId)
+  }
+
+  const parts = [`replayed ${replayed.length} scene(s) cleanly`]
+  if (skipped.length > 0) parts.push(`not replayed: ${skipped.join(", ")}`)
+  return { ok: true, detail: parts.join("; ") }
+}
+
+/**
+ * Step ceiling for one flow.
+ *
+ * Spec §8 budgeted ~30-40, on the model of snapshot + command + assert +
+ * record + screenshot per proven step — about eight proven steps plus
+ * exploration. Real flows on a real product do not fit that. The workik
+ * `open-project-new` rehearsal proved two scenes (six actions) and still hit
+ * the ceiling, because exploration is not a fixed overhead: an ambiguous
+ * role match, a selector that needs an `eval` to pin down, or a daemon
+ * hiccup each cost a step, and they scale with the product, not the flow.
+ *
+ * Raised to 100 at the user's direction. The ceiling is a runaway guard, not
+ * a budget to spend — `finishFlow` still records how many scenes were
+ * actually proven, and a flow that exhausts 100 steps is genuinely wrong
+ * rather than merely large.
+ */
+export const REHEARSAL_MAX_STEPS = 100
 
 /** Flow ids are kebab-case so `<flowId>.NN` scene ids stay unambiguous. */
 export const SAFE_FLOW_ID = /^[a-z0-9-]+$/
@@ -160,17 +243,35 @@ export async function rehearseFlow(opts: {
   const paths = rehearsalPaths(workspace)
   let text = ""
   let steps: unknown[] = []
+  let vaultProfile: string | null = null
   try {
     // A login-gated product cannot be rehearsed logged out, and the sub-agent
-    // has no way to authenticate itself: it has no `ask_user` and no access to
-    // the credentials. `save_login` (controller.ts) stored them in the vault
-    // before the first flow; this is where they get used. Mirrors
-    // `preflightStep` in demo-video.ts, which does the same thing for the
-    // record pass — see its comment for why a failure here is advisory rather
-    // than fatal.
+    // must not authenticate itself: credentials typed into a command end up
+    // in the scene script, and a scene script is replayed on camera.
+    // `save_login` (controller.ts) stored them in the vault before the first
+    // flow; this is where they get used. Mirrors `preflightStep` in
+    // demo-video.ts, which does the same thing for the record pass — see its
+    // comment for why a failure here is advisory rather than fatal.
+    //
+    // The profile NAME (never the secret) is passed into the prompt below, so
+    // the agent can script `auth login <profile>` instead of typing a
+    // password — and so it knows it is already signed in and must not sign
+    // out to "prove" the login flow.
     if (await hasProfile(workspace)) {
+      vaultProfile = vaultProfileName(workspace)
       const auth = await loginProfile(workspace)
-      if (!auth.ok) {
+      if (!auth.ok && auth.stillOnLoginForm) {
+        // Positive evidence of a login form AFTER `auth login` navigated to
+        // the login URL: authentication genuinely failed. Loud, because a
+        // rehearsal that walks a logged-out product proves the wrong flow —
+        // or, worse, proves nothing and burns the step budget rediscovering
+        // that it is signed out.
+        log.warn(
+          `[rehearsal] vault login FAILED for flow ${flow.id} (${auth.detail}) ` +
+            `— a password field is still on screen, so this run is NOT ` +
+            `authenticated. Check the profile's saved selectors.`
+        )
+      } else if (!auth.ok) {
         log.info(
           `[rehearsal] vault login did not complete for flow ${flow.id} ` +
             `(${auth.detail}) — expected when the session is already ` +
@@ -191,6 +292,7 @@ export async function rehearseFlow(opts: {
         findings: await readFindings(workspace),
         guidance: opts.guidance,
         resumeNote,
+        vaultProfile,
       }),
     })
     const res = await agent.generate(
@@ -228,19 +330,60 @@ export async function rehearseFlow(opts: {
   // to: the sub-agent narrated a successful rehearsal without ever calling
   // record_scene_script. Trust the artifacts, not the prose.
   const claimsDone = text.startsWith("DONE")
-  const status: "done" | "blocked" =
+  let status: "done" | "blocked" =
     claimsDone && sceneIds.length > 0 ? "done" : "blocked"
   let detail =
     claimsDone && sceneIds.length === 0
       ? `${text} — but no scene script was recorded, so nothing was actually proven`
       : text || "rehearsal agent returned nothing"
 
+  // The dress rehearsal. `done` now means "these scripts have been executed
+  // cold and they work", not "the agent said so". Only runs on an otherwise
+  // successful flow: a blocked flow has nothing worth replaying, and a
+  // half-written script would just produce a second, noisier failure.
+  let blockedByDressRehearsal = false
+  if (status === "done") {
+    try {
+      const dress = await dressRehearse(workspace, flow.id, opts.signal)
+      if (!dress.ok) {
+        status = "blocked"
+        blockedByDressRehearsal = true
+        detail =
+          `the script this flow produced does not replay — ${dress.detail} ` +
+          `Rehearse it again and fix that step; recording it as it stands ` +
+          `would fail on camera with no way to recover.`
+        log.warn(
+          `[rehearsal] flow ${flow.id} failed its dress rehearsal: ${dress.detail}`
+        )
+      } else {
+        detail = `${detail} (dress rehearsal: ${dress.detail})`
+      }
+    } catch (err) {
+      // A dress rehearsal that cannot run is not evidence the script is bad.
+      // Leave the flow `done` and say the check did not happen, rather than
+      // blocking a good flow on a broken checker.
+      const msg = err instanceof Error ? err.message : String(err)
+      log.warn(
+        `[rehearsal] dress rehearsal for ${flow.id} could not run: ${msg}`
+      )
+      detail = `${detail} (dress rehearsal did not run: ${msg})`
+    }
+  }
+
   // A blocked result that also exhausted the step budget is not a real
   // blocker the outer agent can resolve with guidance — re-invoking restarts
   // under the same ceiling (dropFlowScripts wipes the partial progress) and
   // can never converge. Say so plainly so the outer agent splits the flow
   // instead of retrying it unchanged.
-  if (status === "blocked" && steps.length >= REHEARSAL_MAX_STEPS) {
+  // Not when the dress rehearsal is what blocked it: the agent finished
+  // inside its budget and produced a script, so "split this flow" is the
+  // wrong advice — the script has one bad step and needs fixing, not
+  // dividing.
+  if (
+    status === "blocked" &&
+    !blockedByDressRehearsal &&
+    steps.length >= REHEARSAL_MAX_STEPS
+  ) {
     detail =
       `${detail} — step budget (${REHEARSAL_MAX_STEPS} steps) exhausted after ` +
       `proving ${sceneIds.length} scene(s); this flow needs more steps than one ` +

@@ -25,6 +25,7 @@ function normalizeScript(raw) {
       raw.params && typeof raw.params === "object" ? { ...raw.params } : {},
     actions: raw.actions.map((a) => ({
       cmd: String(a.cmd),
+      waitBefore: typeof a.waitBefore === "string" ? a.waitBefore : undefined,
       assert: typeof a.assert === "string" ? a.assert : undefined,
       settleMs: typeof a.settleMs === "number" ? a.settleMs : DEFAULT_SETTLE_MS,
       narrationAnchor:
@@ -69,6 +70,10 @@ function resolveParams(script) {
     actions: script.actions.map((a, i) => ({
       ...a,
       cmd: substitute(a.cmd, `action ${i} cmd`),
+      waitBefore:
+        a.waitBefore === undefined
+          ? undefined
+          : substitute(a.waitBefore, `action ${i} waitBefore`),
       assert:
         a.assert === undefined
           ? undefined
@@ -84,9 +89,25 @@ function resolveParams(script) {
  */
 const ACTION_BASELINE_MS = 400
 
-/** The agent-browser command strings one scripted step expands to. */
+/**
+ * The agent-browser command strings one scripted step expands to, in order:
+ * an optional PRECONDITION wait, the command itself, then an optional
+ * assertion wait.
+ *
+ * `waitBefore` exists because a rehearsed step is frequently only true of a
+ * *settled* page, while replay arrives at a cold one. Rehearsal proves its
+ * steps interactively — by the time the agent clicks, it has already been
+ * snapshotting the page for several seconds — so an async list, a modal
+ * animation or a lazy route has long since rendered. Replay opens `startUrl`
+ * and fires the first command roughly one subprocess spawn later. Without a
+ * precondition the script cannot say "this step is only valid once X is on
+ * screen", and the difference shows up as a flat, deterministic
+ * `Element not found` that no retry can fix.
+ */
 function buildStepCommands(action) {
-  const cmds = [action.cmd]
+  const cmds = []
+  if (action.waitBefore) cmds.push(`wait ${action.waitBefore}`)
+  cmds.push(action.cmd)
   if (action.assert) cmds.push(`wait ${action.assert}`)
   return cmds
 }
@@ -97,7 +118,15 @@ function buildStepCommands(action) {
  * case is the one today's `actions-ok` check cannot see, because
  * agent-browser logs a click on the wrong element as `ok: true`.
  */
-function classifyStep({ cmdResult, assertResult }) {
+function classifyStep({ preResult, preCmd, cmdResult, assertResult }) {
+  if (preResult && preResult.ok !== true) {
+    return {
+      status: "deviation",
+      detail:
+        `precondition ${preCmd ? `\`${preCmd}\` ` : ""}failed: ` +
+        `${preResult.error || "unknown error"}`,
+    }
+  }
   if (!cmdResult || cmdResult.ok !== true) {
     return {
       status: "deviation",
@@ -116,7 +145,11 @@ function classifyStep({ cmdResult, assertResult }) {
 /** Predicted length of a clean take, in ms. */
 function expectedDurationMs(script) {
   return script.actions.reduce(
-    (sum, a) => sum + a.settleMs + ACTION_BASELINE_MS,
+    (sum, a) =>
+      sum +
+      a.settleMs +
+      ACTION_BASELINE_MS +
+      (a.waitBefore ? ACTION_BASELINE_MS : 0),
     0
   )
 }
@@ -142,14 +175,30 @@ async function runScript({ script, exec, onStep, signal }) {
     const action = script.actions[index]
     const started = Date.now()
 
-    const [cmdString, assertString] = buildStepCommands(action)
-    const cmdResult = await exec([cmdString], { timeout: 30_000 })
+    // A precondition gates the command: if the page never reaches the state
+    // the step needs, the command is NOT attempted. Firing it anyway is what
+    // produced the workik `Element not found` — a click into an unrendered
+    // list, reported as if the selector were wrong.
+    const preCmd = action.waitBefore ? `wait ${action.waitBefore}` : null
+    const preResult = preCmd ? await exec([preCmd], { timeout: 15_000 }) : null
+
+    let cmdResult = null
     let assertResult = null
-    if (assertString && cmdResult.ok === true) {
-      assertResult = await exec([assertString], { timeout: 15_000 })
+    if (!preResult || preResult.ok === true) {
+      cmdResult = await exec([action.cmd], { timeout: 30_000 })
+      if (action.assert && cmdResult.ok === true) {
+        assertResult = await exec([`wait ${action.assert}`], {
+          timeout: 15_000,
+        })
+      }
     }
 
-    const verdict = classifyStep({ cmdResult, assertResult })
+    const verdict = classifyStep({
+      preResult,
+      preCmd,
+      cmdResult,
+      assertResult,
+    })
     const entry = {
       index,
       cmd: action.cmd,
@@ -187,37 +236,97 @@ function quoteArg(value) {
 /**
  * The command(s) that open a take.
  *
- * A `chained` scene uses `record restart`, which re-attaches frame capture to
- * the live page without creating a browser context or navigating — verified
- * in agent-browser's `handle_recording_restart` (native/actions.rs:4719).
- * `record start`, by contrast, creates a fresh context and navigates
- * (native/actions.rs:4528), losing in-page state.
+ * Shape: `[open <startUrl>]?` → `[wait <first precondition>]?` → `record
+ * restart`.
  *
- * A retry always falls back to open+start: scene N's half-executed wreckage
- * is not a valid start state, so continuity is traded for idempotency on
- * that take only.
+ * **`record start` is deliberately not used, for any scene.** It looks like
+ * the right primitive and is not: `handle_recording_start`
+ * (agent-browser `native/actions.rs:4528`) reads the current URL, creates a
+ * *fresh browser context*, opens `about:blank`, copies cookies across,
+ * `Page.navigate`s to that URL, sleeps 1000ms, and only then attaches frame
+ * capture. So the preceding `open` is thrown away and the app's entire cold
+ * boot — navigation, bundle, hydration, first paint — lands on camera. That
+ * is exactly the dead air this architecture exists to remove: on the workik
+ * take it was 4.00s of black in a 7.10s scene, which is both an unwatchable
+ * demo and a `black-frames` verification failure.
+ *
+ * `handle_recording_restart` (`native/actions.rs:4719`) creates no context
+ * and never navigates — it re-attaches capture to
+ * `browser.active_session_id()`. When no recording is active it falls
+ * straight through to `recording_start_with_config`
+ * (`native/recording.rs:157`), so it is safe to use as the FIRST bracket of a
+ * run, not only as a continuation.
+ *
+ * This reverses the design spec's "independent = fresh browser context"
+ * (decision 2). What that reset actually bought is already delivered by the
+ * `open` above it — a real navigation destroys in-page state — while the
+ * fresh context additionally *dropped* localStorage (only cookies are
+ * copied) and recorded a duplicate of the authenticated context rather than
+ * the authenticated context itself. `state.viewport` is only ever set by an
+ * explicit `viewport`/`device` command, which this app never issues, so both
+ * paths record at the browser's default size and nothing changes there.
+ *
+ * The first action's `waitBefore` is pre-rolled here, with the camera off,
+ * so the take opens on a page that has already rendered. It is NOT skipped
+ * during replay afterwards: `record restart` does not navigate, so re-running
+ * it costs one subprocess and passes immediately — cheaper than coupling
+ * `runScript` to what the bracket happened to do. Later actions' preconditions
+ * stay on camera, where they belong: mid-scene, waiting for a modal or a
+ * result is content the viewer should see.
+ *
+ * `preRollIndex` names that command's position so the caller can tell a
+ * failed PRECONDITION apart from a failed `open`/`record`. The difference
+ * decides whether a retry has any chance: a precondition failure means the
+ * page was not in the scene's start state, which off-camera recovery can
+ * often fix (sign in, dismiss an interstitial) in a way that SURVIVES the
+ * retry's re-`open`, because it is session state rather than page state. A
+ * failed `open` or `record` is infrastructure, and recovery has nothing to
+ * work with. Without that distinction every attempt reruns the identical
+ * bracket and fails identically — three attempts, no artifacts, no path to
+ * success.
  *
  * NOTE: `record restart <path> <url>` parses the URL and then ignores it —
- * the handler never reads it. Never use restart to navigate.
+ * the handler never reads it. Never use restart to navigate; that is what the
+ * `open` is for.
  */
-function recordingBracket({ script, videoPath, actionsPath, isRetry }) {
-  const logFlag = `--log-actions ${quoteArg(actionsPath)}`
-  if (script.continuity === "chained" && !isRetry) {
-    return {
-      commands: [`record restart ${quoteArg(videoPath)} ${logFlag}`],
-      resetsPage: false,
-    }
-  }
+/**
+ * Everything a take needs BEFORE the camera starts: navigate to the start URL
+ * (unless continuing a chained scene) and satisfy the scene's opening
+ * precondition.
+ *
+ * Split out so the dress rehearsal (rehearse.ts) positions a scene exactly the
+ * way the record pass does. If these two ever diverge, a script passes its
+ * off-camera replay and then fails on camera — which is the whole failure mode
+ * the dress rehearsal exists to eliminate.
+ */
+function positioningCommands({ script, isRetry }) {
+  // A retry always re-opens: scene N's half-executed wreckage is not a valid
+  // start state, so continuity is traded for idempotency on that take only.
+  const reopens = script.continuity !== "chained" || isRetry === true
+  const commands = []
+  if (reopens) commands.push(`open ${quoteArg(script.startUrl)}`)
+  const first = script.actions[0]
+  if (first && first.waitBefore) commands.push(`wait ${first.waitBefore}`)
   return {
-    commands: [
-      `open ${quoteArg(script.startUrl)}`,
-      `record start ${quoteArg(videoPath)} ${logFlag}`,
-    ],
-    resetsPage: true,
+    commands,
+    reopens,
+    preRollIndex: first && first.waitBefore ? commands.length - 1 : null,
   }
 }
 
+function recordingBracket({ script, videoPath, actionsPath, isRetry }) {
+  const { commands, reopens, preRollIndex } = positioningCommands({
+    script,
+    isRetry,
+  })
+  commands.push(
+    `record restart ${quoteArg(videoPath)} --log-actions ${quoteArg(actionsPath)}`
+  )
+  return { commands, resetsPage: reopens, preRollIndex }
+}
+
 module.exports = {
+  positioningCommands,
   normalizeScript,
   resolveParams,
   buildStepCommands,

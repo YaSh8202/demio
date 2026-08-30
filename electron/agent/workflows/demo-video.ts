@@ -159,7 +159,17 @@ const preflightStep = createStep({
     const init = getInitData<DemoVideoInit>()
     if (!(await hasProfile(init.workspace))) return inputData
     const res = await loginProfile(init.workspace)
-    if (!res.ok) {
+    if (!res.ok && res.stillOnLoginForm) {
+      // Not advisory: `auth login` navigated to the login URL and a password
+      // field is still on screen, so the run is genuinely signed out. Every
+      // scene rehearsed behind the login is about to fail its opening
+      // precondition. Say so once, here, with the camera off.
+      log.warn(
+        `[demo-workflow] preflight auth login FAILED (${res.detail}) — a password ` +
+          `field is still on screen, so this run is NOT authenticated. Scenes ` +
+          `that start from a signed-in page will fail their precondition.`
+      )
+    } else if (!res.ok) {
       log.info(
         `[demo-workflow] preflight auth login did not complete (${res.detail}) — ` +
           `expected when the session is still authenticated; continuing`

@@ -260,19 +260,46 @@ const rehearseFlowTool = createTool({
 const saveLoginTool = createTool({
   id: "save_login",
   description:
-    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended. Ask the user for the username and the password with two separate ask_user calls first. The vault profile is deleted when the run succeeds or is aborted, or when the thread is deleted.",
+    "Save this run's login credentials into agent-browser's secure vault so recording can log in unattended, then TEST them by signing in. Ask the user for the username and the password with two separate ask_user calls first. Returns `verified: false` if the test sign-in did not work — when that happens, read the login form's DOM and call this again with the real selectors; do not proceed to rehearsal on an unverified login. The vault profile is deleted when the run succeeds or is aborted, or when the thread is deleted.",
   inputSchema: z.object({
     loginUrl: z.string().describe("The login page URL"),
     username: z.string(),
     password: z.string(),
+    // Selectors are OMITTED on the first call and supplied only on a retry
+    // after `verified: false`. `auth login` auto-detects the form from 12
+    // preferred patterns plus 2 fallbacks, but ONLY when no explicit selector
+    // is stored — a supplied one short-circuits all of it
+    // (`handle_auth_login`, agent-browser `native/actions.rs:8454`). So a
+    // guess is strictly worse than nothing, and three different guesses on
+    // this product (`input[name="email"]`, `input[type="email"]`, `#iybm`)
+    // produced a total authentication outage that nothing detected.
+    //
+    // What makes supplying them safe now is that `saveCredentials` TESTS the
+    // login and reports `verified`, so a wrong selector comes back
+    // immediately instead of surfacing as a scene deviation later. Auto-detect
+    // handles most products; the escape hatch exists for the ones it cannot,
+    // like a submit control that is a `<div>` rather than a `<button>`.
     usernameSelector: z
       .string()
       .optional()
-      .describe("CSS selector for the username field, if you discovered one"),
+      .describe(
+        "Only after a failed verification. A selector you have READ off the live form, never guessed."
+      ),
     passwordSelector: z.string().optional(),
-    submitSelector: z.string().optional(),
+    submitSelector: z
+      .string()
+      .optional()
+      .describe(
+        "Only after a failed verification. The clickable submit control — often NOT a <button>; check the DOM."
+      ),
   }),
-  outputSchema: z.object({ ok: z.boolean(), detail: z.string() }),
+  outputSchema: z.object({
+    ok: z.boolean(),
+    detail: z.string(),
+    verified: z
+      .boolean()
+      .describe("True only if a test sign-in actually left the login form."),
+  }),
   execute: async (input, context) => {
     const threadId = threadIdFromCtx(readControllerCtx(context.requestContext))
     if (!threadId) {
@@ -641,7 +668,9 @@ async function buildAndInitController(): Promise<
 
 Discovery is yours; walking flows is not. Open the product and look around with the shell tool if you need to — a handful of pages, snapshots not screenshots — enough to see what flows exist. Then hand each flow to \`rehearse_flow\`, one at a time, and read its result before starting the next. Do not walk a flow yourself; \`rehearse_flow\` is what produces the executable script the recording pass replays.
 
-If the product needs a login: ask for the username with one \`ask_user\` call and the password with a second, then call \`save_login\` once. Do this BEFORE the first \`rehearse_flow\` call. Never put a password in any other tool call, and never write one to a file.
+If the product needs a login: ask for the username with one \`ask_user\` call and the password with a second, then call \`save_login\`. Do this BEFORE the first \`rehearse_flow\` call. Never put a password in any other tool call, and never write one to a file.
+
+\`save_login\` tests the credentials by signing in, and returns \`verified\`. **If \`verified\` is false, stop and fix it — do not rehearse.** An unverified login means every scene behind it will fail with the camera rolling. Open the login page, read the form (\`agent-browser snapshot -i\`, or \`agent-browser eval\` for the actual markup), find the real email, password and submit controls, and call \`save_login\` again passing those selectors. The submit control is the one that catches people out: it is often a \`<div>\` or a styled \`<p>\`, not a \`<button>\`, and the automatic detection only looks for buttons.
 
 If scope is ambiguous — you found eight flows and the user asked for "a demo" — ask early with \`ask_user\`, after a light look around and before rehearsing anything. That one question is what stops you spending an hour proving the wrong flows.
 
