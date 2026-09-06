@@ -45,7 +45,7 @@ import { createTool } from "@mastra/core/tools"
 import { z } from "zod"
 import { getModel } from "./providers"
 import { DEFAULT_MODEL_ID } from "./types"
-import { chatInstructions } from "./prompts"
+import { chatInstructions, threadContextInstructions } from "./prompts"
 import {
   createDemioWorkspace,
   disposeDemioWorkspace,
@@ -564,7 +564,24 @@ async function buildAndInitController(): Promise<
   const agent = new Agent({
     id: "demio-agent",
     name: "Demio",
-    instructions: "",
+    // The one place the agent learns what the user typed into the home
+    // screen's domain box. `chatInstructions()` below is a static string
+    // (it has to be — the controller composes it once), and the domain
+    // lives on the project, not in the first message. Without this the
+    // agent's first move was to ask "Which URL?" and recommend the Vite dev
+    // server it found on localhost. The controller calls
+    // `getInstructions({ requestContext })` per turn and puts the result
+    // ahead of the harness + mode instructions, so this is a preamble.
+    instructions: ({ requestContext }) => {
+      const ctx = readControllerCtx(requestContext)
+      const projectId = ctx?.resourceId
+      const project = projectId ? getProject(projectId) : null
+      return threadContextInstructions({
+        domain: project?.project.domain ?? null,
+        projectName: project?.project.name ?? null,
+        voiceName: project?.meta.voiceName ?? null,
+      })
+    },
     // Transient connect failures (ECONNRESET / "fetch failed" before any
     // chunk) killed live runs — the deleted orchestrator retried these
     // (modelSettings.maxRetries: 4); restore the same budget here.

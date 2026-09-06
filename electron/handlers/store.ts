@@ -201,6 +201,11 @@ export const storeHandlers = {
         modelId
       )
       updateProject(projectId, { name: projectTitle })
+      // The home screen's domain box wins; the titler only fills the gap
+      // when the box was left empty and the prompt itself named a product.
+      if (domain && !getProject(projectId)?.project.domain) {
+        updateProject(projectId, { domain })
+      }
       updateThread(projectId, threadId, { title: threadTitle, domain })
       broadcastProjectsChanged()
       broadcastThreadsChanged(projectId)

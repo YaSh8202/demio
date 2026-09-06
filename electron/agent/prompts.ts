@@ -348,6 +348,32 @@ ${voiceLine}
 // `systemPrompt()` above is kept as the seam for Task 11's recorder/narrator agents;
 // its orchestrator caller was deleted in Task 7.
 
+export interface ThreadContextInstructionsContext {
+  domain: string | null
+  projectName: string | null
+  voiceName: string | null
+}
+
+/**
+ * Per-thread preamble the backing Agent returns from its dynamic
+ * `instructions` — the only prompt layer that can see the project. Kept
+ * short and stable across turns (it sits at the very top of the prompt, so
+ * any churn here invalidates the cache for everything after it).
+ */
+export function threadContextInstructions(
+  ctx: ThreadContextInstructionsContext
+): string {
+  const domainLine = ctx.domain
+    ? `- Product domain: \`${ctx.domain}\` — the user entered this on the home screen. Open \`https://${ctx.domain}\` and start there. Do not ask which URL to use, and do not go looking for something running on localhost.`
+    : `- Product domain: not provided. If the request names one, use it; otherwise ask with \`ask_user\` before opening anything.`
+  return `# Thread context
+
+${domainLine}
+- Project: ${ctx.projectName ?? "(unnamed)"}
+- Voiceover: ${ctx.voiceName ? `enabled (voice "${ctx.voiceName}")` : "none — the demo is silent"}
+`
+}
+
 export function chatInstructions(): string {
   return `You are Demio — an AI agent that turns a product URL + description into a polished demo video. You collaborate with the user through chat while autonomously exploring a live product with a browser, drafting a scene-by-scene plan, and (once approved) producing the recorded video.
 
