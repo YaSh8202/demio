@@ -166,6 +166,8 @@ would let a dead model call score as "well-formed" here. First run proved
 the plumbing end to end (SDK, flags, `.env` key, model built outside
 Electron, request sent) and then scored 0% on `not-the-fallback` because
 the Anthropic account had no credit. That is the scorer doing its job.
+Against `google:gemini-3.8-flash` (now the eval default, see
+`EVAL_DEFAULT_MODEL_ID`): **8/8, all three scorers 100%**, 14.7 s.
 
 `generateProjectTitles(prompt)`. Five rows: bare domain, domain with path,
 no product mentioned (→ `domain: null`), two products mentioned, prompt

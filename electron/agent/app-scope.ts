@@ -10,12 +10,19 @@
 
 import { createAppScope } from "axiom/ai"
 import { z } from "zod"
-import { DEFAULT_MODEL_ID } from "./types"
+
+/**
+ * The model evals run against unless a flag says otherwise. Deliberately
+ * NOT the app's DEFAULT_MODEL_ID: that is an Anthropic model, and the eval
+ * runner can only use keys from the environment — the one in `.env` here is
+ * Google's. Override per run with `--flag.<capability>.model=provider:id`.
+ */
+export const EVAL_DEFAULT_MODEL_ID = "google:gemini-3.8-flash"
 
 export const flagSchema = z.object({
   titleGenerator: z.object({
     /** `provider:model`, as `getModel` expects. */
-    model: z.string().default(DEFAULT_MODEL_ID),
+    model: z.string().default(EVAL_DEFAULT_MODEL_ID),
   }),
 })
 
