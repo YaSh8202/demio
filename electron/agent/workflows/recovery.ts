@@ -241,9 +241,16 @@ export async function recoverFromDeviation(opts: {
     if (text.startsWith("CLEARED")) {
       return { recovered: true, detail: text, steps }
     }
+    // An empty reply after a full step budget is not "nothing" — it is the
+    // agent spending every step looking and none fixing. Say so; the
+    // suspension card is where the user reads this.
     return {
       recovered: false,
-      detail: text || "recovery agent returned nothing",
+      detail:
+        text ||
+        (steps.length >= RECOVERY_MAX_STEPS
+          ? `recovery agent used all ${RECOVERY_MAX_STEPS} steps without amending the script or replying`
+          : "recovery agent returned nothing"),
       steps,
     }
   } catch (err) {
