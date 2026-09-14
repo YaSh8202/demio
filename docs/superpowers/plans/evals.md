@@ -142,7 +142,30 @@ Task: `narrateStep`'s `generate()` with `structuredOutput`. Inputs are the
 band 2.0–3.2, which is the design spec §14 pacing target as a scorer instead
 of an unwritten section. Reference-free `Coherence` via LLM-as-judge.
 
+### How to run
+
+```
+bun run eval -- --debug                                   # every eval, local, nothing uploaded
+bun run eval -- --debug electron/agent/title-generator.eval.ts
+bun run eval -- --debug --flag.titleGenerator.model=google:gemini-3.7-flash
+```
+
+Keys come from the environment (`.env` is loaded): `ANTHROPIC_API_KEY`,
+`GOOGLE_API_KEY`, … — the app's keychain-stored keys are not reachable
+outside Electron. Without `--debug` the runner also needs `AXIOM_TOKEN`
+and `AXIOM_DATASET` and uploads the results. Flags live in
+`electron/agent/app-scope.ts`; the runner config in `axiom.config.ts`.
+
 ### 1c. Title generator — classification eval
+
+**Built** — `electron/agent/title-generator.eval.ts`, 8 cases, 3 scorers
+(`domain-exact`, `titles-well-formed`, `not-the-fallback`). The third
+exists because `generateProjectTitles` swallows every error into a fallback
+whose thread title is always "Chat" — right for the app, and exactly what
+would let a dead model call score as "well-formed" here. First run proved
+the plumbing end to end (SDK, flags, `.env` key, model built outside
+Electron, request sent) and then scored 0% on `not-the-fallback` because
+the Anthropic account had no credit. That is the scorer doing its job.
 
 `generateProjectTitles(prompt)`. Five rows: bare domain, domain with path,
 no product mentioned (→ `domain: null`), two products mentioned, prompt

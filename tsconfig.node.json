@@ -29,6 +29,7 @@
     "vite.renderer.config.ts",
     "forge.config.ts",
     "forge.env.d.ts",
+    "axiom.config.ts",
     "electron/**/*.ts"
   ],
   // Eval files import the axiom SDK, which is not a dependency of the app.
