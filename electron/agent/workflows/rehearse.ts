@@ -92,12 +92,16 @@ async function dressRehearse(
     // as it will during recording.
     const res = await replayScriptOffCamera({ script, isRetry: false, signal })
     if (!res.ok) {
+      const slow = res.detail.startsWith("replays cleanly")
       return {
         ok: false,
-        detail:
-          `${script.sceneId} does not replay: ${res.detail}. It worked while ` +
-          `you were driving the page by hand, but not as a script run cold ` +
-          `from ${script.startUrl}.`,
+        detail: slow
+          ? `${script.sceneId} ${res.detail}. Replace the slow step with an ` +
+            `observation that proves the same state instantly, then call ` +
+            `record_scene_script again.`
+          : `${script.sceneId} does not replay: ${res.detail}. It worked ` +
+            `while you were driving the page by hand, but not as a script ` +
+            `run cold from ${script.startUrl}.`,
       }
     }
     replayed.push(script.sceneId)

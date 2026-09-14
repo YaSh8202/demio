@@ -522,6 +522,7 @@ Two different things can have gone wrong here, and they need opposite responses.
 
 - **The page is wrong.** A modal is covering the control, the list has not rendered, you are signed out. Clear it with the shell, as above. The script is fine.
 - **The script is wrong.** The step names a selector that matches nothing, or asserts something that can never become true, or acts on an element before the page could possibly have it. Nothing you do to the page fixes that — the retake replays the same broken command and fails identically.
+- **The step passed but was too slow.** If the deviation says a step *reported success* but cost tens of seconds, the take was rejected for its length, not its content. The usual culprit is a \`wait --load\` on a page that had already loaded — the next load event never comes, and agent-browser reports success only after giving up. Treat this as "the script is wrong": replace that step with an instant observation that proves the same state (\`wait --selector "#firstHeading"\`, \`wait --url …\`). If the scene's only action IS the slow wait, the replacement is that observation — do not delete the step, and do not add a real action the rehearsal never proved.
 
 For the second case, call \`amend_scene_script\` with the scene's COMPLETE action list and your fix applied. The usual fixes are small: add a \`waitBefore\` so the step waits for what it needs, correct a selector to one you have just confirmed in a snapshot, or relax an assertion to something the page actually reaches.
 
@@ -619,7 +620,7 @@ A **script**: an ordered list of agent-browser commands, each one proven to work
 
 Work one step at a time:
 
-1. \`agent-browser snapshot -i\` and read it. **Straight after an \`open\`, that snapshot comes back nearly empty** — the document exists but the app has not rendered. Follow every \`open\` with \`agent-browser wait --load complete\` (the state argument is required; a bare \`--load\` is a usage error) and snapshot again, rather than re-opening the page and hoping.
+1. \`agent-browser snapshot -i\` and read it. **Straight after an \`open\`, that snapshot comes back nearly empty** — the document exists but the app has not rendered. Follow every \`open\` with \`agent-browser wait --load load\` (the state argument is required and must be one of \`load\`, \`domcontentloaded\`, \`networkidle\`; anything else — \`complete\`, say — is silently treated as \`load\`) and snapshot again, rather than re-opening the page and hoping.
 2. Decide the single next command.
 3. Decide what must already be on screen for it to work, and prove that with \`agent-browser wait <precondition>\`.
 4. Run the command.
@@ -668,6 +669,7 @@ Rules:
 - The **first action of every scene** almost always needs one. It runs against a page that has just this moment finished navigating.
 - Wait for the thing you are about to act on, not for a proxy. \`--text "new"\` before clicking \`new\`; not \`wait 3000\`, which is a guess that is either too short on a slow day or dead air on a fast one.
 - A step that needs no precondition simply omits it. Do not invent one.
+- **A scene's actions never begin with \`open\` or \`wait --load\`.** The recording pass runs \`open startUrl\`, waits for it, and runs the first action's \`waitBefore\` — all before the camera starts. An \`open\` as the first action re-loads a loaded page on camera; a \`wait --load\` as the first action waits for a load event that already happened, and agent-browser reports success after ~25 seconds of a static page. Your script starts at the first thing the viewer should see happen. A script that breaks this rule is rejected by \`record_scene_script\`.
 
 # Every step carries an assertion
 

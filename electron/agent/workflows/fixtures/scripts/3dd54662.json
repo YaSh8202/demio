@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "scroll-homepage.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://example.com",
+      "endUrl": "https://example.com/",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "scroll down 500",
+          "waitBefore": "--text \"Example Domain\"",
+          "assert": "--text \"Learn more\"",
+          "settleMs": 1000
+        }
+      ]
+    }
+  ]
+}

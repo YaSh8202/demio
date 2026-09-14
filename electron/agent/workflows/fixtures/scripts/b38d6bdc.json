@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "search-wikipedia.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://en.wikipedia.org",
+      "endUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "find placeholder \"Search Wikipedia\" fill \"Electron (software framework)\"",
+          "waitBefore": "\"#searchInput\"",
+          "assert": "\".cdx-typeahead-search__menu .cdx-menu-item\"",
+          "settleMs": 600
+        },
+        {
+          "cmd": "click \".cdx-typeahead-search__menu .cdx-menu-item:first-child a\"",
+          "waitBefore": "\".cdx-typeahead-search__menu .cdx-menu-item\"",
+          "assert": "--url \"https://en.wikipedia.org/wiki/Electron_(software_framework)\"",
+          "settleMs": 600
+        },
+        {
+          "cmd": "scroll down 300",
+          "waitBefore": "\".infobox\"",
+          "assert": "--text \"OpenJS Foundation\"",
+          "settleMs": 600
+        }
+      ]
+    }
+  ]
+}

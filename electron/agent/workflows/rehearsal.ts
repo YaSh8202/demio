@@ -14,6 +14,7 @@ import path from "node:path"
 import { promises as fs } from "node:fs"
 import { createRequire } from "node:module"
 import type { SceneScript } from "./script-schema"
+import { assertScriptLints } from "./replay"
 
 const require = createRequire(import.meta.url)
 
@@ -158,6 +159,11 @@ export async function recordScript(
   workspace: string,
   script: SceneScript
 ): Promise<void> {
+  // The write is the gate. Both writers — rehearsal's `record_scene_script`
+  // and recovery's `amend_scene_script` — reach disk through here, so a
+  // script that fails lint is rejected in the tool call that tried to write
+  // it, with every finding listed, while the agent still has the page open.
+  assertScriptLints(script)
   const file = rehearsalPaths(workspace).scripts
   return serialize(workspace, async () => {
     const doc = await readJson(file, pure.emptyScripts)

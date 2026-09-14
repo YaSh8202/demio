@@ -25,6 +25,21 @@ export interface ReplayOutcome {
   deviation?: { index: number; cmd: string; detail: string }
 }
 
+const lint = require("./script-lint-pure.cjs") as {
+  lintScript: (s: SceneScript) => { ok: boolean; findings: LintFinding[] }
+  formatFindings: (f: LintFinding[]) => string
+  checkReplayDuration: (
+    s: SceneScript,
+    steps: ReplayStep[]
+  ) => {
+    ok: boolean
+    detail: string
+    predictedMs: number
+    expectedMs: number
+    slowest: { index: number; cmd: string; durationMs: number } | null
+  }
+}
+
 const pure = require("./replay-pure.cjs") as {
   runScript: (o: {
     script: SceneScript
@@ -43,6 +58,44 @@ const pure = require("./replay-pure.cjs") as {
 /** Predicted length of a clean take, in ms. */
 export function expectedDurationMs(script: SceneScript): number {
   return pure.expectedDurationMs(script)
+}
+
+export type LintFinding = {
+  rule: string
+  index: number | null
+  detail: string
+  /** Advisory findings are reported but never reject a write. */
+  blocking: boolean
+}
+
+/**
+ * Static checks on a script, run at write time. Throws with every finding
+ * listed so the agent that wrote the script can fix it in one pass, while
+ * it still has the page in front of it. See `script-lint-pure.cjs` for the
+ * rules and the real take each one traces to.
+ */
+export function assertScriptLints(script: SceneScript): void {
+  const r = lint.lintScript(script)
+  if (!r.ok) {
+    throw new Error(
+      `script ${script.sceneId} was rejected:\n${lint.formatFindings(r.findings)}`
+    )
+  }
+  const advisory = r.findings.filter((f) => !f.blocking)
+  if (advisory.length > 0) {
+    log.info(
+      `[demo-workflow] script ${script.sceneId}: ${lint.formatFindings(advisory)}`
+    )
+  }
+}
+
+/**
+ * Would a take of this replay pass verification's duration check? Same band
+ * as `verifyScene` — one function, so the dress rehearsal, amendment
+ * validation and the recorded-file check cannot disagree.
+ */
+export function checkReplayDuration(script: SceneScript, steps: ReplayStep[]) {
+  return lint.checkReplayDuration(script, steps)
 }
 
 /**
@@ -117,11 +170,11 @@ export async function replayScriptOffCamera(opts: {
   script: SceneScript
   isRetry: boolean
   signal?: AbortSignal
-}): Promise<{ ok: boolean; detail: string }> {
+}): Promise<{ ok: boolean; detail: string; steps: ReplayStep[] }> {
   const { script } = opts
   const pos = pure.positioningCommands({ script, isRetry: opts.isRetry })
   for (const cmd of pos.commands) {
-    if (opts.signal?.aborted) return { ok: true, detail: "aborted" }
+    if (opts.signal?.aborted) return { ok: true, detail: "aborted", steps: [] }
     const r = await execAgentBrowser([cmd], { timeout: 60_000 })
     if (!r.ok) {
       return {
@@ -130,21 +183,42 @@ export async function replayScriptOffCamera(opts: {
           `could not even be positioned: \`${cmd}\` failed ` +
           `(${r.error ?? "unknown error"}). The recording pass runs this exact ` +
           `command before it starts the camera.`,
+        steps: [],
       }
     }
   }
 
   const outcome = await replayScene({ script, signal: opts.signal })
-  if (outcome.status === "aborted") return { ok: true, detail: "aborted" }
+  if (outcome.status === "aborted") {
+    return { ok: true, detail: "aborted", steps: outcome.steps }
+  }
   if (outcome.status === "deviation" && outcome.deviation) {
     const d = outcome.deviation
     return {
       ok: false,
       detail: `step ${d.index} (\`${d.cmd}\`) ${d.detail}`,
+      steps: outcome.steps,
+    }
+  }
+  // Every step succeeding is not the same as the take being right. A script
+  // whose steps all report `ok` can still fail the duration check on the
+  // recorded file — electron-chromium-talk.01 did, six takes running, on a
+  // `wait --load` that reported success after 25 s of nothing. Apply the
+  // same band here so that failure is caught with the camera off.
+  const dur = lint.checkReplayDuration(script, outcome.steps)
+  if (!dur.ok) {
+    return {
+      ok: false,
+      detail:
+        `replays cleanly but a take of it would fail verification — ` +
+        `${dur.detail}. Every step reported success; the problem is what ` +
+        `the slow step costs on camera, not whether it works`,
+      steps: outcome.steps,
     }
   }
   return {
     ok: true,
-    detail: `replayed ${script.actions.length} action(s) cleanly`,
+    detail: `replayed ${script.actions.length} action(s) cleanly in ${(dur.predictedMs / 1000).toFixed(1)}s`,
+    steps: outcome.steps,
   }
 }

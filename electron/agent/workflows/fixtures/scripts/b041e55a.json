@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "electron-chromium-talk.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+      "endUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "wait --load complete",
+          "waitBefore": "--text \"Electron\"",
+          "assert": "--url \"https://en.wikipedia.org/wiki/Electron_(software_framework)\"",
+          "settleMs": 1000
+        }
+      ]
+    },
+    {
+      "sceneId": "electron-chromium-talk.02",
+      "continuity": "chained",
+      "oneShot": false,
+      "startUrl": "https://en.wikipedia.org/wiki/Electron_(software_framework)",
+      "endUrl": "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "eval \"document.querySelector('a[href*=\\\"Chromium_(web_browser)\\\"]').click()\"",
+          "waitBefore": "--text \"Chromium\"",
+          "assert": "--url \"https://en.wikipedia.org/wiki/Chromium_(web_browser)\"",
+          "settleMs": 1000
+        }
+      ]
+    },
+    {
+      "sceneId": "electron-chromium-talk.03",
+      "continuity": "chained",
+      "oneShot": false,
+      "startUrl": "https://en.wikipedia.org/wiki/Chromium_(web_browser)",
+      "endUrl": "https://en.wikipedia.org/wiki/Talk:Chromium_(web_browser)",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "eval \"document.querySelector('#ca-talk a').click()\"",
+          "waitBefore": "--text \"Talk\"",
+          "assert": "--url \"https://en.wikipedia.org/wiki/Talk:Chromium_(web_browser)\"",
+          "settleMs": 1000
+        }
+      ]
+    }
+  ]
+}

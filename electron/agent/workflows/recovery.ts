@@ -12,7 +12,11 @@ import { recoveryInstructions } from "../prompts"
 import { hasProfile, vaultProfileName } from "./credentials"
 import { scriptedActionSchema } from "./script-schema"
 import type { SceneScript, ScriptedAction } from "./script-schema"
-import { isSafeToReplayOffCamera, replayScriptOffCamera } from "./replay"
+import {
+  isSafeToReplayOffCamera,
+  replayScriptOffCamera,
+  assertScriptLints,
+} from "./replay"
 import { recordScript } from "./rehearsal"
 import log from "../../lib/logger"
 
@@ -98,6 +102,13 @@ function createAmendTool(
               `cannot be performed, reply BLOCKED instead.`
           )
         }
+        // Same static gate `recordScript` applies, run here so the agent
+        // learns about a bad rewrite inside its own loop — not after a cold
+        // replay that was never going to pass.
+        assertScriptLints({
+          ...script,
+          actions: input.actions as ScriptedAction[],
+        })
         capture(input.actions as ScriptedAction[])
         return { ok: true, actions: input.actions.length }
       },

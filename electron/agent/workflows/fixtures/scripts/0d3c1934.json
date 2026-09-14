@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "programming-with-ai.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://workik.com/login",
+      "endUrl": "https://workik.com/projects",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "auth login demio-0d3c1934-2c13-4706-88b4-1f3891dac4d0",
+          "assert": "--url \"https://workik.com/projects\"",
+          "settleMs": 1500,
+          "narrationAnchor": 0
+        }
+      ]
+    },
+    {
+      "sceneId": "programming-with-ai.02",
+      "continuity": "chained",
+      "oneShot": false,
+      "startUrl": "https://workik.com/projects",
+      "endUrl": "https://workik.com/project/400934/ai_scripts",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "click \"xpath=//p[text()='new']\"",
+          "waitBefore": "--text \"new\"",
+          "assert": "--url \"https://workik.com/project/400934/ai_scripts\"",
+          "settleMs": 1500,
+          "narrationAnchor": 0
+        }
+      ]
+    },
+    {
+      "sceneId": "programming-with-ai.03",
+      "continuity": "chained",
+      "oneShot": false,
+      "startUrl": "https://workik.com/project/400934/ai_scripts",
+      "endUrl": "https://workik.com/project/400934/ai_scripts",
+      "params": {
+        "question": "How does eye tracking work in the InteractiveMonsters component?"
+      },
+      "actions": [
+        {
+          "cmd": "click \"xpath=//button[contains(@class, 'add-script-tab-wrapper')]\"",
+          "waitBefore": "--text \"Session\"",
+          "assert": "--text \"Create Session\"",
+          "settleMs": 500,
+          "narrationAnchor": 0
+        },
+        {
+          "cmd": "click \"xpath=//button[text()='Add Session']\"",
+          "waitBefore": "--text \"Add Session\"",
+          "assert": "--text \"Code repositories\"",
+          "settleMs": 500,
+          "narrationAnchor": 1
+        },
+        {
+          "cmd": "fill \"div[contenteditable='true']\" \"{{question}}\"",
+          "waitBefore": "--text \"Code repositories\"",
+          "assert": "--text \"{{question}}\"",
+          "settleMs": 500,
+          "narrationAnchor": 2
+        },
+        {
+          "cmd": "click \"button[aria-label='send to AI']\"",
+          "waitBefore": "--selector \"button[aria-label='send to AI']\"",
+          "assert": "--text \"Thought\"",
+          "settleMs": 6000,
+          "narrationAnchor": 3
+        }
+      ]
+    }
+  ]
+}

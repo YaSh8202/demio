@@ -22,7 +22,7 @@ import path from "node:path"
 import { promises as fs } from "node:fs"
 import { createRequire } from "node:module"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
-import { replayScene } from "./replay"
+import { replayScene, checkReplayDuration } from "./replay"
 import { recoverFromDeviation } from "./recovery"
 import { verifyScene } from "./verify"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
@@ -494,6 +494,69 @@ export async function recordSceneWithRetry(opts: {
       phase: "failed",
       detail: previousFailure,
     })
+
+    // 6. Every step reported success and the FILE is still wrong. Replaying
+    //    the same script again is provably identical — that is what six
+    //    takes of electron-chromium-talk.01 proved, at 26.7 s each. The only
+    //    thing that can change the next take is the script, so this goes to
+    //    recovery with `canAmend`, framed as a deviation at the step that
+    //    cost the most. Recovery is also the only place the user's "Retry
+    //    with guidance" text is read, so without this branch that button
+    //    could not do anything on a verification failure.
+    //
+    //    Gated on the REPLAY's own timing being out of band. If the replay
+    //    predicted a fine take and the file still failed (missing, black,
+    //    0.5 s against a 3.3 s prediction — search-wikipedia.01), the script
+    //    was not the problem and amending it cannot help; that is the
+    //    recording, and a plain retake is the right response.
+    const dur = checkReplayDuration(script, outcome.steps)
+    if (dur.ok) continue
+    const tooSlow = dur.predictedMs > dur.expectedMs
+    const deviation = {
+      index: dur.slowest?.index ?? 0,
+      cmd: dur.slowest?.cmd ?? script.actions[0].cmd,
+      detail:
+        `${previousFailure}. Step timings: ` +
+        outcome.steps
+          .map((s) => `${s.index}=${(s.durationMs / 1000).toFixed(1)}s`)
+          .join(", ") +
+        (tooSlow && dur.slowest
+          ? `. Step ${dur.slowest.index} (\`${dur.slowest.cmd}\`) reported ` +
+            `success but cost ${(dur.slowest.durationMs / 1000).toFixed(1)}s`
+          : `. The replay ran faster than the script predicts (${(dur.predictedMs / 1000).toFixed(1)}s vs ${(dur.expectedMs / 1000).toFixed(1)}s)`),
+    }
+    opts.onProgress?.({
+      sceneId: scene.id,
+      attempt,
+      phase: "verifying",
+      detail: `recovering: ${deviation.detail}`,
+    })
+    const recovery = await recoverFromDeviation({
+      workspace,
+      modelId,
+      script,
+      deviation,
+      guidance: opts.guidance,
+      signal,
+    })
+    await writeAgentTranscript(transcriptPath, {
+      ...transcript,
+      verify: lastReport,
+      recovery: {
+        recovered: recovery.recovered,
+        detail: recovery.detail,
+        steps: recovery.steps,
+      },
+    })
+    if (recovery.amendedScript) activeScript = recovery.amendedScript
+    previousFailure += ` Recovery ${recovery.recovered ? "cleared it" : "failed"}: ${recovery.detail}`
+    log.warn(
+      `[demo-workflow] scene ${scene.id} attempt ${attempt} ${previousFailure}`
+    )
+    // Retake only if something changed: an amended script, or a page fix
+    // recovery believes alters the take. Otherwise stop — the remaining
+    // attempts would film the same thing and the user should decide.
+    if (!recovery.amendedScript && !recovery.recovered) break
   }
 
   return { status: "failed", lastReport, attempts: attemptsMade }

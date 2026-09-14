@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "programming-with-ai.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://workik.com/projects",
+      "endUrl": "https://workik.com/project/400934/ai_scripts/w/wqdyzopMQXzPgtRTqiv5/t/l7GhxQHWF1OkhRXGtCRX",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "click \"xpath=//p[text()='new']\"",
+          "waitBefore": "--selector \"xpath=//p[text()='new']\"",
+          "assert": "--text \"Programming with AI\"",
+          "settleMs": 1000,
+          "narrationAnchor": 0
+        }
+      ]
+    },
+    {
+      "sceneId": "open-project.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://workik.com/projects",
+      "endUrl": "https://workik.com/project/400934/ai_scripts/w/wqdyzopMQXzPgtRTqiv5/t/EDKKOvzbBI0KltK6No69",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "click \"xpath=//p[text()='new']\"",
+          "waitBefore": "--selector \"p.project-name\"",
+          "assert": "--text \"Programming with AI\"",
+          "settleMs": 1000
+        }
+      ]
+    }
+  ]
+}

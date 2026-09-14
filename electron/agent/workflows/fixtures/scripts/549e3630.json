@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "scripts": [
+    {
+      "sceneId": "homepage-nav.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://developer.mozilla.org",
+      "endUrl": "https://developer.mozilla.org/en-US/",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "find role button hover --name \"HTML\" --exact",
+          "waitBefore": "--text \"HTML\"",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"HTML\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"CSS\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"CSS\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"JavaScriptJS\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"JavaScript\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"Web APIs\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"Web APIs\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"Learn\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"Learn\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"Tools\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"Tools\")'",
+          "settleMs": 500
+        },
+        {
+          "cmd": "find role button hover --name \"About\" --exact",
+          "assert": "--fn 'document.querySelector(\".menu__tab-button:hover\")?.textContent.includes(\"About\")'",
+          "settleMs": 500
+        }
+      ]
+    },
+    {
+      "sceneId": "js-docs.01",
+      "continuity": "independent",
+      "oneShot": false,
+      "startUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+      "endUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+      "params": {},
+      "actions": [
+        {
+          "cmd": "scroll down 400",
+          "waitBefore": "--text \"JavaScript\"",
+          "assert": "--fn \"window.scrollY >= 300\"",
+          "settleMs": 800,
+          "narrationAnchor": 0
+        },
+        {
+          "cmd": "scroll down 400",
+          "assert": "--fn \"window.scrollY >= 700\"",
+          "settleMs": 800,
+          "narrationAnchor": 1
+        },
+        {
+          "cmd": "scroll down 400",
+          "assert": "--fn \"window.scrollY >= 1100\"",
+          "settleMs": 1000,
+          "narrationAnchor": 2
+        }
+      ]
+    }
+  ]
+}
