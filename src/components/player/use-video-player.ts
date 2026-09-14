@@ -455,13 +455,18 @@ export function useVideoPlayer(src: string | null): VideoPlayerApi {
     const onError = () => {
       stopRaf()
       clearStallTimer()
-      console.error("[player] error", {
-        code: video.error?.code,
-        message: video.error?.message,
-        readyState: video.readyState,
-        networkState: video.networkState,
-        src,
-      })
+      // A string, not an object: this line is forwarded into main.log by
+      // electron-log's renderer spy, which renders objects as
+      // "[object Object]" and loses the one field that matters.
+      console.error(
+        `[player] error ${JSON.stringify({
+          code: video.error?.code,
+          message: video.error?.message,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          src,
+        })}`
+      )
       setPlaying(false)
       setStatus("error")
       setErrorText(describeMediaError(video.error))

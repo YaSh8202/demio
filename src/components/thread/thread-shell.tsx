@@ -80,11 +80,13 @@ function getMessageText(message: UIMessage): string {
 function ThreadMessage({
   message,
   isMessageStreaming,
+  isRunActive,
   onVideoReady,
   workflows,
 }: {
   message: UIMessage
   isMessageStreaming: boolean
+  isRunActive: boolean
   onVideoReady?: (absPath: string) => void
   workflows?: Record<string, WorkflowState>
 }) {
@@ -119,6 +121,7 @@ function ThreadMessage({
         ) : (
           <ThreadAssistantPartRenderer
             isMessageStreaming={isMessageStreaming}
+            isRunActive={isRunActive}
             messageId={message.id}
             onVideoReady={onVideoReady}
             parts={message.parts}
@@ -389,6 +392,7 @@ export function ThreadShell() {
                             msg.role === "assistant" &&
                             index === messages.length - 1
                           }
+                          isRunActive={isRunning}
                           onVideoReady={handleVideoReady}
                           workflows={workflows}
                         />

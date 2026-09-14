@@ -222,6 +222,49 @@ function snapshotDisplayState(
 // ever attached.
 const ensureSubscriptions = new Map<string, Promise<void>>()
 
+// The in-flight turn's user prompt, keyed by `${projectId}:${threadId}`.
+//
+// The controller runs with `savePerStep: false` (agent-controller
+// buildSharedRunOptions — not configurable), so NOTHING in a turn reaches
+// `mastra_messages` until the turn ends. A refresh mid-run hydrates from an
+// empty DB, and until the next message event — which a long-running tool
+// never produces — the thread renders as if it had never been used. The
+// assistant half of the turn is recoverable from `displayState.currentMessage`;
+// the user half exists only here. `text` is captured at sendMessage, and the
+// controller's `data-user-message` signal (a stub carrying no text — its only
+// part is the signal payload) is enriched with it when it comes through the
+// event stream, so both the broadcast and a later `listMessages` carry the
+// prompt under the id the DB will eventually use.
+const liveTurn = new Map<
+  string,
+  { text: string; userSignal: Record<string, unknown> | null }
+>()
+
+function isUserSignalEvent(message: Record<string, unknown>): boolean {
+  if (message["role"] !== "signal") return false
+  const content = message["content"] as
+    | { metadata?: { signal?: { type?: string } } }
+    | undefined
+  const type = content?.metadata?.signal?.type
+  return type === "user" || type === "user-message"
+}
+
+/** Give a textless user-signal stub the prompt text it stands for. */
+function enrichUserSignal(
+  message: Record<string, unknown>,
+  text: string
+): Record<string, unknown> {
+  const content = message["content"] as {
+    parts?: Array<{ type?: string }>
+  }
+  const parts = content.parts ?? []
+  if (parts.some((p) => p.type === "text")) return message
+  return {
+    ...message,
+    content: { ...content, parts: [{ type: "text", text }, ...parts] },
+  }
+}
+
 function ensureSubscribed(projectId: string, threadId: string): Promise<void> {
   const key = `${projectId}:${threadId}`
   const inFlight = ensureSubscriptions.get(key)
@@ -253,7 +296,17 @@ async function subscribeSession(
       try {
         let serialized = serializeEvent(event) as Record<string, unknown>
         const type = serialized["type"]
-        if (type === "tool_suspended") {
+        if (type === "message_start" || type === "message_end") {
+          const message = serialized["message"] as
+            | Record<string, unknown>
+            | undefined
+          const live = liveTurn.get(key)
+          if (message && live && isUserSignalEvent(message)) {
+            const enriched = enrichUserSignal(message, live.text)
+            live.userSignal = enriched
+            serialized = { ...serialized, message: enriched }
+          }
+        } else if (type === "tool_suspended") {
           serialized = attachPlanContent(serialized, threadId)
         } else if (type === "display_state_changed") {
           // The framework fans this after EVERY event (types.d.ts
@@ -335,15 +388,15 @@ export const agentHandlers = {
     // persisting it as the thread's remembered model (that's a distinct,
     // explicit "switch model" action `session.model.switch(...)` would own).
     session.model.set({ modelId })
+    const text = extractText(body.message)
+    liveTurn.set(key, { text, userSignal: null })
     // Fire and forget — progress arrives via agent:onEvent. While a run is
     // active this becomes a follow-up/steer decision internally; Session's
     // own `sendMessage` queues/streams as appropriate.
-    void session
-      .sendMessage({ content: extractText(body.message) })
-      .catch((error: unknown) => {
-        log.error("[agent] sendMessage failed:", error)
-        broadcastError(key, error)
-      })
+    void session.sendMessage({ content: text }).catch((error: unknown) => {
+      log.error("[agent] sendMessage failed:", error)
+      broadcastError(key, error)
+    })
     return { ok: true }
   },
 
@@ -495,6 +548,15 @@ export const agentHandlers = {
     const messages = await session.thread.listActiveMessages({
       limit: limit ?? 200,
     })
-    return serializeEvent(messages)
+    const serialized = serializeEvent(messages) as Array<
+      Record<string, unknown>
+    >
+    // The in-flight prompt, until the DB has it (same id, so this is a
+    // no-op once the turn persists).
+    const live = liveTurn.get(`${projectId}:${threadId}`)?.userSignal
+    if (live && !serialized.some((m) => m["id"] === live["id"])) {
+      serialized.push(live)
+    }
+    return serialized
   },
 } satisfies NamespaceHandlers

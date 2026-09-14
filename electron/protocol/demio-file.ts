@@ -80,7 +80,7 @@ export function registerDemioFileProtocol() {
     const range = rangeHeader ? parseRange(rangeHeader, size) : null
 
     if (range === "unsatisfiable") {
-      log.debug(`[demio-file] 416 ${rangeHeader} size=${size}`)
+      log.warn(`[demio-file] 416 ${rangeHeader} size=${size}`)
       return new Response(null, {
         status: 416,
         headers: { ...baseHeaders, "Content-Range": `bytes */${size}` },
@@ -104,7 +104,12 @@ export function registerDemioFileProtocol() {
 
       // Chromium abandons requests as soon as it has buffered ahead; without
       // this the descriptor is never released.
-      const onAbort = () => stream.destroy()
+      const onAbort = () => {
+        log.info(
+          `[demio-file] abort ${start}-${end}/${size} ${path.basename(filePath)}`
+        )
+        stream.destroy()
+      }
       req.signal.addEventListener("abort", onAbort, { once: true })
       stream.once("close", () =>
         req.signal.removeEventListener("abort", onAbort)
@@ -128,7 +133,9 @@ export function registerDemioFileProtocol() {
       }
       if (range) headers["Content-Range"] = `bytes ${start}-${end}/${size}`
 
-      log.debug(
+      // Info, not debug: the file transport drops debug, and a playback
+      // failure with no request trace is undiagnosable after the fact.
+      log.info(
         `[demio-file] ${range ? 206 : 200} ${start}-${end}/${size} ` +
           `len=${length} ${path.basename(filePath)}`
       )

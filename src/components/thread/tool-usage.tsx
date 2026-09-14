@@ -115,12 +115,20 @@ export function ThreadAssistantPartRenderer({
   messageId,
   parts,
   isMessageStreaming,
+  isRunActive,
   onVideoReady,
   workflows,
 }: {
   messageId: string
   parts: UIMessage["parts"]
   isMessageStreaming: boolean
+  /** Whether ANY run is live on this thread — distinct from
+   * `isMessageStreaming`, which is true only for the last assistant message.
+   * A pending tool part on an earlier message is not dead while a run is
+   * live: approving a plan starts a new assistant message in execute mode,
+   * and the plan-mode message's `submit_plan` keeps its `call` state until
+   * the resumed run persists the result. */
+  isRunActive: boolean
   onVideoReady?: (absPath: string) => void
   /** `generate_demo` stage trackers keyed by `toolCallId` — see
    * `WorkflowProgress`'s file header. Only consulted by the `generate_demo`
@@ -128,7 +136,10 @@ export function ThreadAssistantPartRenderer({
   workflows?: Record<string, WorkflowState>
 }) {
   const renderedParts: ReactNode[] = []
-  const effectiveParts = resolveStalledParts(parts, isMessageStreaming)
+  const effectiveParts = resolveStalledParts(
+    parts,
+    isMessageStreaming || isRunActive
+  )
 
   for (let index = 0; index < effectiveParts.length; index++) {
     const part = effectiveParts[index]
@@ -286,9 +297,9 @@ function asObject<T extends object>(value: unknown): T | undefined {
  */
 function resolveStalledParts(
   parts: UIMessage["parts"],
-  isMessageStreaming: boolean
+  isLive: boolean
 ): UIMessage["parts"] {
-  if (isMessageStreaming) return parts
+  if (isLive) return parts
 
   let changed = false
   const next = parts.map((part) => {

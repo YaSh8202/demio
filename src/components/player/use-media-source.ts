@@ -33,6 +33,11 @@ interface Resolved {
  * derived, so a result for a stale path can never be shown and the effect
  * never has to setState synchronously.
  */
+/** The path half of a request key (`generation:nonce:path`). */
+function keyPath(key: string): string {
+  return key.split(":").slice(2).join(":")
+}
+
 export function useMediaSource(
   filePath: string | null,
   generation: string | number = 0
@@ -69,7 +74,20 @@ export function useMediaSource(
 
   const reload = useCallback(() => setNonce((n) => n + 1), [])
 
-  const current = resolved?.key === key ? resolved : null
+  // A stale result for the SAME path is still worth showing while the
+  // re-resolve is in flight. Dropping it made `url` null for a tick every
+  // time `generation` changed — and the thread's video key changes mid-turn
+  // for the same file (generate_demo's call id, then present_files'), so the
+  // <video> unmounted and remounted on the identical URL, aborting its own
+  // fetch. Two elements on one URL with one aborted fetch can error out both.
+  // A different path, or a genuinely new version, still yields a new URL and
+  // the element remounts on that.
+  const exact = resolved?.key === key ? resolved : null
+  const current =
+    exact ??
+    (resolved && filePath && keyPath(resolved.key) === filePath
+      ? resolved
+      : null)
   const status: MediaSourceStatus = !filePath
     ? "idle"
     : !current

@@ -429,18 +429,56 @@ function messageText(message: SerializedAgentMessage): string {
 function reconcileEcho(
   state: AgentEventState,
   message: SerializedAgentMessage
-): AgentEventState {
-  if (state.pendingEchoIds.length === 0 || !isUserSignal(message)) return state
+): { state: AgentEventState; message: SerializedAgentMessage } {
+  if (!isUserSignal(message)) return { state, message }
   const text = messageText(message)
-  const echoId = state.pendingEchoIds.find((id) => {
-    const echo = state.messages.find((m) => m.id === id)
-    return echo !== undefined && messageText(echo) === text
-  })
-  if (echoId === undefined) return state
+  // The stub arrives twice (`message_start`, then `message_end`). Once the
+  // first has adopted the echo's text there is no echo left for the second,
+  // so it must not overwrite what the first put under this id.
+  if (text === "") {
+    const existing = state.messages.find((m) => m.id === message.id)
+    if (existing && messageText(existing) !== "") {
+      return {
+        state,
+        message: {
+          ...message,
+          content: { ...message.content, parts: existing.content.parts },
+        },
+      }
+    }
+  }
+  if (state.pendingEchoIds.length === 0) return { state, message }
+  // The LIVE `data-user-message` signal is a stub: its only part is the
+  // signal payload (`{id, type, tagName, createdAt, acceptedAt}`) and the
+  // prompt text reaches that id only when memory persists the row. Matching
+  // on text would leave the echo in place AND render the stub as an empty
+  // user bubble for the rest of the session. A textless user signal is the
+  // prompt demio just sent — the oldest echo — so it adopts that echo's
+  // text under the persisted id, which hydration later upserts with the
+  // same text.
+  const echoId =
+    text === ""
+      ? state.pendingEchoIds[0]
+      : state.pendingEchoIds.find((id) => {
+          const echo = state.messages.find((m) => m.id === id)
+          return echo !== undefined && messageText(echo) === text
+        })
+  if (echoId === undefined) return { state, message }
+  const echo = state.messages.find((m) => m.id === echoId)
+  const reconciled =
+    text === "" && echo
+      ? {
+          ...message,
+          content: { ...message.content, parts: echo.content.parts },
+        }
+      : message
   return {
-    ...state,
-    messages: state.messages.filter((m) => m.id !== echoId),
-    pendingEchoIds: state.pendingEchoIds.filter((id) => id !== echoId),
+    state: {
+      ...state,
+      messages: state.messages.filter((m) => m.id !== echoId),
+      pendingEchoIds: state.pendingEchoIds.filter((id) => id !== echoId),
+    },
+    message: reconciled,
   }
 }
 
@@ -463,11 +501,11 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
       return initial
 
     case "hydrate_message": {
-      const base = reconcileEcho(state, event.message)
+      const { state: base, message } = reconcileEcho(state, event.message)
       return {
         ...base,
-        messages: insertIfAbsent(base.messages, event.message),
-        workflows: foldProgressParts(base.workflows, event.message),
+        messages: insertIfAbsent(base.messages, message),
+        workflows: foldProgressParts(base.workflows, message),
       }
     }
 
@@ -497,15 +535,15 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
     case "message_start":
     case "message_update":
     case "message_end": {
-      const base = reconcileEcho(state, event.message)
+      const { state: base, message } = reconcileEcho(state, event.message)
       return {
         ...base,
-        messages: upsertMessage(base.messages, event.message),
+        messages: upsertMessage(base.messages, message),
         // Belt and braces alongside the `tool_update` case below: the same
         // scene-progress payloads ride along on the assistant message's
         // parts, so folding here keeps the card correct even if a
         // `tool_update` event is ever dropped.
-        workflows: foldProgressParts(base.workflows, event.message),
+        workflows: foldProgressParts(base.workflows, message),
       }
     }
 
@@ -534,12 +572,28 @@ function reducer(state: AgentEventState, event: HookAction): AgentEventState {
       // resync it triggers can interleave with a still-in-flight abort.
       const status: AgentEventState["status"] =
         state.status === "error" ? "error" : ds.isRunning ? "running" : "idle"
+      // The in-flight assistant message. Nothing in a turn is persisted
+      // until it ends (`savePerStep: false`), so after a refresh mid-run the
+      // DB has none of it and the next `message_*` event may be minutes
+      // away behind a long tool call. This snapshot is the only copy;
+      // folding it in here is what makes a refreshed thread show the turn.
+      // Gated on isRunning so a finished turn is represented by its
+      // persisted row alone, and on role because `currentMessage` is also
+      // set from a user signal's own `message_start`/`message_end` — the
+      // textless stub, which would overwrite the enriched copy main sent.
+      const current =
+        ds.isRunning && ds.currentMessage?.role === "assistant"
+          ? ds.currentMessage
+          : null
       return {
         ...state,
         displayState: ds,
         status,
         suspension: pickSuspension(ds.pendingSuspensions),
         usage: ds.tokenUsage ?? state.usage,
+        messages: current
+          ? upsertMessage(state.messages, current)
+          : state.messages,
       }
     }
 
