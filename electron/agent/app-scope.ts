@@ -27,6 +27,9 @@ export const flagSchema = z.object({
   recovery: z.object({
     model: z.string().default(EVAL_DEFAULT_MODEL_ID),
   }),
+  narrator: z.object({
+    model: z.string().default(EVAL_DEFAULT_MODEL_ID),
+  }),
 })
 
 export const { flag, pickFlags } = createAppScope({ flagSchema })

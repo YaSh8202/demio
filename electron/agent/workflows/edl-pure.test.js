@@ -10,13 +10,51 @@ const {
 
 // Real scene-01 action timeline (from a live run)
 const SCENE_01_JSONL = [
-  { action: "type", args: { text: "Buy groceries" }, durationMs: 1732, ok: true, tsMs: 18730 },
-  { action: "press", args: { key: "Enter" }, durationMs: 25, ok: true, tsMs: 18914 },
-  { action: "type", args: { text: "Schedule dentist appointment" }, durationMs: 2938, ok: true, tsMs: 26423 },
-  { action: "press", args: { key: "Enter" }, durationMs: 2, ok: true, tsMs: 26590 },
-  { action: "type", args: { text: "Read a chapter of a book" }, durationMs: 2609, ok: true, tsMs: 32688 },
-  { action: "press", args: { key: "Enter" }, durationMs: 2, ok: true, tsMs: 32850 },
-].map((l) => JSON.stringify(l)).join("\n")
+  {
+    action: "type",
+    args: { text: "Buy groceries" },
+    durationMs: 1732,
+    ok: true,
+    tsMs: 18730,
+  },
+  {
+    action: "press",
+    args: { key: "Enter" },
+    durationMs: 25,
+    ok: true,
+    tsMs: 18914,
+  },
+  {
+    action: "type",
+    args: { text: "Schedule dentist appointment" },
+    durationMs: 2938,
+    ok: true,
+    tsMs: 26423,
+  },
+  {
+    action: "press",
+    args: { key: "Enter" },
+    durationMs: 2,
+    ok: true,
+    tsMs: 26590,
+  },
+  {
+    action: "type",
+    args: { text: "Read a chapter of a book" },
+    durationMs: 2609,
+    ok: true,
+    tsMs: 32688,
+  },
+  {
+    action: "press",
+    args: { key: "Enter" },
+    durationMs: 2,
+    ok: true,
+    tsMs: 32850,
+  },
+]
+  .map((l) => JSON.stringify(l))
+  .join("\n")
 
 test("parseActionEntries: parses ok lines in tsMs order with stable idx", () => {
   const entries = parseActionEntries(SCENE_01_JSONL)
@@ -89,7 +127,11 @@ test("buildEdl: voiced scene — slots contiguous, voice drives holds", () => {
 
 test("buildEdl: voiceless — slots are action windows + pads, minHold intro/outro", () => {
   const entries = parseActionEntries(SCENE_01_JSONL)
-  const edl = buildEdl({ actionEntries: entries, videoDurationMs: 40700, segments: [] })
+  const edl = buildEdl({
+    actionEntries: entries,
+    videoDurationMs: 40700,
+    segments: [],
+  })
   assert.equal(edl.slots.length, 5)
   for (const s of edl.slots) {
     if (s.kind === "action") assert.equal(s.holdMs, 0)
@@ -110,7 +152,10 @@ test("buildEdl: multiple segments on one anchor stack with gaps", () => {
   })
   const seg0 = edl.segments[0]
   const seg1 = edl.segments[1]
-  assert.equal(seg1.outStartMs, seg0.outStartMs + 2000 + EDL_DEFAULTS.segmentGapMs)
+  assert.equal(
+    seg1.outStartMs,
+    seg0.outStartMs + 2000 + EDL_DEFAULTS.segmentGapMs
+  )
   const slot = edl.slots.find((s) => s.segmentIdxs.length === 2)
   // need = 2000 + 300 + 1500 + 300 = 4100 > footage 3916 → hold 184
   assert.equal(slot.holdMs, 4100 - 3916)
@@ -129,7 +174,11 @@ test("buildEdl: out-of-range action anchor clamps to last group", () => {
 })
 
 test("buildEdl: no actions at all — single action slot spans whole video", () => {
-  const edl = buildEdl({ actionEntries: [], videoDurationMs: 12000, segments: [] })
+  const edl = buildEdl({
+    actionEntries: [],
+    videoDurationMs: 12000,
+    segments: [],
+  })
   const action = edl.slots.find((s) => s.kind === "action")
   assert.equal(action.srcStartMs, 0)
   assert.equal(action.srcEndMs, 12000)
@@ -155,7 +204,11 @@ test("buildEdl: pads clamp at video bounds", () => {
 
 test("validateEdl: catches src range beyond video and non-contiguous slots", () => {
   const entries = parseActionEntries(SCENE_01_JSONL)
-  const edl = buildEdl({ actionEntries: entries, videoDurationMs: 40700, segments: [] })
+  const edl = buildEdl({
+    actionEntries: entries,
+    videoDurationMs: 40700,
+    segments: [],
+  })
   const broken = JSON.parse(JSON.stringify(edl))
   broken.slots[1].srcEndMs = 99999
   assert.equal(validateEdl(broken, 40700).ok, false)
@@ -184,11 +237,20 @@ test("buildSlotArgs: input-side trim (-ss/-t BEFORE -i) so tpad sees EOF", () =>
   const iPos = hold.indexOf("-i")
   assert.ok(hold.indexOf("-ss") < iPos)
   assert.ok(hold.indexOf("-t") < iPos)
-  assert.deepEqual(hold.slice(hold.indexOf("-ss"), hold.indexOf("-ss") + 4), ["-ss", "17.930", "-t", "2.209"])
+  assert.deepEqual(hold.slice(hold.indexOf("-ss"), hold.indexOf("-ss") + 4), [
+    "-ss",
+    "17.930",
+    "-t",
+    "2.209",
+  ])
   assert.ok(hold.join(" ").includes("tpad=stop_mode=clone:stop_duration=0.970"))
   assert.ok(hold.includes("-an"))
   assert.ok(hold.join(" ").includes("libx264"))
-  const noHold = buildSlotArgs("s.webm", { srcStartMs: 0, srcEndMs: 1000, holdMs: 0 }, "o.mp4")
+  const noHold = buildSlotArgs(
+    "s.webm",
+    { srcStartMs: 0, srcEndMs: 1000, holdMs: 0 },
+    "o.mp4"
+  )
   assert.ok(!noHold.join(" ").includes("tpad"))
 })
 
@@ -210,14 +272,73 @@ test("buildMixArgs: adelay per segment at outStartMs, video stream copied", () =
   assert.ok(fc.includes("[1:a]adelay=0|0[a0]"))
   assert.ok(fc.includes("[2:a]adelay=4015|4015[a1]"))
   assert.ok(fc.includes("amix=inputs=2:dropout_transition=0:normalize=0"))
-  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), ["-c:v", "copy"])
+  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), [
+    "-c:v",
+    "copy",
+  ])
   assert.ok(args.join(" ").includes("-ar 44100"))
   assert.ok(args.join(" ").includes("-ac 2"))
 })
 
 test("buildSilentAudioArgs: anullsrc silent track, video copied", () => {
   const args = buildSilentAudioArgs("in.mp4", "out.mp4")
-  assert.ok(args.join(" ").includes("anullsrc=channel_layout=stereo:sample_rate=44100"))
+  assert.ok(
+    args.join(" ").includes("anullsrc=channel_layout=stereo:sample_rate=44100")
+  )
   assert.ok(args.includes("-shortest"))
-  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), ["-c:v", "copy"])
+  assert.deepEqual(args.slice(args.indexOf("-c:v"), args.indexOf("-c:v") + 2), [
+    "-c:v",
+    "copy",
+  ])
+})
+
+// ── narrationHold ────────────────────────────────────────────────────────────
+
+const { narrationHold } = require("./edl-pure.cjs")
+// The fixture's actions land around 18-25 s in, so the take must be long
+// enough to contain their footage windows.
+
+test("narrationHold: no narration adds no hold beyond the intro/outro minimums", () => {
+  const entries = parseActionEntries(SCENE_01_JSONL)
+  const r = narrationHold({
+    actionEntries: entries,
+    videoDurationMs: 40_000,
+    segments: [],
+  })
+  assert.equal(r.extraHoldMs, 0)
+  assert.equal(
+    r.baselineHoldMs,
+    2 * (EDL_DEFAULTS.minHoldMs - EDL_DEFAULTS.freezeSourceMs)
+  )
+  assert.equal(r.liveFraction, 1)
+})
+
+test("narrationHold: a line longer than its action's footage is charged as extra hold", () => {
+  const entries = parseActionEntries(SCENE_01_JSONL)
+  const short = narrationHold({
+    actionEntries: entries,
+    videoDurationMs: 40_000,
+    segments: [{ anchor: 0, durationMs: 500 }],
+  })
+  const long = narrationHold({
+    actionEntries: entries,
+    videoDurationMs: 40_000,
+    segments: [{ anchor: 0, durationMs: 30_000 }],
+  })
+  assert.equal(short.extraHoldMs, 0)
+  assert.ok(long.extraHoldMs > 20_000, String(long.extraHoldMs))
+  assert.ok(long.liveFraction < 0.5 && long.liveFraction > 0)
+})
+
+test("narrationHold: intro/outro lines inside the minimum hold cost nothing", () => {
+  const entries = parseActionEntries(SCENE_01_JSONL)
+  const r = narrationHold({
+    actionEntries: entries,
+    videoDurationMs: 40_000,
+    segments: [
+      { anchor: "intro", durationMs: 1_500 },
+      { anchor: "outro", durationMs: 1_500 },
+    ],
+  })
+  assert.equal(r.extraHoldMs, 0)
 })

@@ -1,0 +1,34 @@
+[
+  {
+    "sceneId": "homepage-nav.01",
+    "file": "homepage-nav.01.actions.jsonl",
+    "durationSec": 11.2,
+    "goal": "Open the MDN homepage and hover across the primary navigation menu items.",
+    "narrationHint": "",
+    "demoTitle": "MDN Web Docs Navigation & JavaScript Documentation"
+  },
+  {
+    "sceneId": "js-docs.01",
+    "file": "js-docs.01.actions.jsonl",
+    "durationSec": 3.9,
+    "goal": "Open the JavaScript documentation page and scroll through the first section.",
+    "narrationHint": "",
+    "demoTitle": "MDN Web Docs Navigation & JavaScript Documentation"
+  },
+  {
+    "sceneId": "search-wikipedia.01",
+    "file": "search-wikipedia.01.actions.jsonl",
+    "durationSec": 7.6,
+    "goal": "Search for 'Electron (software framework)', select the first suggestion from the dropdown, and scroll the article infobox into view.",
+    "narrationHint": "Search for Electron (software framework) on Wikipedia and inspect the article infobox.",
+    "demoTitle": ""
+  },
+  {
+    "sceneId": "scroll-homepage.01",
+    "file": "scroll-homepage.01.actions.jsonl",
+    "durationSec": 1.5,
+    "goal": "Open example.com and smoothly scroll down to the bottom of the page",
+    "narrationHint": "",
+    "demoTitle": ""
+  }
+]

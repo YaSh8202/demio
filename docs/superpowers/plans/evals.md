@@ -161,6 +161,30 @@ Scorers (minimum two per the skill; these are five):
 
 ### 1b. Narrator — structured-output eval
 
+**Built** — `electron/agent/workflows/narrate.eval.ts`, six cases over four
+real recorded scenes (`fixtures/actions/`), seven scorers, ~20 s a run.
+The narrator call moved out of `demo-video.ts` into `narrate.ts` so the
+eval and the workflow share one function. The pacing scorer is the real
+EDL engine: `narrationHold` in `edl-pure.cjs` runs `buildEdl` with and
+without the lines (speech time estimated at the prompt's own 150 wpm) and
+reports the frozen-frame time the narration alone causes, split into
+holds on an action (a frozen cursor — scored) and holds that merely
+extend the intro/outro still (reported).
+
+What the first run measured: structure perfect, pacing **46.5%** — the
+narrator wrote 2-6 lines of 8-15 words for every scene regardless of
+length, so a 1.5 s scene got 30 s of speech and a 7.6 s search flow got
+frozen on its click for longer than the click. That was design spec §14
+as a number. The fix is to hand the narrator the footage arithmetic
+instead of a pace: `anchorWordBudgets` derives a word budget per anchor
+from the same grouping and constants the EDL uses, the prompt lists them
+(`2: click … (≤6 words)`, intro/outro get a deliberate still's worth),
+and an anchor under three words is marked "too brief to narrate". Pacing
+went to **100%** with lines that still read as narration.
+
+Real TTS durations will differ from the estimate by ±20%; Tier 2 replaces
+the estimate with the measured `sceneAudio` durations.
+
 Task: `narrateStep`'s `generate()` with `structuredOutput`. Inputs are the
 `.actions.jsonl` + scene list already on disk (no browser). Scorers:
 `OneSegmentSetPerScene`, `AnchorsValid` (`intro` / action index in range /

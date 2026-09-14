@@ -92,14 +92,18 @@ function buildEdl({ actionEntries, videoDurationMs, segments, opts }) {
 
   // Assign each segment (by input index) to a slot key.
   const idxToGroup = new Map()
-  groups.forEach((g, gi) => g.actionIdxs.forEach((ai) => idxToGroup.set(ai, gi)))
+  groups.forEach((g, gi) =>
+    g.actionIdxs.forEach((ai) => idxToGroup.set(ai, gi))
+  )
   const bySlot = { intro: [], outro: [], groups: groups.map(() => []) }
   segments.forEach((seg, si) => {
     const s = { ...seg, srcIdx: si }
     if (seg.anchor === "intro") bySlot.intro.push(s)
     else if (seg.anchor === "outro") bySlot.outro.push(s)
     else {
-      const gi = idxToGroup.has(seg.anchor) ? idxToGroup.get(seg.anchor) : groups.length - 1
+      const gi = idxToGroup.has(seg.anchor)
+        ? idxToGroup.get(seg.anchor)
+        : groups.length - 1
       bySlot.groups[gi].push(s)
     }
   })
@@ -144,7 +148,13 @@ function buildEdl({ actionEntries, videoDurationMs, segments, opts }) {
     0,
     Math.max(0, videoDurationMs - o.freezeSourceMs)
   )
-  pushSlot("intro", introSrc, introSrc + o.freezeSourceMs, bySlot.intro, o.minHoldMs)
+  pushSlot(
+    "intro",
+    introSrc,
+    introSrc + o.freezeSourceMs,
+    bySlot.intro,
+    o.minHoldMs
+  )
 
   // Action groups: footage window ± padding, clamped to video bounds and to
   // the previous slot's src end so kept footage never overlaps.
@@ -158,8 +168,18 @@ function buildEdl({ actionEntries, videoDurationMs, segments, opts }) {
   })
 
   // Outro: freeze the final kept frame.
-  const outroSrc = clamp(prevSrcEnd - o.freezeSourceMs, 0, Math.max(0, videoDurationMs - o.freezeSourceMs))
-  pushSlot("outro", outroSrc, outroSrc + o.freezeSourceMs, bySlot.outro, o.minHoldMs)
+  const outroSrc = clamp(
+    prevSrcEnd - o.freezeSourceMs,
+    0,
+    Math.max(0, videoDurationMs - o.freezeSourceMs)
+  )
+  pushSlot(
+    "outro",
+    outroSrc,
+    outroSrc + o.freezeSourceMs,
+    bySlot.outro,
+    o.minHoldMs
+  )
 
   return {
     version: 1,
@@ -171,6 +191,51 @@ function buildEdl({ actionEntries, videoDurationMs, segments, opts }) {
   }
 }
 
+/**
+ * How much frozen frame a set of narration lines would add to a take.
+ *
+ * Runs the real EDL twice — once with no narration, once with the lines —
+ * and reports the difference in `holdMs`. The no-narration run already
+ * carries the mandatory intro/outro holds (`minHoldMs`), so `extraHoldMs`
+ * is frozen time the narration alone causes: a line longer than the
+ * footage under its anchor is what `tpad` has to clone frames to cover.
+ * `liveFraction` is the share of the narrated output that is real footage.
+ * Segments carry `durationMs` — measured from TTS when available,
+ * estimated from word count before then.
+ */
+function narrationHold({ actionEntries, videoDurationMs, segments, opts }) {
+  const sum = (edl, kind) =>
+    edl.slots
+      .filter((x) => !kind || x.kind === kind)
+      .reduce((s, x) => s + x.holdMs, 0)
+  const bare = buildEdl({ actionEntries, videoDurationMs, segments: [], opts })
+  const voiced = buildEdl({ actionEntries, videoDurationMs, segments, opts })
+  const baselineHoldMs = sum(bare)
+  const extraHoldMs = Math.max(0, sum(voiced) - baselineHoldMs)
+  // Split by where the freeze lands. A hold on the intro/outro extends a
+  // deliberate still; a hold on an action slot is a frozen cursor mid-click
+  // — the defect this metric exists to catch.
+  const actionExtraHoldMs = Math.max(
+    0,
+    sum(voiced, "action") - sum(bare, "action")
+  )
+  const voiceMs = segments.reduce((s, x) => s + x.durationMs, 0)
+  return {
+    footageMs: videoDurationMs,
+    baselineHoldMs,
+    extraHoldMs,
+    actionExtraHoldMs,
+    stillExtraHoldMs: extraHoldMs - actionExtraHoldMs,
+    voiceMs,
+    totalMs: voiced.totalMs,
+    liveFraction:
+      voiced.totalMs > 0
+        ? (voiced.totalMs - baselineHoldMs - extraHoldMs) /
+          (voiced.totalMs - baselineHoldMs)
+        : 1,
+  }
+}
+
 function validateEdl(edl, videoDurationMs) {
   const errors = []
   if (!edl || !Array.isArray(edl.slots) || edl.slots.length === 0) {
@@ -179,19 +244,30 @@ function validateEdl(edl, videoDurationMs) {
   let prevOutEnd = 0
   const seenSegIdxs = new Set()
   edl.slots.forEach((s, i) => {
-    if (s.srcStartMs < 0 || s.srcEndMs > videoDurationMs || s.srcStartMs >= s.srcEndMs) {
-      errors.push(`slot ${i}: src range [${s.srcStartMs}, ${s.srcEndMs}] invalid for video ${videoDurationMs}ms`)
+    if (
+      s.srcStartMs < 0 ||
+      s.srcEndMs > videoDurationMs ||
+      s.srcStartMs >= s.srcEndMs
+    ) {
+      errors.push(
+        `slot ${i}: src range [${s.srcStartMs}, ${s.srcEndMs}] invalid for video ${videoDurationMs}ms`
+      )
     }
     if (s.holdMs < 0) errors.push(`slot ${i}: negative holdMs ${s.holdMs}`)
     if (s.outStartMs !== prevOutEnd) {
-      errors.push(`slot ${i}: outStartMs ${s.outStartMs} != previous outEndMs ${prevOutEnd}`)
+      errors.push(
+        `slot ${i}: outStartMs ${s.outStartMs} != previous outEndMs ${prevOutEnd}`
+      )
     }
     const expectedDur = s.srcEndMs - s.srcStartMs + s.holdMs
     if (s.outEndMs - s.outStartMs !== expectedDur) {
-      errors.push(`slot ${i}: out duration ${s.outEndMs - s.outStartMs} != footage+hold ${expectedDur}`)
+      errors.push(
+        `slot ${i}: out duration ${s.outEndMs - s.outStartMs} != footage+hold ${expectedDur}`
+      )
     }
     for (const si of s.segmentIdxs) {
-      if (seenSegIdxs.has(si)) errors.push(`segment ${si} referenced by more than one slot`)
+      if (seenSegIdxs.has(si))
+        errors.push(`segment ${si} referenced by more than one slot`)
       seenSegIdxs.add(si)
     }
     prevOutEnd = s.outEndMs
@@ -199,7 +275,9 @@ function validateEdl(edl, videoDurationMs) {
   if (edl.totalMs !== prevOutEnd) {
     errors.push(`totalMs ${edl.totalMs} != last slot outEndMs ${prevOutEnd}`)
   }
-  const segs = [...(edl.segments || [])].sort((a, b) => a.outStartMs - b.outStartMs)
+  const segs = [...(edl.segments || [])].sort(
+    (a, b) => a.outStartMs - b.outStartMs
+  )
   for (let i = 0; i < segs.length; i++) {
     const seg = segs[i]
     const slot = edl.slots.find((s) => s.segmentIdxs.includes(seg.idx))
@@ -207,8 +285,13 @@ function validateEdl(edl, videoDurationMs) {
       errors.push(`segment ${seg.idx} not referenced by any slot`)
       continue
     }
-    if (seg.outStartMs < slot.outStartMs || seg.outStartMs + seg.durationMs > slot.outEndMs) {
-      errors.push(`segment ${seg.idx} [${seg.outStartMs}, ${seg.outStartMs + seg.durationMs}] escapes slot [${slot.outStartMs}, ${slot.outEndMs}]`)
+    if (
+      seg.outStartMs < slot.outStartMs ||
+      seg.outStartMs + seg.durationMs > slot.outEndMs
+    ) {
+      errors.push(
+        `segment ${seg.idx} [${seg.outStartMs}, ${seg.outStartMs + seg.durationMs}] escapes slot [${slot.outStartMs}, ${slot.outEndMs}]`
+      )
     }
     if (i > 0) {
       const prev = segs[i - 1]
@@ -237,14 +320,29 @@ function msToSec(ms) {
 function buildSlotArgs(sourcePath, slot, outPath) {
   const args = [
     "-y",
-    "-ss", msToSec(slot.srcStartMs),
-    "-t", msToSec(slot.srcEndMs - slot.srcStartMs),
-    "-i", sourcePath,
+    "-ss",
+    msToSec(slot.srcStartMs),
+    "-t",
+    msToSec(slot.srcEndMs - slot.srcStartMs),
+    "-i",
+    sourcePath,
   ]
   if (slot.holdMs > 0) {
-    args.push("-vf", `tpad=stop_mode=clone:stop_duration=${msToSec(slot.holdMs)}`)
+    args.push(
+      "-vf",
+      `tpad=stop_mode=clone:stop_duration=${msToSec(slot.holdMs)}`
+    )
   }
-  args.push("-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", outPath)
+  args.push(
+    "-an",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-r",
+    "30",
+    outPath
+  )
   return args
 }
 
@@ -266,12 +364,24 @@ function buildMixArgs(retimedPath, segments, outputPath) {
     parts.push(`[${i + 1}:a]adelay=${d}|${d}[a${i}]`)
     labels.push(`[a${i}]`)
   })
-  parts.push(`${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0:normalize=0[aout]`)
+  parts.push(
+    `${labels.join("")}amix=inputs=${segments.length}:dropout_transition=0:normalize=0[aout]`
+  )
   args.push(
-    "-filter_complex", parts.join(";"),
-    "-map", "0:v", "-map", "[aout]",
-    "-c:v", "copy",
-    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+    "-filter_complex",
+    parts.join(";"),
+    "-map",
+    "0:v",
+    "-map",
+    "[aout]",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
     outputPath
   )
   return args
@@ -282,13 +392,25 @@ function buildMixArgs(retimedPath, segments, outputPath) {
 function buildSilentAudioArgs(retimedPath, outputPath) {
   return [
     "-y",
-    "-i", retimedPath,
-    "-f", "lavfi",
-    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-i",
+    retimedPath,
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=channel_layout=stereo:sample_rate=44100",
     "-shortest",
-    "-map", "0:v:0", "-map", "1:a:0",
-    "-c:v", "copy",
-    "-c:a", "aac", "-ar", "44100", "-ac", "2",
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c:v",
+    "copy",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
     outputPath,
   ]
 }
@@ -298,6 +420,7 @@ module.exports = {
   parseActionEntries,
   groupActions,
   buildEdl,
+  narrationHold,
   validateEdl,
   buildSlotArgs,
   buildConcatListText,

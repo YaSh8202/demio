@@ -48,8 +48,12 @@ import { scenePlanSchema, sceneResultSchema, sceneSchema } from "./schemas"
 import type { SceneResult } from "./schemas"
 import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeNarrationAudio } from "../lib/voiceover"
-import { createDemioAgent } from "../demio-agent"
 import { parseActionEntries, renderScene } from "./sync"
+import {
+  narrateScenes,
+  narrationSegmentsSchema,
+  segmentAnchorSchema,
+} from "./narrate"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
 import { hasProfile, loginProfile } from "./credentials"
@@ -291,56 +295,9 @@ const collectResultsStep = createStep({
   },
 })
 
-// Wire schema for the narrator's structured output — kept free of
-// minItems/maxItems/minimum JSON-schema keywords (no .min()/.max()/.int() on
-// the array or the numeric anchor branch). Mastra passes this schema
-// natively via response_format, and strict `json_schema` providers (e.g.
-// @ai-sdk/openai's default) reject those constraint keywords outright,
-// which would hard-fail the whole run at narrate — AFTER every scene is
-// already recorded. Segment-count guidance ("2-6 segments per scene") lives
-// in NARRATOR_INSTRUCTIONS prose instead. Downstream is safe with unbounded/
-// non-integer anchors: `buildEdl` clamps out-of-range or non-integer action
-// indices to the last action group, and `ttsStep`'s
-// `segments.length === 0` guard now also covers the case where the array
-// itself validates as empty.
-const segmentAnchorSchema = z.union([
-  z.literal("intro"),
-  z.literal("outro"),
-  z.number(),
-])
-
-const narrationSegmentsSchema = z.object({
-  scenes: z.array(
-    z.object({
-      sceneId: z.string(),
-      segments: z.array(
-        z.object({
-          text: z.string().describe("One short spoken sentence"),
-          anchor: segmentAnchorSchema.describe(
-            'What this line plays over: "intro" (opening frame, before any action), ' +
-              'an action index from the numbered action list, or "outro" (final state)'
-          ),
-        })
-      ),
-    })
-  ),
-})
-
 const narratedSchema = collectedSchema.extend({
   narration: narrationSegmentsSchema.nullable(),
 })
-
-const NARRATOR_INSTRUCTIONS = `You are the Demio narrator. You write voiceover narration for a recorded product demo, given each scene's goal, narration hint, and a numbered list of the browser actions the recorder performed.
-
-Rules:
-- Each segment is { text, anchor }. You NEVER schedule times — the sync engine times everything. anchor says what the line plays over:
-  - "intro" — over the scene's opening frame, before any action happens. Use it to set context.
-  - an action index (a number from the scene's numbered action list) — the line plays as that action happens on screen.
-  - "outro" — over the scene's final state. Use it to land the outcome.
-- List segments in playback order: intro lines first, then action-anchored lines in ascending action order, outro lines last. Multiple lines may share an anchor.
-- One short conversational sentence per segment (~150 words per minute pacing — a sentence of 8-15 words). Match each scene's narrationHint for tone.
-- Anchor to the FIRST action of a burst: typing then pressing Enter is one moment — anchor to the typing action's index.
-- Output narration for every scene provided, even if brief. 2-6 segments per scene.`
 
 const narrateStep = createStep({
   id: "narrate",
@@ -357,13 +314,6 @@ const narrateStep = createStep({
     if (!inputData.voiceId || !getDecryptedKey("elevenlabs")) {
       return { ...inputData, narration: null }
     }
-    // Narrator needs no tools — action logs are inlined into the prompt.
-    const narrator = createDemioAgent({
-      workspace: inputData.workspace,
-      modelId: inputData.modelId,
-      toolFilter: [],
-      instructionsOverride: NARRATOR_INSTRUCTIONS,
-    })
     const actionLogs = await Promise.all(
       inputData.results.map(async (r) => {
         const entries = parseActionEntries(
@@ -372,6 +322,7 @@ const narrateStep = createStep({
         return {
           sceneId: r.sceneId,
           durationSec: r.durationSec,
+          entries,
           numberedActions: entries.map(
             (e) =>
               `${e.idx}: ${e.action}${e.argsSummary ? ` ${e.argsSummary}` : ""}`
@@ -379,21 +330,23 @@ const narrateStep = createStep({
         }
       })
     )
-    const narrationRun = await narrator.generate(
-      `Write voiceover narration for this demo: ${inputData.plan.demoTitle}.
-Scene data (goals, hints, numbered action lists):
-${JSON.stringify(
-  inputData.plan.scenes.map((s) => ({
-    sceneId: s.id,
-    goal: s.goal,
-    narrationHint: s.narrationHint,
-    actions: actionLogs.find((l) => l.sceneId === s.id),
-  })),
-  null,
-  2
-)}`,
-      { structuredOutput: { schema: narrationSegmentsSchema }, abortSignal }
-    )
+    const narrationRun = await narrateScenes({
+      workspace: inputData.workspace,
+      modelId: inputData.modelId,
+      demoTitle: inputData.plan.demoTitle,
+      scenes: inputData.plan.scenes.map((s) => {
+        const log = actionLogs.find((l) => l.sceneId === s.id)
+        return {
+          sceneId: s.id,
+          goal: s.goal,
+          narrationHint: s.narrationHint,
+          durationSec: log?.durationSec ?? 0,
+          numberedActions: log?.numberedActions ?? [],
+          actionEntries: log?.entries,
+        }
+      }),
+      signal: abortSignal,
+    })
     // Same blind spot as the recorder (see `writeAgentTranscript` in
     // `./record-scene`): the narrator is a bare `generate()` with no memory,
     // so its conversation is otherwise unrecoverable after the run.
@@ -405,7 +358,7 @@ ${JSON.stringify(
             modelId: inputData.modelId,
             usage: narrationRun.usage,
             steps: narrationRun.steps,
-            object: narrationRun.object,
+            object: narrationRun.narration,
           },
           null,
           2
@@ -415,7 +368,7 @@ ${JSON.stringify(
     } catch {
       // debug artifact only — never fail narration over it
     }
-    return { ...inputData, narration: narrationRun.object }
+    return { ...inputData, narration: narrationRun.narration ?? null }
   },
 })
 

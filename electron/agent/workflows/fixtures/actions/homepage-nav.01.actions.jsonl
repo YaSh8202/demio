@@ -1,0 +1,7 @@
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":703,"frameIdx":11,"ok":true,"target":{"x":256,"y":124},"tsMs":1040}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":703,"frameIdx":26,"ok":true,"target":{"x":337,"y":124},"tsMs":2566}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":703,"frameIdx":41,"ok":true,"target":{"x":435,"y":124},"tsMs":4099}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":708,"frameIdx":57,"ok":true,"target":{"x":554,"y":124},"tsMs":5633}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":703,"frameIdx":72,"ok":true,"target":{"x":728,"y":124},"tsMs":7164}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":703,"frameIdx":87,"ok":true,"target":{"x":835,"y":124},"tsMs":8693}
+{"action":"hover","args":{"selector":"[data-agent-browser-located='true']","via":"find"},"durationMs":710,"frameIdx":102,"ok":true,"target":{"x":931,"y":124},"tsMs":10224}
