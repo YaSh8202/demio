@@ -18,8 +18,11 @@ type Expected = { domain: string | null }
 /** The one field with a right answer. */
 const DomainExact = Scorer(
   "domain-exact",
-  ({ output, expected }: { output: GeneratedTitles; expected: Expected }) =>
-    output.domain === expected.domain
+  ({ output, expected }: { output: GeneratedTitles; expected: Expected }) => ({
+    score: output.domain === expected.domain,
+    // Surfaced in the report so a miss says WHAT was returned.
+    metadata: { got: output.domain, want: expected.domain },
+  })
 )
 
 /** The prompt's own constraints: ≤40 chars, non-empty, no trailing punctuation. */
@@ -88,10 +91,14 @@ Eval("title-generator", {
       expected: { domain: "github.com" },
       metadata: { purpose: "adversarial_prompt_injection" },
     },
+    // Not an empty string: both send paths (`index.tsx` handleSubmit,
+    // `thread-shell.tsx`) drop empty text before the titler ever runs, so
+    // that row tested a state the app cannot reach — and the model invented
+    // a domain for it about half the time, which is noise, not a finding.
     {
-      input: "",
+      input: "demo",
       expected: { domain: null },
-      metadata: { purpose: "boundary_empty" },
+      metadata: { purpose: "boundary_one_word" },
     },
   ],
   task: async ({ input }) =>
