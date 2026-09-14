@@ -101,6 +101,15 @@ function getNativeBinaryName(): string {
 export function resolveBinaryPath(): string {
   if (cachedBinaryPath) return cachedBinaryPath
 
+  // Evals only: point every agent-browser invocation — the replay engine's
+  // direct spawns AND the sandbox shim the agent's shell resolves — at a
+  // stand-in that answers from a canned scenario. Never set by the app.
+  const override = process.env.DEMIO_AGENT_BROWSER_BIN
+  if (override) {
+    cachedBinaryPath = override
+    return override
+  }
+
   const nativeBin = getNativeBinaryName()
   const candidates: string[] = []
 

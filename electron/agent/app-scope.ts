@@ -24,6 +24,9 @@ export const flagSchema = z.object({
     /** `provider:model`, as `getModel` expects. */
     model: z.string().default(EVAL_DEFAULT_MODEL_ID),
   }),
+  recovery: z.object({
+    model: z.string().default(EVAL_DEFAULT_MODEL_ID),
+  }),
 })
 
 export const { flag, pickFlags } = createAppScope({ flagSchema })

@@ -28,6 +28,11 @@ export interface ReplayOutcome {
 const lint = require("./script-lint-pure.cjs") as {
   lintScript: (s: SceneScript) => { ok: boolean; findings: LintFinding[] }
   formatFindings: (f: LintFinding[]) => string
+  checkAmendment: (
+    original: SceneScript["actions"],
+    amended: SceneScript["actions"],
+    index: number
+  ) => { ok: boolean; detail: string }
   checkReplayDuration: (
     s: SceneScript,
     steps: ReplayStep[]
@@ -87,6 +92,19 @@ export function assertScriptLints(script: SceneScript): void {
       `[demo-workflow] script ${script.sceneId}: ${lint.formatFindings(advisory)}`
     )
   }
+}
+
+/**
+ * Is `amended` a legitimate rewrite of `original` at `index` — every other
+ * step untouched, the failing step replaced by at least one, and its
+ * assertion (if it had one) still present? See `script-lint-pure.cjs`.
+ */
+export function checkAmendment(
+  original: SceneScript["actions"],
+  amended: SceneScript["actions"],
+  index: number
+): { ok: boolean; detail: string } {
+  return lint.checkAmendment(original, amended, index)
 }
 
 /**

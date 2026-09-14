@@ -33,5 +33,9 @@ export function appRoot(): string {
 }
 
 export function userDataDir(): string {
-  return electronApp()?.getPath("userData") ?? path.join(os.homedir(), ".demio")
+  const app = electronApp()
+  if (app) return app.getPath("userData")
+  // Evals set this to a temp dir so the sandbox shim they build never lands
+  // in the real user's directories.
+  return process.env.DEMIO_USER_DATA_DIR ?? path.join(os.homedir(), ".demio")
 }

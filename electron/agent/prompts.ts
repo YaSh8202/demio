@@ -481,10 +481,14 @@ export function recoveryInstructions(ctx: RecoveryInstructionsContext): string {
   const vaultProfile = ctx.vaultProfile ?? null
   const canAmend = ctx.canAmend === true
 
+  // Every field, as JSON, not just `cmd`: an amendment must hand the
+  // untouched steps back verbatim, and the agent can only copy what it can
+  // see. Listing `cmd` alone is how the first recovery eval got two-step
+  // scenes rewritten from memory with both `assert`s missing.
   const scriptList = script.actions
     .map(
       (a, i) =>
-        `${i}. ${a.cmd}${i === deviation.index ? "   ← FAILED HERE" : ""}`
+        `${i}. ${JSON.stringify(a)}${i === deviation.index ? "   ← FAILED HERE" : ""}`
     )
     .join("\n")
 
@@ -530,7 +534,7 @@ Rules:
 
 - **Confirm before you rewrite.** Spend a command looking at the page and check your replacement matches something real. A guessed selector is how the script got here.
 - **Never delete the failing step.** A shorter action list is rejected outright. If that step genuinely cannot be performed, that is a BLOCKED, not an amendment.
-- **Change only what is broken.** Leave the steps that worked exactly as they are.
+- **Change only what is broken.** Every other step comes back exactly as it was — every field, \`assert\` and \`settleMs\` included. Copy them from the script above; do not retype them from memory. The failing step may become one or more steps, and if it carried an \`assert\`, its replacement must end with one. A rewrite that touches another step or drops that assertion is rejected.
 - Your rewrite is replayed from \`${script.startUrl}\` with the camera off before any retake. If it does not replay, it is discarded and the scene fails — so amend on evidence, not on a hunch.
 
 **Watch for the case where the obstacle IS the step**`

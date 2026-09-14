@@ -16,6 +16,7 @@ import {
   isSafeToReplayOffCamera,
   replayScriptOffCamera,
   assertScriptLints,
+  checkAmendment,
 } from "./replay"
 import { recordScript } from "./rehearsal"
 import log from "../../lib/logger"
@@ -72,13 +73,14 @@ export interface RecoveryOutcome {
  */
 function createAmendTool(
   script: SceneScript,
+  failingIndex: number,
   capture: (actions: ScriptedAction[]) => void
 ) {
   return {
     amend_scene_script: createTool({
       id: "amend_scene_script",
       description:
-        "Rewrite this scene's actions when the script itself is what is wrong — a missing `waitBefore`, a selector that no longer matches, an assertion that can never pass. Pass the COMPLETE action list, not just the changed step. The rewrite is replayed cold before any retake, so a bad one is rejected rather than filmed. Use this only when the page is fine and the script is wrong; if the page is what is blocking, clear it with the shell instead.",
+        "Rewrite this scene's actions when the script itself is what is wrong — a missing `waitBefore`, a selector that no longer matches, an assertion that can never pass. Pass the COMPLETE action list: every step other than the failing one copied VERBATIM from the script in your instructions (every field — `waitBefore`, `assert`, `settleMs`), and the failing step replaced by one or more steps that keep its `assert` (or a better one). Anything else is rejected. The rewrite is replayed cold before any retake, so a bad one is rejected rather than filmed. Use this only when the page is fine and the script is wrong; if the page is what is blocking, clear it with the shell instead.",
       inputSchema: z.object({
         actions: z
           .array(scriptedActionSchema)
@@ -90,16 +92,22 @@ function createAmendTool(
       }),
       outputSchema: z.object({ ok: z.boolean(), actions: z.number() }),
       execute: async (input) => {
-        // A script cannot be "fixed" by deleting the step that failed. That
-        // would pass every check below — cold replay, verification, duration
-        // — and produce a scene that films nothing. Amendments may change or
-        // add steps; they may not quietly drop the flow's content.
-        if (input.actions.length < script.actions.length) {
+        // "Change only what is broken", enforced: every other step must come
+        // back byte-for-byte, the failing step may not be deleted (that would
+        // pass every check below — cold replay, verification, duration — and
+        // film nothing), and its assertion may not be silently dropped. The
+        // first eval of this tool caught the agent rewriting a two-step scene
+        // from memory with both `assert`s gone: a script that replays cleanly
+        // because it no longer checks anything.
+        const shape = checkAmendment(
+          script.actions,
+          input.actions as ScriptedAction[],
+          failingIndex
+        )
+        if (!shape.ok) {
           throw new Error(
-            `amend_scene_script: the amended script has ${input.actions.length} ` +
-              `action(s), fewer than the ${script.actions.length} it started with. ` +
-              `Fix the failing step; do not remove it. If the step genuinely ` +
-              `cannot be performed, reply BLOCKED instead.`
+            `amend_scene_script: ${shape.detail} If the step genuinely cannot ` +
+              `be performed, reply BLOCKED instead.`
           )
         }
         // Same static gate `recordScript` applies, run here so the agent
@@ -146,7 +154,7 @@ export async function recoverFromDeviation(opts: {
       workspace: opts.workspace,
       modelId: opts.modelId,
       toolFilter: RECOVERY_TOOL_FILTER,
-      extraTools: createAmendTool(opts.script, (a) => {
+      extraTools: createAmendTool(opts.script, opts.deviation.index, (a) => {
         amendedActions = a
       }),
       instructionsOverride: recoveryInstructions({

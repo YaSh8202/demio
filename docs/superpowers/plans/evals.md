@@ -107,7 +107,33 @@ from eslint. Kept below for the record.
 
 Run with `bunx axiom eval`, never `npx`.
 
-### 1a. Recovery — tool-use eval (the one to build)
+### 1a. Recovery — tool-use eval
+
+**Built** — `electron/agent/workflows/recovery.eval.ts`, six cases, eight
+scorers, ~3 min a run. The fake is
+`fixtures/fake-agent-browser.cjs`: it answers from a per-case rule list
+(first regex match on argv wins), logs every invocation, and holds enough
+state for "the dialog is gone after you click Got it". It is reached both
+ways production reaches agent-browser — `DEMIO_AGENT_BROWSER_BIN` for the
+replay engine's direct spawns, and through the sandbox shim for the
+agent's shell — and a case that never reached it throws rather than
+scoring. The scenario file lives beside the agent's workspace, not in it:
+on the first run the agent found it with `ls` and read the answers.
+
+Two product defects found before the suite ever went green:
+
+- The recovery prompt listed the script as `cmd` only. An amendment must
+  hand every other step back verbatim, and the agent could only copy what
+  it could see — so two-step scenes came back rewritten from memory with
+  both `assert`s gone: a script that replays cleanly because it no longer
+  checks anything. The prompt now shows each action as JSON.
+- Nothing enforced "change only what is broken". `checkAmendment` in
+  `script-lint-pure.cjs` now does: other steps byte-identical, the failing
+  step replaced by ≥1 steps, its assertion kept. Three attempts per
+  amendment dropped to one once the prompt showed the fields.
+
+Final: 6/6 cases, all eight scorers 100%, every amendment accepted on the
+first call.
 
 Task: `recoverFromDeviation` against a **fake `agent-browser`** on `PATH` —
 a small script that returns canned `snapshot` / `eval` / `wait` output per

@@ -211,9 +211,106 @@ function checkReplayDuration(script, steps) {
   }
 }
 
+const DEFAULT_SETTLE_MS = 600
+
+/** The fields an amendment is compared on, with the schema default applied. */
+function normalizeAction(a) {
+  const out = {
+    cmd: a.cmd,
+    settleMs: typeof a.settleMs === "number" ? a.settleMs : DEFAULT_SETTLE_MS,
+  }
+  if (typeof a.waitBefore === "string") out.waitBefore = a.waitBefore
+  if (typeof a.assert === "string") out.assert = a.assert
+  if (typeof a.narrationAnchor === "number")
+    out.narrationAnchor = a.narrationAnchor
+  return out
+}
+
+function sameAction(a, b) {
+  return (
+    JSON.stringify(normalizeAction(a)) === JSON.stringify(normalizeAction(b))
+  )
+}
+
+/**
+ * Is `amended` a legitimate rewrite of `original` at `index`?
+ *
+ * "Change only what is broken" as a mechanical rule: every action before the
+ * failing one and every action after it must come back byte-for-byte — every
+ * field, `assert` and `settleMs` included. The failing step may be replaced
+ * by one or more steps, never by none. And if the failing step carried an
+ * assertion, its replacement must end with one: a rewrite that quietly drops
+ * the proof turns a proven step into an unproven one.
+ *
+ * Exists because the recovery agent, asked to fix step 0 of a two-step
+ * scene, handed back both steps rewritten from memory with every `assert`
+ * missing — a script that replays "cleanly" precisely because it no longer
+ * checks anything.
+ */
+function checkAmendment(original, amended, index) {
+  const before = original.slice(0, index)
+  const after = original.slice(index + 1)
+  if (amended.length < before.length + 1 + after.length) {
+    return {
+      ok: false,
+      detail:
+        `the amended script has ${amended.length} action(s), fewer than the ` +
+        `${original.length} it started with. Fix step ${index}; do not remove it.`,
+    }
+  }
+  for (let i = 0; i < before.length; i++) {
+    if (!sameAction(before[i], amended[i])) {
+      return {
+        ok: false,
+        detail:
+          `step ${i} was changed but step ${index} is the one that failed. ` +
+          `Pass every other step back exactly as it was — every field, ` +
+          `including assert and settleMs. Was: ${JSON.stringify(normalizeAction(before[i]))}`,
+      }
+    }
+  }
+  const replacement = amended.slice(
+    before.length,
+    amended.length - after.length
+  )
+  for (let i = 0; i < after.length; i++) {
+    const j = amended.length - after.length + i
+    if (!sameAction(after[i], amended[j])) {
+      return {
+        ok: false,
+        detail:
+          `step ${index + 1 + i} (now at ${j}) was changed but step ${index} is ` +
+          `the one that failed. Pass every other step back exactly as it was — ` +
+          `every field, including assert and settleMs. Was: ` +
+          `${JSON.stringify(normalizeAction(after[i]))}`,
+      }
+    }
+  }
+  const failing = original[index]
+  const last = replacement[replacement.length - 1]
+  if (
+    failing &&
+    typeof failing.assert === "string" &&
+    !(last && typeof last.assert === "string")
+  ) {
+    return {
+      ok: false,
+      detail:
+        `the failing step asserted \`${failing.assert}\` and its replacement asserts ` +
+        `nothing. Keep that assertion, or replace it with one that proves the ` +
+        `rewritten step landed — a step with no assertion is a step nobody proved.`,
+    }
+  }
+  return {
+    ok: true,
+    detail: `step ${index} replaced by ${replacement.length} action(s)`,
+  }
+}
+
 module.exports = {
   lintScript,
   formatFindings,
   checkReplayDuration,
+  checkAmendment,
   LOAD_STATES,
 }

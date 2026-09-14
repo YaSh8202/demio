@@ -222,3 +222,83 @@ test("fixtures: no credential-shaped literal survived redaction", () => {
     }
   }
 })
+
+// ── checkAmendment ───────────────────────────────────────────────────────────
+
+const { checkAmendment } = require("./script-lint-pure.cjs")
+const orig = [
+  {
+    cmd: 'click "#new"',
+    waitBefore: '--text "Boards"',
+    assert: '--url "/new"',
+    settleMs: 600,
+  },
+  { cmd: 'fill "#name" "Q3"', assert: '--text "Q3"', settleMs: 600 },
+]
+
+test("amendment: replacing only the failing step, assertion kept, is ok", () => {
+  const r = checkAmendment(
+    orig,
+    [
+      {
+        cmd: 'find role button --name "New" click',
+        waitBefore: '--text "New"',
+        assert: '--url "/new"',
+      },
+      orig[1],
+    ],
+    0
+  )
+  assert.equal(r.ok, true, r.detail)
+})
+
+test("amendment: the failing step may become several steps", () => {
+  const r = checkAmendment(
+    orig,
+    [
+      { cmd: 'wait --selector "#nav"' },
+      { cmd: 'click "#new2"', assert: '--url "/new"' },
+      orig[1],
+    ],
+    0
+  )
+  assert.equal(r.ok, true, r.detail)
+})
+
+test("amendment: touching another step is rejected, naming it", () => {
+  const r = checkAmendment(
+    orig,
+    [{ ...orig[0], cmd: 'click "#new2"' }, { cmd: 'fill "#name" "Q3"' }],
+    0
+  )
+  assert.equal(r.ok, false)
+  assert.match(
+    r.detail,
+    /step 1 .*was changed but step 0 is the one that failed/
+  )
+})
+
+test("amendment: settleMs default is applied before comparing", () => {
+  const r = checkAmendment(
+    orig,
+    [
+      { cmd: 'click "#new2"', assert: '--url "/new"' },
+      { cmd: 'fill "#name" "Q3"', assert: '--text "Q3"' },
+    ],
+    0
+  )
+  // step 1 omits settleMs; the schema default (600) makes it identical.
+  assert.equal(r.ok, true, r.detail)
+})
+
+test("amendment: dropping the failing step's assertion is rejected", () => {
+  const r = checkAmendment(orig, [{ cmd: 'click "#new2"' }, orig[1]], 0)
+  assert.equal(r.ok, false)
+  assert.match(r.detail, /asserted .* and its replacement asserts nothing/)
+})
+
+test("amendment: deleting the failing step is rejected", () => {
+  const r = checkAmendment(orig, [orig[1]], 0)
+  assert.equal(r.ok, false)
+  assert.match(r.detail, /fewer than the 2/)
+})
