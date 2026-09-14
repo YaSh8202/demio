@@ -6,12 +6,31 @@
 //
 // In-memory cache is maintained for fast reads. All writes are atomic.
 
-import { safeStorage } from "electron"
 import fs from "node:fs"
 import path from "node:path"
+import { createRequire } from "node:module"
 import { nanoid } from "nanoid"
 import log from "../lib/logger"
 import { storeRoot, atomicWriteSync } from "./paths"
+
+const require = createRequire(import.meta.url)
+
+/**
+ * Electron's `safeStorage`, or `null` outside the Electron main process.
+ *
+ * Resolved lazily rather than imported: `import { safeStorage } from
+ * "electron"` fails at link time under plain Node/Bun/vitest, because the
+ * `electron` npm package exports the binary's path, not the API. That single
+ * import made every module reaching `getModel()` — the agents, the workflows,
+ * an eval — unloadable outside the app, even though the env-var key fallback
+ * in `providers.ts` never needed it. Inside Electron, `require("electron")`
+ * is intercepted by the runtime and returns the real API regardless of what
+ * is in node_modules.
+ */
+function safeStorage(): Electron.SafeStorage | null {
+  if (!process.versions.electron) return null
+  return (require("electron") as typeof import("electron")).safeStorage
+}
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -52,7 +71,7 @@ function filePath(): string {
 // ── Init ────────────────────────────────────────────────────────────────────
 
 export function initProviderKeys(): void {
-  encryptionAvailable = safeStorage.isEncryptionAvailable()
+  encryptionAvailable = safeStorage()?.isEncryptionAvailable() ?? false
 
   if (!encryptionAvailable) {
     log.warn(
@@ -85,8 +104,9 @@ function persist(): void {
 // ── Encryption ──────────────────────────────────────────────────────────────
 
 function encryptKey(apiKey: string): string {
-  if (encryptionAvailable) {
-    const encrypted = safeStorage.encryptString(apiKey)
+  const storage = encryptionAvailable ? safeStorage() : null
+  if (storage) {
+    const encrypted = storage.encryptString(apiKey)
     return encrypted.toString("base64")
   }
   // Fallback: base64 encode (NOT secure, but functional)
@@ -94,9 +114,10 @@ function encryptKey(apiKey: string): string {
 }
 
 function decryptKey(encryptedKey: string): string {
-  if (encryptionAvailable) {
+  const storage = encryptionAvailable ? safeStorage() : null
+  if (storage) {
     const buffer = Buffer.from(encryptedKey, "base64")
-    return safeStorage.decryptString(buffer)
+    return storage.decryptString(buffer)
   }
   // Fallback: base64 decode
   return Buffer.from(encryptedKey, "base64").toString("utf-8")

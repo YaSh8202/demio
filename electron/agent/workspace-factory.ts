@@ -20,7 +20,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { app } from "electron"
+import { userDataDir } from "../lib/electron-app"
 import {
   Workspace,
   LocalFilesystem,
@@ -49,7 +49,7 @@ let cachedShimDir: string | null = null
 export function buildShimPath(): string {
   if (cachedShimDir) return cachedShimDir
 
-  const shimDir = path.join(app.getPath("userData"), "bin")
+  const shimDir = path.join(userDataDir(), "bin")
   fs.mkdirSync(shimDir, { recursive: true })
 
   const isWin = process.platform === "win32"

@@ -87,7 +87,13 @@ Install (`bun add axiom`), then read
 `node_modules/axiom/dist/docs/` before writing any API code — the skill's
 examples are not the source of truth, the bundled docs are.
 
-**Two blockers to clear first:**
+**Two blockers, both cleared:** `provider-keys.ts` resolves `safeStorage`
+lazily and only inside Electron; `electron/lib/electron-app.ts` does the
+same for `app` (three modules on the agent's path used it only to locate
+files, with checkout-relative fallbacks now). `recovery.ts`, `rehearse.ts`,
+`demo-video.ts` and `title-generator.ts` all import under plain Bun/Node
+with an env-var key. `**/*.eval.ts` is excluded from both tsconfigs and
+from eslint. Kept below for the record.
 
 - **Keys.** `getModel()` calls `getDecryptedKey()` first, which imports
   `safeStorage` from `electron`. Under vitest that import fails. The env-var

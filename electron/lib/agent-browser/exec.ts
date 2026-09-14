@@ -9,7 +9,7 @@ import { spawn, execSync } from "child_process"
 import { existsSync, accessSync, chmodSync, constants as fsConstants } from "fs"
 import path from "path"
 import os from "os"
-import { app } from "electron"
+import { appRoot, isPackaged } from "../electron-app"
 import { buildArgv } from "./quote"
 
 // ---------------------------------------------------------------------------
@@ -104,19 +104,19 @@ export function resolveBinaryPath(): string {
   const nativeBin = getNativeBinaryName()
   const candidates: string[] = []
 
-  if (app.isPackaged) {
+  if (isPackaged()) {
     // Packaged: extraResource copies bin/ → Resources/bin/
     candidates.push(path.join(process.resourcesPath, "bin", nativeBin))
   } else {
     // Dev mode: resolve from project root
-    const appRoot = app.getAppPath()
+    const root = appRoot()
     candidates.push(
-      path.join(appRoot, "node_modules", "agent-browser", "bin", nativeBin)
+      path.join(root, "node_modules", "agent-browser", "bin", nativeBin)
     )
     // Also check .bin symlink as fallback
     const binShim =
       process.platform === "win32" ? "agent-browser.cmd" : "agent-browser"
-    candidates.push(path.join(appRoot, "node_modules", ".bin", binShim))
+    candidates.push(path.join(root, "node_modules", ".bin", binShim))
   }
 
   for (const candidate of candidates) {

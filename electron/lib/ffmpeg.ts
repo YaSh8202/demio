@@ -15,7 +15,7 @@ import fsPromises from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { execFile } from "node:child_process"
-import { app } from "electron"
+import { appRoot, isPackaged } from "./electron-app"
 import ffmpegPath from "ffmpeg-static"
 import log from "./logger"
 
@@ -25,12 +25,12 @@ import log from "./logger"
 export function resolveFfmpeg(): string | null {
   const candidates: string[] = []
 
-  if (app.isPackaged) {
+  if (isPackaged()) {
     candidates.push(path.join(process.resourcesPath, "ffmpeg"))
   } else {
     // Real on-disk location. Both roots are checked because the app path and
     // the working directory can differ depending on how Electron was launched.
-    for (const root of [app.getAppPath(), process.cwd()]) {
+    for (const root of [appRoot(), process.cwd()]) {
       candidates.push(
         path.join(root, "node_modules", "ffmpeg-static", "ffmpeg")
       )

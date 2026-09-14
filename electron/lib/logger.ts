@@ -20,7 +20,9 @@ log.hooks.push((message) => {
 // the spy above those echoes come straight back as `[renderer]` lines —
 // filtered out of the loop by their processType, but still a duplicate per
 // webContents in main.log. main.log is the record; DevTools can do without.
-log.transports.ipc.level = false
+// Guarded: the ipc transport only exists inside Electron, and this module
+// is also loaded by evals and scripts running under plain Node/Bun.
+if (log.transports.ipc) log.transports.ipc.level = false
 log.transports.file.level = "info"
 log.transports.console.level =
   process.env.NODE_ENV === "development" ? "debug" : "warn"

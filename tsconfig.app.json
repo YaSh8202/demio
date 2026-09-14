@@ -41,5 +41,8 @@
     "electron/lib",
     "electron/store",
     "electron/agent"
-  ]
+  ],
+  // Eval files import the axiom SDK, which is not a dependency of the app.
+  // They are checked by their own toolchain (`bunx axiom eval`), not here.
+  "exclude": ["**/*.eval.ts"]
 }
