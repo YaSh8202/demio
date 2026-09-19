@@ -31,7 +31,7 @@
 // this into real per-stage rows without touching this component's shape —
 // only the footer's render branch below.
 
-import { CheckIcon, CircleIcon, XCircleIcon } from "lucide-react"
+import { CheckIcon, CircleIcon, PauseIcon, XCircleIcon } from "lucide-react"
 import { Badge } from "@/components/ui/badge"
 import { cn } from "@/lib/utils"
 import type {
@@ -65,6 +65,40 @@ interface WorkflowProgressProps {
    * replayed on hydration. Because the map is keyed by `toolCallId`, an
    * older `generate_demo` call's state can never bleed into this card. */
   workflow: WorkflowState | null
+  /** This call is suspended awaiting the user's retry / skip / abort. */
+  isSuspended?: boolean
+}
+
+type FooterState =
+  | "error"
+  | "paused"
+  | "ready"
+  | "no-video"
+  | "finalizing"
+  | "idle"
+
+/**
+ * What the card's last row says. "Video ready" is a claim about a FILE, so
+ * it is made only when the output actually carries a `videoPath` — never
+ * inferred from the tool call having settled. A settled call with no video
+ * is what a suspension looks like from here (its output is the suspend
+ * payload: `{ runId, sceneId, failure, attempts }`), and that used to render
+ * as a green "Video ready" with nothing after it.
+ */
+function footerState(o: {
+  toolState: DynamicToolUIPart["state"]
+  videoPath: string | undefined
+  isSuspended: boolean
+  outputLooksSuspended: boolean
+  allScenesDone: boolean
+}): FooterState {
+  if (o.isSuspended) return "paused"
+  if (o.toolState === "output-error") return "error"
+  if (o.toolState === "output-available") {
+    if (o.videoPath) return "ready"
+    return o.outputLooksSuspended ? "paused" : "no-video"
+  }
+  return o.allScenesDone ? "finalizing" : "idle"
 }
 
 function asGenerateDemoInput(value: unknown): GenerateDemoInput {
@@ -155,6 +189,7 @@ export function WorkflowProgress({
   output,
   errorText,
   workflow,
+  isSuspended = false,
 }: WorkflowProgressProps) {
   const plan = asGenerateDemoInput(input).plan
   const planScenes = plan?.scenes ?? []
@@ -171,13 +206,29 @@ export function WorkflowProgress({
 
   const sceneTitleById = new Map(planScenes.map((s) => [s.id, s.title]))
 
-  const isToolDone = toolState === "output-available"
-  const isToolErrored = toolState === "output-error"
   const allScenesDone =
     sceneIds.length > 0 &&
     sceneIds.every((id) => liveScenes[id]?.phase === "done")
 
-  const videoPath = asOutput(output).videoPath
+  const out = asOutput(output)
+  const videoPath =
+    typeof out.videoPath === "string" && out.videoPath
+      ? out.videoPath
+      : undefined
+  const suspendedOutput = output as {
+    sceneId?: unknown
+    failure?: unknown
+  } | null
+  const footer = footerState({
+    toolState,
+    videoPath,
+    isSuspended,
+    outputLooksSuspended:
+      typeof suspendedOutput?.sceneId === "string" &&
+      typeof suspendedOutput?.failure === "string",
+    allScenesDone,
+  })
+  const pausedScene = sceneIds.find((id) => liveScenes[id]?.phase === "failed")
 
   return (
     <div className="w-full overflow-hidden rounded-lg border border-border/70 bg-muted/20">
@@ -203,28 +254,46 @@ export function WorkflowProgress({
       <div
         className={cn(
           "flex items-center gap-2 border-t border-border/50 px-3 py-1.5 text-[12px] leading-5",
-          isToolErrored
+          footer === "error"
             ? "text-destructive"
-            : isToolDone
+            : footer === "ready"
               ? "text-emerald-600 dark:text-emerald-400"
-              : "text-muted-foreground"
+              : footer === "paused"
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground"
         )}
       >
-        {isToolErrored ? (
+        {footer === "error" ? (
           <>
             <XCircleIcon className="size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 break-words">
               {errorText || "Demo generation failed."}
             </span>
           </>
-        ) : isToolDone ? (
+        ) : footer === "paused" ? (
+          <>
+            <PauseIcon className="size-3.5 shrink-0" />
+            <span className="min-w-0 flex-1">
+              Paused
+              {pausedScene
+                ? ` at ${sceneTitleById.get(pausedScene) ?? pausedScene}`
+                : ""}{" "}
+              — waiting for your decision below. Nothing has been lost.
+            </span>
+          </>
+        ) : footer === "ready" ? (
           <>
             <CheckIcon className="size-3.5 shrink-0" />
             <span className="min-w-0 flex-1 truncate">
-              Video ready{videoPath ? ` — ${videoPath}` : ""}
+              Video ready — {videoPath}
             </span>
           </>
-        ) : allScenesDone ? (
+        ) : footer === "no-video" ? (
+          <>
+            <CircleIcon className="size-3.5 shrink-0" />
+            <span>The run ended without producing a video.</span>
+          </>
+        ) : footer === "finalizing" ? (
           <>
             <span className="pulse-dot size-1.5 shrink-0 rounded-full bg-amber-400" />
             <span>Finalizing — narrating, voicing, and composing…</span>

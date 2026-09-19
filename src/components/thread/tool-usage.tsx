@@ -31,6 +31,7 @@ import type { DynamicToolUIPart, ReasoningUIPart, ToolUIPart } from "ai"
 import type { UIMessage } from "@electron/store/types"
 import type { WorkflowState } from "@/hooks/use-agent-events"
 import { WorkflowProgress } from "@/components/thread/workflow-progress"
+import { useSuspendedToolCallId } from "@/components/thread/suspended-tool-context"
 import {
   CheckIcon,
   ChevronDownIcon,
@@ -136,9 +137,11 @@ export function ThreadAssistantPartRenderer({
   workflows?: Record<string, WorkflowState>
 }) {
   const renderedParts: ReactNode[] = []
+  const suspendedToolCallId = useSuspendedToolCallId()
   const effectiveParts = resolveStalledParts(
     parts,
-    isMessageStreaming || isRunActive
+    isMessageStreaming || isRunActive,
+    suspendedToolCallId
   )
 
   for (let index = 0; index < effectiveParts.length; index++) {
@@ -297,13 +300,22 @@ function asObject<T extends object>(value: unknown): T | undefined {
  */
 function resolveStalledParts(
   parts: UIMessage["parts"],
-  isLive: boolean
+  isLive: boolean,
+  suspendedToolCallId: string | null
 ): UIMessage["parts"] {
   if (isLive) return parts
 
   let changed = false
   const next = parts.map((part) => {
     if (!isThreadToolPart(part) || !isPendingToolState(part.state)) return part
+    // A suspended call is waiting for the user, not dead. The run HAS ended
+    // (the framework ends it with reason `suspended`), so without this the
+    // card for a scene awaiting "retry / skip / abort" read "Interrupted —
+    // the run ended before this finished" directly above the buttons that
+    // continue it.
+    if (suspendedToolCallId && part.toolCallId === suspendedToolCallId) {
+      return part
+    }
     changed = true
     return {
       ...part,
@@ -914,6 +926,7 @@ function ThreadToolUsage({
   onVideoReady?: (absPath: string) => void
   workflows?: Record<string, WorkflowState>
 }) {
+  const suspendedToolCallId = useSuspendedToolCallId()
   const toolName = getThreadToolName(part)
 
   if (
@@ -937,6 +950,7 @@ function ThreadToolUsage({
         output={part.output}
         errorText={part.errorText}
         workflow={workflows?.[part.toolCallId] ?? null}
+        isSuspended={suspendedToolCallId === part.toolCallId}
       />
     )
   }

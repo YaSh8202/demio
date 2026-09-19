@@ -58,6 +58,7 @@ import {
   ThreadAssistantPartRenderer,
 } from "@/components/thread/tool-usage"
 import { SuspensionCard } from "@/components/thread/suspension-card"
+import { SuspendedToolCallContext } from "@/components/thread/suspended-tool-context"
 import { hasUsage, MessageUsage } from "@/components/thread/message-usage"
 import { ModelSelectorPopover } from "@/components/model-selector"
 import { ThreadUsage } from "@/components/thread/thread-usage"
@@ -382,7 +383,9 @@ export function ThreadShell() {
                       description="Send a message to start the conversation"
                     />
                   ) : (
-                    <>
+                    <SuspendedToolCallContext.Provider
+                      value={suspension?.toolCallId ?? null}
+                    >
                       {messages.map((msg, index) => (
                         <ThreadMessage
                           key={msg.id}
@@ -414,7 +417,7 @@ export function ThreadShell() {
                           recording agent · live
                         </div>
                       )} */}
-                    </>
+                    </SuspendedToolCallContext.Provider>
                   )}
                 </ConversationContent>
                 <ConversationScrollButton />
