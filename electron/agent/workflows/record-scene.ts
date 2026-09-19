@@ -22,10 +22,11 @@ import path from "node:path"
 import { promises as fs } from "node:fs"
 import { createRequire } from "node:module"
 import { execAgentBrowser } from "../../lib/agent-browser/exec"
-import { replayScene, checkReplayDuration } from "./replay"
+import { replayScene, checkReplayDuration, expectedDurationMs } from "./replay"
 import { recoverFromDeviation } from "./recovery"
 import { verifyScene } from "./verify"
 import { projectSteps } from "./transcript"
+import { recordScene } from "./scorecard"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
 import type { SceneScript } from "./script-schema"
 import log from "../../lib/logger"
@@ -124,7 +125,7 @@ function infraFailureReport(detail: string): VerifyReport {
   return { ok: false, checks: [{ name: "video-exists", ok: false, detail }] }
 }
 
-export async function recordSceneWithRetry(opts: {
+type RecordSceneOpts = {
   scene: Scene
   workspace: string
   modelId: string
@@ -155,10 +156,38 @@ export async function recordSceneWithRetry(opts: {
     phase: "recording" | "verifying" | "failed" | "done"
     detail?: string
   }) => void
-}): Promise<
+}
+
+type RecordSceneOutcome =
   | { status: "done"; result: SceneResult }
   | { status: "failed"; lastReport: VerifyReport; attempts: number }
-> {
+
+/** Record a scene, then put the outcome on the run's scorecard. */
+export async function recordSceneWithRetry(
+  opts: RecordSceneOpts
+): Promise<RecordSceneOutcome> {
+  const outcome = await recordSceneInner(opts)
+  const script = opts.scene.script
+  await recordScene({
+    workspace: opts.workspace,
+    sceneId: opts.scene.id,
+    status: outcome.status,
+    attempts:
+      outcome.status === "done" ? outcome.result.attempts : outcome.attempts,
+    checks:
+      outcome.status === "done"
+        ? outcome.result.verify.checks
+        : outcome.lastReport.checks,
+    durationSec:
+      outcome.status === "done" ? outcome.result.durationSec : undefined,
+    expectedSec: script ? expectedDurationMs(script) / 1000 : undefined,
+  })
+  return outcome
+}
+
+async function recordSceneInner(
+  opts: RecordSceneOpts
+): Promise<RecordSceneOutcome> {
   const { scene, workspace, modelId, signal } = opts
   if (!SAFE_SCENE_ID.test(scene.id)) {
     // Throw rather than return `failed`: a `failed` return feeds the

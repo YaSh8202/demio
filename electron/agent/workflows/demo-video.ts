@@ -50,6 +50,7 @@ import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeNarrationAudio } from "../lib/voiceover"
 import { parseActionEntries, renderScene } from "./sync"
 import { projectSteps } from "./transcript"
+import { recordRun } from "./scorecard"
 import {
   narrateScenes,
   narrationSegmentsSchema,
@@ -503,6 +504,11 @@ const composeStep = createStep({
       "+faststart",
       outputPath,
     ])
+    await recordRun({
+      workspace: inputData.workspace,
+      scenes: inputData.results.length,
+      videoPath: outputPath,
+    })
     return { videoPath: outputPath, scenes: inputData.results }
   },
 })

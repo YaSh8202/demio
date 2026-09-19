@@ -19,6 +19,7 @@ import {
   checkAmendment,
 } from "./replay"
 import { recordScript } from "./rehearsal"
+import { recordRecovery } from "./scorecard"
 import log from "../../lib/logger"
 
 /** Shell only — recovery reads and writes nothing on disk. */
@@ -124,7 +125,7 @@ function createAmendTool(
   }
 }
 
-export async function recoverFromDeviation(opts: {
+interface RecoverOpts {
   workspace: string
   modelId: string
   script: SceneScript
@@ -132,7 +133,34 @@ export async function recoverFromDeviation(opts: {
   /** User-typed hint from a prior "retry" resume — forwarded as advisory. */
   guidance?: string
   signal: AbortSignal
-}): Promise<RecoveryOutcome> {
+}
+
+/**
+ * Recover, then put what happened on the run's scorecard — including the one
+ * rule this design rests on and nothing previously checked: recovery may
+ * clear obstacles but must never run the scene's own scripted commands.
+ */
+export async function recoverFromDeviation(
+  opts: RecoverOpts
+): Promise<RecoveryOutcome> {
+  const outcome = await recover(opts)
+  await recordRecovery({
+    workspace: opts.workspace,
+    sceneId: opts.script.sceneId,
+    script: opts.script,
+    deviation: opts.deviation,
+    outcome: {
+      recovered: outcome.recovered,
+      detail: outcome.detail,
+      amended: outcome.amendedScript !== undefined,
+    },
+    steps: outcome.steps,
+    maxSteps: RECOVERY_MAX_STEPS,
+  })
+  return outcome
+}
+
+async function recover(opts: RecoverOpts): Promise<RecoveryOutcome> {
   try {
     // Resolved on the failure path only — one `auth show` on a run that has
     // already gone wrong. Recovery is the only stage that can sign a

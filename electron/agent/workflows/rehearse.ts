@@ -33,6 +33,7 @@ import {
 } from "./rehearsal"
 import type { FindingKind } from "./rehearsal"
 import { projectSteps } from "./transcript"
+import { recordRehearsal } from "./scorecard"
 import log from "../../lib/logger"
 
 /** Shell only, from the factory's side — the two rehearsal tools come in via `extraTools`. */
@@ -354,9 +355,17 @@ export async function rehearseFlow(opts: {
   // successful flow: a blocked flow has nothing worth replaying, and a
   // half-written script would just produce a second, noisier failure.
   let blockedByDressRehearsal = false
+  let dressInfo: { ran: boolean; ok?: boolean; detail?: string } = {
+    ran: false,
+  }
   if (status === "done") {
     try {
       const dress = await dressRehearse(workspace, flow.id, opts.signal)
+      dressInfo = {
+        ran: true,
+        ok: dress.ok,
+        detail: dress.detail.slice(0, 200),
+      }
       if (!dress.ok) {
         status = "blocked"
         blockedByDressRehearsal = true
@@ -403,6 +412,17 @@ export async function rehearseFlow(opts: {
       `it unchanged`
   }
 
+  await recordRehearsal({
+    workspace,
+    flowId: flow.id,
+    status,
+    detail,
+    text,
+    steps,
+    maxSteps: REHEARSAL_MAX_STEPS,
+    scripts: doc.scripts.filter((s) => s.sceneId.startsWith(`${flow.id}.`)),
+    dress: dressInfo,
+  })
   await finishFlow(workspace, { id: flow.id, status, sceneIds, detail })
   return { status, detail, sceneIds }
 }

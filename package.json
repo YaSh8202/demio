@@ -17,6 +17,7 @@
     "test:scripts": "node --test scripts/*.test.js",
     "test:workflows": "node --test electron/agent/workflows/*.test.js",
     "eval": "axiom eval",
+    "scorecard": "node scripts/scorecard.js",
     "mastra:dev": "mastra dev",
     "mastra:build": "mastra build"
   },

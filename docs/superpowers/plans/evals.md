@@ -224,7 +224,32 @@ no product mentioned (→ `domain: null`), two products mentioned, prompt
 injection. Scorers: `DomainExact`, `TitleShort` (≤ 6 words). Cheapest to
 write; build it first only to prove the plumbing.
 
-## Tier 2 — online evals on real runs
+## Tier 2, step one — the run scorecard
+
+**Built.** Every real run now scores itself into
+`<workspace>/scorecard.jsonl` — one appended line per rehearsal, recovery,
+scene and composed run — using reference-free scorers in
+`scorecard-pure.cjs`. Read one with `bun run scorecard [threadId]`
+(`--all`, `--json`). No SDK, no network, nothing leaves the machine.
+
+What it records that nothing recorded before: steps used against the
+budget and whether it ran out; whether the agent actually replied
+DONE/BLOCKED or fell silent; the share of shell commands that were
+`agent-browser`, how many reached outside the workspace, how many were
+forbidden outright (`env`, the vault key, a password fill), with up to
+five examples; how much of a script is asserted and how many scenes end
+unproven; the dress-rehearsal result; amend attempts per recovery; whether
+a scene needed more than one take and which checks failed. And the rule
+the whole design rests on — recovery may clear obstacles but must never
+run the scene's own scripted commands — is now checked on every recovery
+instead of being "auditable from the transcript".
+
+Scored retroactively, the 1.2 run that ended green reads:
+`✗ rehearsal …: done, reply empty, 100/100 steps (EXHAUSTED), shell 61%
+on-task, 28 outside workspace` — the finding that took a person reading a
+159 MB transcript, as one line on the run.
+
+## Tier 2, step two — online evals proper
 
 Once 1a exists, the same scorers can run **inside the app** on every
 recovery, via `onlineEval` (reference-free only; no `expected`). Sampling
