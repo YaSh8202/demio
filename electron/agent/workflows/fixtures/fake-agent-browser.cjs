@@ -18,12 +18,30 @@
 // through the sandbox shim, which links whatever `resolveBinaryPath` returns.
 
 const fs = require("node:fs")
+const os = require("node:os")
+const path = require("node:path")
+
+// Where the scenario and log live. Env vars when present (the replay
+// engine's direct spawns inherit the eval's env) — otherwise a pointer file
+// in the temp dir. The pointer exists because the agent's SHELL no longer
+// inherits arbitrary env: the sandbox env is an allowlist
+// (`sandbox-env-pure.cjs`), and FAKE_AB_* is rightly not on it. TMPDIR is,
+// so both spawn paths agree on where the pointer is.
+const POINTER = path.join(os.tmpdir(), "demio-fake-agent-browser.json")
+let pointer = {}
+if (!process.env.FAKE_AB_SCENARIO && fs.existsSync(POINTER)) {
+  try {
+    pointer = JSON.parse(fs.readFileSync(POINTER, "utf8"))
+  } catch {
+    pointer = {}
+  }
+}
 
 const argv = process.argv.slice(2)
 const command = argv.join(" ")
 
-const scenarioPath = process.env.FAKE_AB_SCENARIO
-const logPath = process.env.FAKE_AB_LOG
+const scenarioPath = process.env.FAKE_AB_SCENARIO || pointer.scenario
+const logPath = process.env.FAKE_AB_LOG || pointer.log
 if (logPath) {
   fs.appendFileSync(logPath, JSON.stringify({ command, at: Date.now() }) + "\n")
 }

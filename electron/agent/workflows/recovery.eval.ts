@@ -319,6 +319,13 @@ async function runCase(input: Input): Promise<Output> {
   await fs.writeFile(logFile, "")
   process.env.FAKE_AB_SCENARIO = scenario
   process.env.FAKE_AB_LOG = logFile
+  // The agent's shell does not inherit those (the sandbox env is an
+  // allowlist), so the fake also reads this pointer. Cases are serialized,
+  // so one pointer at a time is enough.
+  await fs.writeFile(
+    path.join(os.tmpdir(), "demio-fake-agent-browser.json"),
+    JSON.stringify({ scenario, log: logFile })
+  )
 
   const outcome = await recoverFromDeviation({
     workspace,

@@ -31,11 +31,25 @@ import { resolveFfmpeg } from "../lib/ffmpeg"
 import { resolveBinaryPath as resolveAgentBrowser } from "../lib/agent-browser/exec"
 import log from "../lib/logger"
 import { ensureWorkspace } from "./workspace"
+import { sandboxEnv } from "./workflows/sandbox-env"
 
 // ── Shim directory (PATH prepend target) ────────────────────────────────────
 //
 // Moved verbatim from electron/agent/tools/terminal.ts (Task 3) — terminal.ts
 // now imports buildShimPath() from here instead of building its own copy.
+
+/**
+ * The inherited PATH minus every `node_modules/.bin`. Launching through
+ * `bun start` puts the repo's own bin dir on PATH; left there it is both a
+ * second, unintended `agent-browser` and a signpost to the source tree.
+ */
+function sandboxPath(inherited: string): string {
+  const sep = process.platform === "win32" ? ";" : ":"
+  return inherited
+    .split(sep)
+    .filter((dir) => dir && !/[\\/]node_modules[\\/]\.bin\/?$/.test(dir))
+    .join(sep)
+}
 
 let cachedShimDir: string | null = null
 
@@ -85,24 +99,30 @@ function linkExe(
 ): void {
   const dest = path.join(shimDir, isWin ? `${name}.cmd` : name)
   try {
-    if (fs.existsSync(dest)) fs.unlinkSync(dest)
-  } catch {
-    /* ignore */
-  }
-  try {
+    // `rmSync` + `force`, never `existsSync` then `unlinkSync`: `existsSync`
+    // FOLLOWS symlinks, so a dangling one reads as "not there", survives,
+    // and every later attempt then fails on it — symlink/link with EEXIST,
+    // and `copyFile` by following the dead link to a directory that no
+    // longer exists (the ENOENT this function logged for six weeks). That is
+    // how both shims came to point into a deleted git worktree, the shim dir
+    // silently stopped working, and the agent's shell fell through to
+    // `node_modules/.bin/agent-browser` on the inherited PATH.
+    fs.rmSync(dest, { force: true })
+    if (!fs.existsSync(target)) {
+      throw new Error(`target does not exist: ${target}`)
+    }
     if (isWin) {
       fs.writeFileSync(dest, `@echo off\r\n"${target}" %*\r\n`)
     } else {
-      // Prefer symlink for transparency; fall back to hardlink then copy.
-      try {
-        fs.symlinkSync(target, dest)
-      } catch {
-        try {
-          fs.linkSync(target, dest)
-        } catch {
-          fs.copyFileSync(target, dest)
-        }
-      }
+      // A wrapper script, not a symlink. `which agent-browser` on a symlink
+      // resolves (via `readlink`/`realpath`) to the repo's node_modules —
+      // which is exactly how a rehearsal agent found Demio's source tree and
+      // spent a quarter of its step budget reading the linter it was being
+      // checked by. A script's path is just the shim dir.
+      const quoted = `'${target.replaceAll("'", "'\\''")}'`
+      fs.writeFileSync(dest, `#!/bin/sh\nexec ${quoted} "$@"\n`, {
+        mode: 0o755,
+      })
       fs.chmodSync(dest, 0o755)
     }
   } catch (err) {
@@ -162,14 +182,16 @@ export function createWorkspaceForDir(
       // spawn env — agent-browser/Chromium need HOME, and shell tooling in
       // general expects a normal environment), then override the vars that
       // must differ from the host.
-      env: {
-        ...process.env,
-        PATH: `${shimDir}${pathSep}${process.env.PATH ?? ""}`,
+      // Allowlisted, not spread: `main.ts` loads `.env.local` into
+      // `process.env`, so `{ ...process.env }` handed the agent's shell
+      // every provider key in that file. See `sandbox-env-pure.cjs`.
+      env: sandboxEnv(process.env, {
+        PATH: `${shimDir}${pathSep}${sandboxPath(process.env.PATH ?? "")}`,
         WORKSPACE: cwd,
         FORCE_COLOR: "1",
         CI: "true",
         NONINTERACTIVE: "1",
-      },
+      }),
     }),
     tools,
   })
