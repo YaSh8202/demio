@@ -49,6 +49,7 @@ import type { SceneResult } from "./schemas"
 import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeNarrationAudio } from "../lib/voiceover"
 import { parseActionEntries, renderScene } from "./sync"
+import { projectSteps } from "./transcript"
 import {
   narrateScenes,
   narrationSegmentsSchema,
@@ -357,7 +358,7 @@ const narrateStep = createStep({
           {
             modelId: inputData.modelId,
             usage: narrationRun.usage,
-            steps: narrationRun.steps,
+            ...projectSteps(narrationRun.steps),
             object: narrationRun.narration,
           },
           null,

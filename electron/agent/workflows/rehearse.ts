@@ -32,6 +32,7 @@ import {
   rehearsalPaths,
 } from "./rehearsal"
 import type { FindingKind } from "./rehearsal"
+import { projectSteps } from "./transcript"
 import log from "../../lib/logger"
 
 /** Shell only, from the factory's side — the two rehearsal tools come in via `extraTools`. */
@@ -318,7 +319,14 @@ export async function rehearseFlow(opts: {
   try {
     await fs.writeFile(
       `${paths.dir}/${flow.id}.agent.json`,
-      JSON.stringify({ flow, modelId: opts.modelId, text, steps }, null, 2),
+      // Projected, never raw: raw steps restate the whole conversation four
+      // times each, and a 100-step flow came to 159 MB stringified on the
+      // main thread. See `transcript-pure.cjs`.
+      JSON.stringify(
+        { flow, modelId: opts.modelId, text, ...projectSteps(steps) },
+        null,
+        2
+      ),
       "utf8"
     )
   } catch {

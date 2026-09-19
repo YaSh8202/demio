@@ -25,6 +25,7 @@ import { execAgentBrowser } from "../../lib/agent-browser/exec"
 import { replayScene, checkReplayDuration } from "./replay"
 import { recoverFromDeviation } from "./recovery"
 import { verifyScene } from "./verify"
+import { projectSteps } from "./transcript"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
 import type { SceneScript } from "./script-schema"
 import log from "../../lib/logger"
@@ -317,7 +318,7 @@ export async function recordSceneWithRetry(opts: {
           recovery: {
             recovered: recovery.recovered,
             detail: recovery.detail,
-            steps: recovery.steps,
+            ...projectSteps(recovery.steps),
           },
         })
         if (recovery.amendedScript) activeScript = recovery.amendedScript
@@ -429,7 +430,7 @@ export async function recordSceneWithRetry(opts: {
         recovery: {
           recovered: recovery.recovered,
           detail: recovery.detail,
-          steps: recovery.steps,
+          ...projectSteps(recovery.steps),
         },
       })
       // The retake replays THIS, not the script the attempt started with.
@@ -545,7 +546,7 @@ export async function recordSceneWithRetry(opts: {
       recovery: {
         recovered: recovery.recovered,
         detail: recovery.detail,
-        steps: recovery.steps,
+        ...projectSteps(recovery.steps),
       },
     })
     if (recovery.amendedScript) activeScript = recovery.amendedScript
