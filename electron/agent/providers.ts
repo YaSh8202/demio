@@ -12,10 +12,10 @@ import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { getDecryptedKey, getProviderKeyMetadata } from "../store/provider-keys"
 import { createRequire } from "node:module"
-
-const lazyRequire = createRequire(import.meta.url)
 import { parseModelId } from "./types"
 import log from "../lib/logger"
+
+const lazyRequire = createRequire(import.meta.url)
 
 // ── Instrumented fetch ──────────────────────────────────────────────────────
 //

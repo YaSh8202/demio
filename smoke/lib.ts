@@ -105,6 +105,8 @@ export interface RunState {
   activeTools: string[]
   turns: number
   toolCalls: number
+  /** Times the stall watchdog had to push the agent on. */
+  nudges: number
   errors: Array<{ at: string; message: string }>
   video?: string
   detail?: string

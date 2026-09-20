@@ -152,6 +152,7 @@ function view(state: RunState) {
     activeTools: state.activeTools,
     turns: state.turns,
     toolCalls: state.toolCalls,
+    nudges: state.nudges,
     gatesAnswered: state.gateLog.length,
     errors: state.errors.slice(-3),
     workspace: state.workspace,

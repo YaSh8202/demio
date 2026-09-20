@@ -75,6 +75,7 @@ const state: RunState = {
   activeTools: [],
   turns: 0,
   toolCalls: 0,
+  nudges: 0,
   errors: [],
 }
 
@@ -245,6 +246,9 @@ async function main(run: RunOptions) {
   let settleTimer: ReturnType<typeof setTimeout> | null = null
   let pending: Record<string, Record<string, unknown>> = {}
   let running = false
+  // The stall watchdog is recording a salvaged video: no agent events arrive
+  // while it does, and that silence is not the run being over.
+  let harnessBusy = false
 
   const respond = (
     gate: Gate,
@@ -281,7 +285,8 @@ async function main(run: RunOptions) {
   /** Decide whether the run is over. Called once things have been quiet for SETTLE_MS. */
   const settle = () => {
     settleTimer = null
-    if (finished || running || Object.keys(pending).length > 0) return
+    if (finished || running || harnessBusy) return
+    if (Object.keys(pending).length > 0) return
     if (videoPath() && scorecardHasRun()) return finish("done")
     if (state.errors.length > 0) {
       return finish("error", state.errors[state.errors.length - 1].message, 1)
@@ -310,9 +315,21 @@ async function main(run: RunOptions) {
     } else if (type === "agent_end") {
       running = false
       armSettle()
+    } else if (type === "harness_nudge") {
+      state.nudges = Number(event["attempt"]) || state.nudges + 1
+      save()
+    } else if (type === "harness_salvage") {
+      harnessBusy = true
+      if (settleTimer) clearTimeout(settleTimer)
+      save({ detail: "the harness is salvaging the run" })
+    } else if (type === "harness_video_ready") {
+      harnessBusy = false
+      save({ detail: undefined })
+      armSettle()
     } else if (type === "tool_start") {
       state.toolCalls += 1
     } else if (type === "error") {
+      harnessBusy = false
       const error = event["error"] as { message?: string } | undefined
       state.errors.push({
         at: new Date().toISOString(),
