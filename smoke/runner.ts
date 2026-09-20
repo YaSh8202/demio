@@ -207,8 +207,19 @@ async function main(run: RunOptions) {
     const video = videoPath() ?? undefined
     save({ phase, detail, video, gates: [], activeTools: [] })
     releaseSmokeLock()
+    // This run's browser session is its own (`AGENT_BROWSER_SESSION`), and
+    // nothing else will ever close it: plain `close`, never `--all`. Bounded,
+    // because a run must end even if the browser will not answer.
+    const closed = import("../electron/lib/agent-browser/exec")
+      .then(({ execAgentBrowser }) =>
+        execAgentBrowser(["close"], { timeout: 5_000 })
+      )
+      .catch(() => undefined)
     // Let the final state write and any in-flight log lines land.
-    setTimeout(() => process.exit(code), 250)
+    void Promise.race([
+      closed,
+      new Promise((resolve) => setTimeout(resolve, 6_000)),
+    ]).then(() => setTimeout(() => process.exit(code), 250))
   }
 
   process.on("uncaughtException", (error) => {
