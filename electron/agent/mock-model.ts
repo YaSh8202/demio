@@ -11,7 +11,15 @@
 //                     tool and is not a stalled demo
 
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test"
-import type { LanguageModelV4StreamPart } from "@ai-sdk/provider"
+
+// Derived from the mock rather than imported: `@ai-sdk/provider` is only a
+// transitive dependency here.
+type LanguageModelV4StreamPart =
+  Awaited<
+    ReturnType<MockLanguageModelV4["doStream"]>
+  >["stream"] extends ReadableStream<infer Part>
+    ? Part
+    : never
 
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: 0, cacheWrite: 0 },
