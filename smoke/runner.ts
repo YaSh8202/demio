@@ -48,7 +48,14 @@ process.env.DEMIO_HOME = options.home
 process.env.AGENT_BROWSER_SESSION = `smoke-${options.runId}`
 
 /** How long after `agent_end` with nothing pending before the run is called over. */
-const SETTLE_MS = 8_000
+// Must outlast the stall watchdog's own settle (stall-watchdog.ts, 4s unless
+// DEMIO_STALL_SETTLE_MS says otherwise): if this fired first, the runner would
+// call the run stalled and exit — killing the process the watchdog was about
+// to rescue it in.
+const SETTLE_MS = Math.max(
+  8_000,
+  3 * (Number(process.env.DEMIO_STALL_SETTLE_MS) || 0)
+)
 const INBOX_POLL_MS = 500
 const NOISY_EVENTS = new Set([
   "display_state_changed",

@@ -7,12 +7,24 @@
 interface StallState {
   /** Nudges sent since the user last spoke. */
   nudges: number
-  /** Tool calls since the user last spoke — a turn with none was conversation, not work. */
-  toolCalls: number
+  /** Pipeline tool calls since the user last spoke — see `PIPELINE_TOOLS`. */
+  pipelineCalls: number
   lastUserMessageAt: number
   cancelled: boolean
   salvageTried: boolean
 }
+
+/**
+ * The tools that mean "this request is a demo being made". Listing files or
+ * reading a page to answer a question is not one of them: a turn that used
+ * only those and ended in text is a conversation, and is left alone.
+ */
+export const PIPELINE_TOOLS: ReadonlySet<string> = new Set([
+  "rehearse_flow",
+  "save_login",
+  "submit_plan",
+  "generate_demo",
+])
 
 const states = new Map<string, StallState>()
 
@@ -21,7 +33,7 @@ export function stallState(key: string): StallState {
   if (!s) {
     s = {
       nudges: 0,
-      toolCalls: 0,
+      pipelineCalls: 0,
       lastUserMessageAt: Date.now(),
       cancelled: false,
       salvageTried: false,
@@ -39,7 +51,7 @@ export function stallNudges(key: string): number {
 export function noteUserMessage(key: string): void {
   states.set(key, {
     nudges: 0,
-    toolCalls: 0,
+    pipelineCalls: 0,
     lastUserMessageAt: Date.now(),
     cancelled: false,
     salvageTried: false,

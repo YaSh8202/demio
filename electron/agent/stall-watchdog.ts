@@ -16,10 +16,13 @@
 //   3. floor   — nothing was rehearsed at all: run the workflow with the floor
 //                scene alone.
 //
-// It never answers for the user: an open `ask_user` or `submit_plan` is the
-// user's turn, and the watchdog stands down. It also stands down when the
-// turn did no work (a conversation, not a demo request) and when the user
-// cancelled.
+// It never answers for the user. An open `ask_user` or `submit_plan` is the
+// user's turn, and the watchdog stands down; so it does after a cancel. And
+// it only ever acts on a demo request that stalled — one that, SINCE THE USER
+// LAST SPOKE, called a pipeline tool or rehearsed something. What an earlier
+// request left in the workspace says nothing about this one: "thanks, looks
+// great" after a delivered video must not be nudged into re-recording over it,
+// and neither must a question the agent read a file to answer.
 
 import fs from "node:fs"
 import path from "node:path"
@@ -28,10 +31,14 @@ import { getProject } from "../store"
 import { degradationNote, getOrCreateSession, runDemoVideo } from "./controller"
 import { DEFAULT_MODEL_ID } from "./types"
 import { ensureWorkspace } from "./workspace"
-import { readCheckpoint, readScripts } from "./workflows/rehearsal"
+import {
+  readCheckpoint,
+  readScripts,
+  rehearsalPaths,
+} from "./workflows/rehearsal"
 import { floorScene } from "./workflows/demo-video"
 import type { Scene } from "./workflows/schemas"
-import { noteUserMessage, stallState } from "./stall-state"
+import { PIPELINE_TOOLS, noteUserMessage, stallState } from "./stall-state"
 
 export const MAX_NUDGES = 2
 /** `agent_end` is not the end of the turn's events — let the dust settle. */
@@ -52,7 +59,9 @@ export function watchForStall(
 ): void {
   const type = event["type"]
   if (type === "tool_start") {
-    stallState(key).toolCalls += 1
+    if (PIPELINE_TOOLS.has(String(event["toolName"]))) {
+      stallState(key).pipelineCalls += 1
+    }
   } else if (type === "agent_start") {
     const t = timers.get(key)
     if (t) clearTimeout(t)
@@ -68,6 +77,14 @@ export function watchForStall(
         )
       }, SETTLE_MS)
     )
+  }
+}
+
+function modifiedSince(file: string, since: number): boolean {
+  try {
+    return fs.statSync(file).mtimeMs >= since
+  } catch {
+    return false
   }
 }
 
@@ -98,9 +115,24 @@ async function check(
   const workspace = ensureWorkspace(threadId)
   if (freshVideo(workspace, state.lastUserMessageAt)) return
 
-  const checkpoint = await readCheckpoint(workspace)
-  const started = state.toolCalls > 0 || checkpoint.flows.length > 0
+  // Is THIS request a demo being made? A pipeline tool ran since the user
+  // spoke, or rehearsal wrote its checkpoint since then (the same fact, read
+  // off disk — it survives an app restart mid-request, which the counter does
+  // not). An approved plan with no video at all counts too: that request was
+  // never finished.
+  const approved = Boolean(
+    (session.state.get() as { activePlan?: unknown }).activePlan
+  )
+  const started =
+    state.pipelineCalls > 0 ||
+    modifiedSince(
+      rehearsalPaths(workspace).checkpoint,
+      state.lastUserMessageAt
+    ) ||
+    (approved && !freshVideo(workspace, 0))
   if (!started) return
+
+  const checkpoint = await readCheckpoint(workspace)
 
   const scripts = (await readScripts(workspace)).scripts
   const doneFlows = new Set(
@@ -112,9 +144,6 @@ async function check(
 
   if (state.nudges < MAX_NUDGES) {
     state.nudges += 1
-    const approved = Boolean(
-      (session.state.get() as { activePlan?: unknown }).activePlan
-    )
     const nudge = nudgeText({
       approved,
       proven: proven.map((s) => s.sceneId),

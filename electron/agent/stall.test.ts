@@ -56,12 +56,10 @@ const script = (sceneId: string) => ({
   ],
 })
 
-/** Start a thread whose rehearsal already got as far as `seed` says, then let the model stall. */
-async function stall(seed: { flows: unknown[]; scripts: unknown[] }) {
-  const { project, thread } = store.createProject("stall", "mock:ends-early", {
-    domain: "example.test",
-  })
-  const workspace = ensureWorkspace(thread.id)
+function seedRehearsal(
+  workspace: string,
+  seed: { flows: unknown[]; scripts: unknown[] }
+) {
   const rehearsal = path.join(workspace, "rehearsal")
   fs.mkdirSync(rehearsal, { recursive: true })
   fs.writeFileSync(
@@ -72,6 +70,39 @@ async function stall(seed: { flows: unknown[]; scripts: unknown[] }) {
     path.join(rehearsal, "scripts.json"),
     JSON.stringify({ version: 1, scripts: seed.scripts })
   )
+}
+
+/** A turn that must NOT wake the watchdog: run it, wait well past the settle window, return what the harness did. */
+async function quietTurn(o: {
+  modelId: string
+  text: string
+  before?: (workspace: string) => void
+}) {
+  const { project, thread } = store.createProject("quiet", o.modelId, {
+    domain: "example.test",
+  })
+  const workspace = ensureWorkspace(thread.id)
+  o.before?.(workspace)
+  const key = `${project.id}:${thread.id}`
+  const harness: string[] = []
+  driver.addSessionEventSink((k, event) => {
+    const type = String(event["type"])
+    if (k === key && type.startsWith("harness_")) harness.push(type)
+  })
+  await driver.sendMessage(project.id, thread.id, {
+    text: o.text,
+    modelId: o.modelId,
+  })
+  await new Promise((r) => setTimeout(r, 3_000)) // settle is 300ms here
+  return { harness, workspace }
+}
+
+/** Start a thread whose rehearsal already got as far as `seed` says, then let the model stall. */
+async function stall(seed: { flows: unknown[]; scripts: unknown[] }) {
+  const { project, thread } = store.createProject("stall", "mock:ends-early", {
+    domain: "example.test",
+  })
+  const workspace = ensureWorkspace(thread.id)
 
   const key = `${project.id}:${thread.id}`
   const events: Array<Record<string, unknown>> = []
@@ -99,6 +130,9 @@ async function stall(seed: { flows: unknown[]; scripts: unknown[] }) {
     text: "Make a demo of the homepage.",
     modelId: "mock:ends-early",
   })
+  // Written AFTER the request: the watchdog only acts on rehearsal that
+  // happened for this request, never on what an earlier one left behind.
+  seedRehearsal(workspace, seed)
   const ready = await done
   const runLine = fs
     .readFileSync(path.join(workspace, "scorecard.jsonl"), "utf8")
@@ -184,4 +218,56 @@ describe("a stalled model still ends with a video", () => {
     ).toEqual(["floor"])
     expect(r.runLine["pass"]).toBe(false)
   }, 60_000)
+
+  // ── It never answers for the user ────────────────────────────────────────
+  // The watchdog acts on a demo request that stalled. Everything else that
+  // ends a turn without a fresh video is a conversation, and nudging it —
+  // let alone re-recording over the user's video — is the harness misbehaving.
+
+  test("a follow-up after a delivered video is left alone, and the video with it", async () => {
+    let video = ""
+    const r = await quietTurn({
+      modelId: "mock:ends-early",
+      text: "Thanks, that looks great.",
+      before: (workspace) => {
+        // An earlier request in this thread rehearsed, and delivered.
+        seedRehearsal(workspace, {
+          flows: [
+            {
+              id: "home",
+              label: "Homepage",
+              startUrl: "https://example.test/",
+              status: "done",
+              sceneIds: ["home.01"],
+              detail: "DONE",
+            },
+          ],
+          scripts: [script("home.01")],
+        })
+        video = path.join(workspace, "output", "demo.mp4")
+        fs.mkdirSync(path.dirname(video), { recursive: true })
+        fs.writeFileSync(video, "the user's video")
+        const earlier = new Date(Date.now() - 60_000)
+        for (const f of [
+          video,
+          path.join(workspace, "rehearsal", "checkpoint.json"),
+        ]) {
+          fs.utimesSync(f, earlier, earlier)
+        }
+      },
+    })
+    expect(r.harness).toEqual([])
+    expect(fs.readFileSync(video, "utf8")).toBe("the user's video")
+  }, 30_000)
+
+  test("a question answered with a tool call is not a stalled demo", async () => {
+    const r = await quietTurn({
+      modelId: "mock:looks-around",
+      text: "What pages does this site have?",
+    })
+    expect(r.harness).toEqual([])
+    expect(fs.existsSync(path.join(r.workspace, "output", "demo.mp4"))).toBe(
+      false
+    )
+  }, 30_000)
 })
