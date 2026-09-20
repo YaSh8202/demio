@@ -70,6 +70,62 @@ async function loginFormVisible(): Promise<boolean> {
   return probe.ok && /\btrue\b/.test(JSON.stringify(probe.output))
 }
 
+/**
+ * Does a trusted input event reach the page? False only on evidence: the
+ * listener was armed, the pointer moved, and the page never heard it. A mouse
+ * MOVE, because a click could press something.
+ */
+async function tabHearsInput(): Promise<boolean> {
+  const arm = await execAgentBrowser(
+    [
+      `eval "window.__demioInput=0;window.addEventListener('mousemove',()=>{window.__demioInput=1},{capture:true,once:true});1"`,
+    ],
+    { timeout: 10_000 }
+  )
+  const move = await execAgentBrowser(["mouse move 7 7"], { timeout: 10_000 })
+  if (!arm.ok || !move.ok) return true
+  const heard = await execAgentBrowser([`eval "window.__demioInput===1"`], {
+    timeout: 10_000,
+  })
+  return !(heard.ok && /\bfalse\b/.test(JSON.stringify(heard.output)))
+}
+
+/**
+ * Un-deafen the tab after a sign-in.
+ *
+ * The first successful sign-in in a fresh Chrome leaves its tab deaf to
+ * trusted input: clicks and key presses are acknowledged over CDP and then
+ * dropped, while `eval` carries on working. Reproduced with Chrome for Testing
+ * 148/151 and Chrome 153 over raw CDP, no agent-browser involved, headed and
+ * headless, on any site — a wrong password, a form with no password field and
+ * a plain navigation do not do it, so it is Chrome's own reaction to a
+ * credential that worked. No launch flag tried prevents it (`--incognito`,
+ * `--enable-automation`, Puppeteer's whole default set).
+ *
+ * A same-site navigation does not clear it. One navigation OFF the site does,
+ * and it does not come back in that browser. In a demo the first sign-in is
+ * `save_login`'s own test login — so that login verified, and then the
+ * rehearsal's `auth login` filled the form and clicked a button that never
+ * heard it. One smoke run burned 100 rehearsal steps on that click.
+ */
+async function reviveTab(): Promise<void> {
+  if (await tabHearsInput()) return
+  const at = await execAgentBrowser(["get url"], { timeout: 10_000 })
+  const landed = typeof at.output === "string" ? at.output.trim() : ""
+  await execAgentBrowser(["open about:blank"], { timeout: 20_000 })
+  if (/^https?:\/\//.test(landed)) {
+    await execAgentBrowser([`open ${shellQuote(landed)}`], { timeout: 30_000 })
+  }
+  if (await tabHearsInput()) {
+    log.info("[credentials] tab was deaf to input after sign-in — revived")
+  } else {
+    log.warn(
+      "[credentials] tab is STILL deaf to input after sign-in: clicks and " +
+        "key presses will not reach the page"
+    )
+  }
+}
+
 export async function saveCredentials(opts: {
   workspace: string
   loginUrl: string
@@ -181,6 +237,7 @@ export async function loginProfile(
   })
   const stillOnLoginForm = await loginFormVisible()
   if (res.ok && !stillOnLoginForm) {
+    await reviveTab()
     return { ok: true, detail: "logged in", stillOnLoginForm: false }
   }
   return {
