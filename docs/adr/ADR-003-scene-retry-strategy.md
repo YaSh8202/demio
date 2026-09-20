@@ -1,7 +1,7 @@
 # ADR-003: Per-Scene Record→Verify→Retry Strategy
 
 Date: 2026-07-31
-Status: accepted
+Status: accepted — the suspend-on-exhaustion clause is superseded by ADR-013 (a scene that exhausts its retries is dropped and the run continues; nothing suspends)
 
 ## Decision
 

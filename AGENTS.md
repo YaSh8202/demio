@@ -156,6 +156,32 @@ src/
 - **`lib/constants/`** — app-wide constants. One file per domain (models, suggestions, etc.).
 - **`lib/mock-data/`** — temporary mock data with types. Replace with real APIs later.
 
+## Smoke-testing the agent
+
+`bun run smoke` runs the real demio agent with no Electron window — real model, real browser, real site — and lets you (a coding agent, or a person) drive it the way a user drives the app. Use it after any change under `electron/agent/` instead of testing by hand. Every command prints one JSON object.
+
+```bash
+bun run smoke start smoke/scenarios/01-static-one-scene.json   # → { runId }
+bun run smoke watch  [runId]        # BLOCKS until the run needs you: a gate, a video, a stall, an error
+bun run smoke answer <runId> <toolCallId> '<json|text>'        # answer the gate `watch` showed you
+bun run smoke report [runId]        # findings + where the evidence is. exit 0 clean · 1 findings · 2 no video
+bun run smoke status|list|stop      # peek · history · kill
+bun run smoke sweep                 # every scenario, serially, unattended
+```
+
+**The loop:** `start` → `watch` → (`answer` → `watch`)\* → `report` → fix → run it again.
+
+- `watch` returns `state: "waiting"` with a `gate`. `submit_plan` carries the plan: read it, then answer `approve` or the change you want (`'{"action":"rejected","feedback":"…"}'`). `ask_user` carries a question: answer in plain text. `watch` returns after ~9 minutes with `stillRunning: true` if nothing happened — call it again.
+- Gates are yours to answer unless the scenario pre-supplies them (`answers`, `credentials`, `approvePlan: "auto"`) or the run is `--unattended`.
+- `report` is deterministic — no model reads the run. Each finding has a `code` (closed list: `electron/agent/workflows/findings-pure.cjs`), a `cause`, `evidence` paths and the `source` file behind the behaviour. Start with the first `critical`; open its evidence; the sub-agent transcripts are `rehearsal/<flow>.agent.json` and `scenes/<scene>.attempt-N.agent.json` in the workspace.
+- A `DEGRADED_*`, `SCENE_DROPPED`, `SALVAGED` or `FLOOR_VIDEO` finding means the harness kept its promise (there is a video) by covering for a failure. The failure is still the bug to fix.
+- Default model is the cheap one (`google:gemini-3.8-flash`, needs `GOOGLE_API_KEY` in `.env.local`) on purpose: a harness that delivers with a weak model delivers with any. `--model anthropic:claude-sonnet-4-6` to compare — a finding on both is a harness bug; on the weak one only, a robustness gap.
+- Runs are isolated under `~/.demio-smoke` (`DEMIO_HOME`) and never touch `~/.demio`. They are serial — one browser daemon — and a lock (`~/.demio-smoke.lock`) keeps a running app from closing a smoke run's browser. Keys come from the environment only: stored keys need Electron's safeStorage.
+- To watch a fallback fire against a real site: `DEMIO_FAULT=sync:throw bun run smoke start …` (see `electron/agent/workflows/fault.ts`).
+- A scenario is `{ id, domain, prompt, modelId?, voiceId?, credentials?, answers?, approvePlan?, expect? }` — add one under `smoke/scenarios/` for any failure you fix, so it stays fixed.
+
+`bun run test:harness` is the offline half: it forces every rung of the always-a-video ladder (ADR-013) with a fake camera and a scripted model, in seconds, with no keys.
+
 ## Key Files
 
 - `electron/constants.ts` — channel names, `ExposedMeta`, `NamespaceHandlers`, `NamespaceEvents` types

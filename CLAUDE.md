@@ -23,7 +23,17 @@ bun run package    # electron-forge package
 bun run make       # electron-forge make (distributables)
 ```
 
-No test runner is configured.
+Tests and the agent smoke test:
+
+```bash
+bun run test:workflows   # node --test — the pure *-pure.cjs units (no I/O, no model)
+bun run test:scripts     # node --test — scripts/
+bun run test:harness     # bun test — the always-a-video ladder, offline: real workflow + controller, fake camera, forced faults
+bun run eval             # axiom evals — title generator, recovery, narrator (need a provider key)
+bun run smoke …          # run the real agent headlessly, watch it, answer it, diagnose it — see AGENTS.md
+```
+
+After changing anything under `electron/agent/`, run `test:workflows` and `test:harness`; to see it work for real, run a smoke scenario (AGENTS.md → "Smoke-testing the agent").
 
 ## Architecture at a glance
 
@@ -48,7 +58,7 @@ Ordering constraints in `electron/main.ts`:
 
 ### Agent orchestration
 
-`electron/agent/orchestrator.ts` drives the multi-agent video-generation pipeline using the Vercel AI SDK (`ai` v6, `@ai-sdk/*`). Tool implementations live in `electron/agent/tools/`. Sessions/runs/threads are persisted via the file store. `electron/observability/phoenix.ts` wires OpenTelemetry → Arize Phoenix for LLM tracing (`initPhoenix()` runs first at app ready).
+`electron/agent/controller.ts` builds the Mastra `AgentController` (`@mastra/core`, on the Vercel AI SDK `ai` v7) — one conversational agent with a rehearse ("plan") mode and an execute mode. `electron/agent/session-driver.ts` is the electron-free way to drive a session; the IPC handlers and the smoke runner both go through it. The video itself is the `demo-video` workflow in `electron/agent/workflows/` (record → narrate → tts → sync → compose). **Every run ends with a video (ADR-013):** stages degrade instead of failing, recorded as `degraded` on the run's `scorecard.jsonl` line, and `electron/agent/stall-watchdog.ts` nudges, then salvages, a turn that ends with no video. `electron/observability/phoenix.ts` wires OpenTelemetry → Arize Phoenix for LLM tracing (`initPhoenix()` runs first at app ready).
 
 ### Browser automation
 

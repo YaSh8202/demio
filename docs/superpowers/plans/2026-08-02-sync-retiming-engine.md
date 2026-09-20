@@ -17,6 +17,8 @@
 - All ffmpeg invocations via `execFile` argv arrays (no shell strings); resolve binary via `resolveFfmpeg()` from `electron/lib/ffmpeg`.
 - Audio pinned to `-ar 44100 -ac 2` aac, video to `libx264 -pix_fmt yuv420p -r 30` everywhere a stream is (re)encoded — final concat is `-c copy` and requires uniformity.
 - Sync failures are deterministic code bugs: validate EDL pre-render (pure function), hard-fail post-render with artifacts left on disk. NO workflow suspend, NO retry, NO silent degrade to unretimed video.
+
+> **Superseded by ADR-013 (2026-09-20).** `renderScene` still hard-fails and leaves its artifacts. Its caller now catches that, ships the scene's raw take, and records `degraded: sync` on the scorecard — the degradation is allowed because it is never silent.
 - This plan executes on a NEW branch created AFTER `worktree-agent-harness` (M1) merges to main (user decision). The plan doc itself is committed on the M1 branch.
 
 ## Background facts (verified from a real run)
