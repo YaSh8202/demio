@@ -109,6 +109,22 @@ export function watchForStall(
   }
 }
 
+/**
+ * The watchdog speaks through `session.sendMessage` directly, which — unlike
+ * the driver's — selects no model. In a process that has not yet sent a user
+ * message on this thread (after a restart; `smoke salvage`) that falls through
+ * to the controller's default provider, whose key the user may not even have.
+ */
+function useProjectModel(
+  session: Awaited<ReturnType<typeof getOrCreateSession>>,
+  projectId: string
+): void {
+  if (session.model.hasSelection()) return
+  session.model.set({
+    modelId: getProject(projectId)?.meta?.selectedModel || DEFAULT_MODEL_ID,
+  })
+}
+
 function modifiedSince(file: string, since: number): boolean {
   try {
     return fs.statSync(file).mtimeMs >= since
@@ -207,6 +223,7 @@ async function check(
     })
     log.warn(`[stall-watchdog] ${key}: nudge ${state.nudges}/${MAX_NUDGES}`)
     emit(key, { type: "harness_nudge", attempt: state.nudges, text: nudge })
+    useProjectModel(session, projectId)
     await session.sendMessage({ content: nudge })
     return
   }
@@ -260,6 +277,7 @@ async function check(
     if (salvage.signal.aborted) return
     // Into the conversation, so the user sees it where they are looking. The
     // video exists either way — this is the announcement, not the delivery.
+    useProjectModel(session, projectId)
     await session.sendMessage({
       content:
         "[harness] You stopped before producing the video, so the harness recorded it " +
