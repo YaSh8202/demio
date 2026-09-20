@@ -1,0 +1,7 @@
+{
+  "id": "todomvc-write-flow",
+  "source": "test-prompts.md 2.1",
+  "domain": "todomvc.com",
+  "prompt": "Demo the React TodoMVC example at /examples/react/dist/. Add three todos, mark the second one complete, then filter to \"Active\". Use realistic todo names, not \"test\".",
+  "expect": { "minScenes": 1, "maxDegraded": 0, "minDurationSec": 6 }
+}

@@ -45,6 +45,8 @@ if (!options) {
 // at module load, and agent-browser reads its session name per command. Hence
 // the dynamic imports in `main()`, the same pattern as recovery.eval.ts.
 process.env.DEMIO_HOME = options.home
+// This process has no main.log: runner.log is its only record, so keep info.
+process.env.DEMIO_LOG_LEVEL ||= "info"
 process.env.AGENT_BROWSER_SESSION = `smoke-${options.runId}`
 
 /** How long after `agent_end` with nothing pending before the run is called over. */
@@ -416,7 +418,11 @@ async function main(run: RunOptions) {
   // own (not `agent.generate`, not the workflow, not the compose ffmpeg), so
   // without this a stalled provider connection hangs `smoke watch` forever.
   setTimeout(() => {
-    void driver.cancel(projectId, threadId).finally(() => {
+    // Cancelling can itself hang — it is asking a wedged run to stop. The
+    // budget is the budget: give it ten seconds, then end regardless.
+    const cancelled = driver.cancel(projectId, threadId).catch(() => {})
+    const grace = new Promise((resolve) => setTimeout(resolve, 10_000))
+    void Promise.race([cancelled, grace]).then(() => {
       finish(
         "timeout",
         `exceeded the ${run.timeoutSec}s wall-clock budget` +

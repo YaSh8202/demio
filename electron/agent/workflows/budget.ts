@@ -8,8 +8,16 @@
 // post-recording stages degrade (see demo-video.ts).
 
 const DEFAULTS = {
-  /** One flow's rehearsal: up to 100 model steps, each driving a browser. */
-  rehearsal: 12 * 60_000,
+  /**
+   * One flow's rehearsal, overall. Up to 100 model steps, each driving a
+   * browser — a weak model takes ~30s a step, so the first value here (12 min)
+   * cut a healthy rehearsal off at step 27 and reported it as "returned
+   * nothing". The overall cap is for the pathological run; what catches a hang
+   * is `rehearsalIdle`.
+   */
+  rehearsal: 45 * 60_000,
+  /** No rehearsal step finished in this long: it is stuck, not slow. */
+  rehearsalIdle: 5 * 60_000,
   /** One recovery: 6 steps, with a take waiting on it. */
   recovery: 3 * 60_000,
   narrate: 2 * 60_000,
@@ -34,4 +42,53 @@ export const BUDGET_MS = new Proxy(DEFAULTS, {
 export function withBudget(ms: number, signal?: AbortSignal): AbortSignal {
   const budget = AbortSignal.timeout(ms)
   return signal ? AbortSignal.any([signal, budget]) : budget
+}
+
+/**
+ * A budget on PROGRESS: aborts when `touch()` has not been called for `idleMs`
+ * (or after `totalMs` overall). For a loop of many steps, where "how long in
+ * total" says little and "how long since anything happened" says everything.
+ * `expired()` tells a budget abort from the caller's own.
+ */
+export function idleBudget(
+  idleMs: number,
+  totalMs: number,
+  signal?: AbortSignal
+): {
+  signal: AbortSignal
+  touch: () => void
+  done: () => void
+  expired: () => string | null
+} {
+  const controller = new AbortController()
+  let why: string | null = null
+  const fire = (reason: string) => () => {
+    why = reason
+    controller.abort(new Error(reason))
+  }
+  let idle = setTimeout(
+    fire(`no step finished in ${idleMs / 60_000} min`),
+    idleMs
+  )
+  const total = setTimeout(
+    fire(`still running after ${totalMs / 60_000} min`),
+    totalMs
+  )
+  return {
+    signal: signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal,
+    touch: () => {
+      clearTimeout(idle)
+      idle = setTimeout(
+        fire(`no step finished in ${idleMs / 60_000} min`),
+        idleMs
+      )
+    },
+    done: () => {
+      clearTimeout(idle)
+      clearTimeout(total)
+    },
+    expired: () => why,
+  }
 }

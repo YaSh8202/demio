@@ -24,7 +24,11 @@ log.hooks.push((message) => {
 // is also loaded by evals and scripts running under plain Node/Bun.
 if (log.transports.ipc) log.transports.ipc.level = false
 log.transports.file.level = "info"
+// DEMIO_LOG_LEVEL: the smoke runner has no main.log — its console IS its log
+// (smoke-runs/<id>/runner.log), and at "warn" the `[llm-fetch]` lines that say
+// where a model request stalled were never written anywhere.
 log.transports.console.level =
-  process.env.NODE_ENV === "development" ? "debug" : "warn"
+  (process.env.DEMIO_LOG_LEVEL as typeof log.transports.console.level) ||
+  (process.env.NODE_ENV === "development" ? "debug" : "warn")
 
 export default log

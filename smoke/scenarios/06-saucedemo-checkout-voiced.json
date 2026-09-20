@@ -1,0 +1,13 @@
+{
+  "id": "saucedemo-checkout-voiced",
+  "source": "test-prompts.md 3.2, extended through checkout, voiced",
+  "domain": "saucedemo.com",
+  "voiceId": "SAz9YHcvj6GT2YYXdXww",
+  "prompt": "Make a narrated product demo of the Swag Labs store. The accepted usernames and the password are listed on the login page — sign in as standard_user. Show three things, as separate scenes: (1) signing in and landing on the product list; (2) sorting the products by price low to high, then adding the backpack and the bike light to the cart; (3) opening the cart, going through checkout with a made-up name and postal code, and finishing on the order confirmation page. The cart must contain exactly those two items when it is shown. Narrate it like a friendly product walkthrough.",
+  "credentials": {
+    "username": "standard_user",
+    "password": "secret_sauce",
+    "loginUrl": "https://www.saucedemo.com/"
+  },
+  "expect": { "minScenes": 3, "maxDegraded": 0, "minDurationSec": 20 }
+}
