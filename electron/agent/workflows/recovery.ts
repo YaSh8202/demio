@@ -21,6 +21,7 @@ import {
 import { recordScript } from "./rehearsal"
 import { recordRecovery } from "./scorecard"
 import log from "../../lib/logger"
+import { BUDGET_MS, withBudget } from "./budget"
 
 /** Shell only — recovery reads and writes nothing on disk. */
 const RECOVERY_TOOL_FILTER = [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]
@@ -196,7 +197,10 @@ async function recover(opts: RecoverOpts): Promise<RecoveryOutcome> {
     })
     const res = await agent.generate(
       `Clear the blocker on step ${opts.deviation.index} of ${opts.script.sceneId}.`,
-      { abortSignal: opts.signal, maxSteps: RECOVERY_MAX_STEPS }
+      {
+        abortSignal: withBudget(BUDGET_MS.recovery, opts.signal),
+        maxSteps: RECOVERY_MAX_STEPS,
+      }
     )
     const text = (res.text ?? "").trim()
     const steps = (res.steps ?? []) as unknown[]

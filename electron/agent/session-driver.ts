@@ -15,6 +15,8 @@ import { getOrCreateSession } from "./controller"
 import { DEFAULT_MODEL_ID } from "./types"
 import { ensureWorkspace } from "./workspace"
 import type { SubmitPlanSuspendPayload } from "@mastra/core/tools"
+import { watchForStall } from "./stall-watchdog"
+import { noteCancel, noteUserMessage } from "./stall-state"
 
 export type SessionEventSink = (
   key: string,
@@ -340,6 +342,7 @@ async function subscribeSession(
           }
         }
         emit(key, serialized)
+        watchForStall(key, projectId, threadId, serialized, emit)
       } catch (error) {
         log.error("[agent] event broadcast failed:", error)
       }
@@ -388,6 +391,7 @@ export async function sendMessage(
   session.model.set({ modelId })
   const text = body.text
   liveTurn.set(key, { text, userSignal: null })
+  noteUserMessage(key)
   // Fire and forget — progress arrives via agent:onEvent. While a run is
   // active this becomes a follow-up/steer decision internally; Session's
   // own `sendMessage` queues/streams as appropriate.
@@ -504,6 +508,7 @@ export async function cancel(projectId: string, threadId: string) {
   // Abort guard must cover BOTH states: isRunning() is false while a tool
   // sits in suspend() (mastracode:tui/src/tui/setup.ts:70) — abort anyway
   // so a parked ask_user/submit_plan also cancels.
+  noteCancel(`${projectId}:${threadId}`)
   session.abort()
   return { cancelled: true }
 }

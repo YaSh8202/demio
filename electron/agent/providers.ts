@@ -11,6 +11,9 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { getDecryptedKey, getProviderKeyMetadata } from "../store/provider-keys"
+import { createRequire } from "node:module"
+
+const lazyRequire = createRequire(import.meta.url)
 import { parseModelId } from "./types"
 import log from "../lib/logger"
 
@@ -159,6 +162,16 @@ export function getEnvKey(provider: string): string | undefined {
  */
 export function getModel(fullModelId: string) {
   const { provider, modelId } = parseModelId(fullModelId)
+
+  // Harness tests only (electron/agent/mock-model.ts): a scripted model, so a
+  // stall can be produced on demand. Loaded lazily and behind an env var — it
+  // pulls in `ai/test`, which has no business in the app.
+  if (provider === "mock" && process.env.DEMIO_MOCK_MODEL) {
+    const { mockModel } = lazyRequire(
+      "./mock-model"
+    ) as typeof import("./mock-model")
+    return mockModel(modelId)
+  }
 
   const storedKey = getDecryptedKey(provider)
   const envKey = getEnvKey(provider)

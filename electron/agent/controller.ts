@@ -57,6 +57,8 @@ import { scenePlanSchema } from "./workflows/schemas"
 import { rehearseFlow } from "./workflows/rehearse"
 import { saveCredentials, deleteProfile } from "./workflows/credentials"
 import { recordRun } from "./workflows/scorecard"
+import type { Degradation } from "./workflows/scorecard"
+import { stallNudges } from "./stall-state"
 import { mastra, mastraStore } from "./mastra"
 import { getProject } from "../store"
 import log from "../lib/logger"
@@ -115,6 +117,9 @@ const REHEARSE_MODE_TOOLS = [
   "mastra_workspace_execute_command",
   "ask_user",
   "submit_plan",
+  // So a video the harness salvaged while the agent was still in this mode
+  // (`./stall-watchdog`) can be put in front of the user from here.
+  "present_files",
   "rehearse_flow",
   "save_login",
   "task_write",
@@ -139,64 +144,14 @@ function threadIdFromCtx(
   return ctx?.scope ?? ctx?.threadId ?? undefined
 }
 
-// ── generate_demo tool (Task 12) ─────────────────────────────────────────────
+// ── generate_demo / runDemoVideo ─────────────────────────────────────────────
 //
-// Runs the `demo-video` workflow (workflows/demo-video.ts) and streams its
-// per-scene progress. Surfaces the workflow's own per-scene suspend/resume
-// (retry/skip/abort a scene that exhausted its recording attempts) as a
-// NATIVE tool suspension — `context.agent.suspend(...)` — rather than a
-// custom controller event.
-//
-// Reconciliation evidence (brief proposed a custom `workflow_suspended`
-// event + a new `agent.resumeWorkflow` handler "mirroring respondSuspension"
-// IF the native route wasn't available):
-//
-// - `ToolExecutionContext.agent: AgentToolExecutionContext<TSuspend, TResume>`
-//   (`node_modules/@mastra/core/dist/tools/types.d.ts:146-159`) is populated
-//   with `{ suspend, resumeData, toolCallId, ... }` whenever a Mastra
-//   `Tool` (via `createTool`) executes inside an Agent's tool-call loop —
-//   confirmed in the compiled tool-call step
-//   (`node_modules/@mastra/core/dist/agent-0y2cApTZ.js` ~line 27271: the
-//   `toolOptions.suspend` passed to every tool call enqueues a
-//   `tool-call-suspended` chunk and delegates to the step's own `suspend()`).
-//   The AgentController's session machinery
-//   (`node_modules/@mastra/core/dist/agent-controller-ByW51eCC.js` ~line 503)
-//   converts that chunk into a `tool_suspended` AgentControllerEvent and
-//   registers it in `session.suspensions` — the exact mechanism
-//   `submit_plan`/`ask_user` already use.
-// - `electron/handlers/agent.ts`'s existing `respondSuspension(projectId,
-//   threadId, { toolCallId, resumeData })` IPC handler already calls
-//   `session.respondToToolSuspension(...)` generically for ANY suspended
-//   tool (its `isSubmitPlan` branch is the only tool-specific special case,
-//   and `generate_demo` doesn't hit it) — so Task 13's renderer can resume a
-//   suspended `generate_demo` call with ZERO new IPC surface, just
-//   `apis.agent.respondSuspension(projectId, threadId, { toolCallId,
-//   resumeData: { action, guidance } })`.
-//
-// So: no custom `workflow_suspended` event, no new `agent.resumeWorkflow`
-// handler. The tool's own `suspendSchema`/`resumeSchema` below carry exactly
-// the locked `{ runId, sceneId, failure, attempts }` / `{ action, guidance? }`
-// shapes — same payload the brief's fallback custom event would have
-// carried, just delivered as the native `tool_suspended` event's
-// `suspendPayload`/`resumeSchema` fields instead.
-//
-// Suspend/resume in Mastra workflow steps is snapshot-replay (see
-// workflows/demo-video.ts's file header): resuming a suspended `Tool.execute`
-// call is the SAME re-invoke-from-the-top model (confirmed in the compiled
-// `Tool` wrapper, `node_modules/@mastra/core/dist/tool-B09dFqXW.js` ~line
-// 583 — `originalExecute(data, organizedContext)` runs again on resume, this
-// time with `context.agent.resumeData` populated). A fresh invocation has no
-// closure over the in-flight `demo-video` run, so its `runId` is tracked
-// out-of-band here, keyed by threadId — the workflow run itself is
-// recoverable from `mastra`'s LibSQLStore via `workflow.createRun({ runId })`
-// regardless, but the runId string itself has to come from somewhere. A
-// plain in-memory map is sufficient because Electron's main process is
-// long-lived for a session; it does NOT survive an app restart mid-suspension.
-// Fallback only (code review fix #5) — `resumeData.runId` (below) is
-// preferred whenever the caller supplies it, since it rides the
-// `tool_suspended` event's `suspendPayload` all the way to the renderer and
-// back, and so survives exactly the restart this map doesn't.
-const activeDemoRuns = new Map<string, string>()
+// Runs the `demo-video` workflow. It no longer suspends (ADR-013): a scene
+// that fails its takes is dropped inside the workflow and the run goes on, so
+// there is no run to find again later and no `retry | skip | abort` to route
+// back in. What is left is one function with two callers — the model, through
+// the `generate_demo` tool, and the stall watchdog, when the model never gets
+// that far (`./stall-watchdog`).
 
 /**
  * Walk one flow off camera and prove it. Defined here rather than in
@@ -310,26 +265,125 @@ const saveLoginTool = createTool({
   },
 })
 
+export interface DemoVideoOutcome {
+  videoPath: string
+  scenes: number
+  degraded: Degradation[]
+}
+
+/**
+ * Run the demo-video workflow for a thread, to its end.
+ *
+ * Resolves with a video — possibly a degraded one; `degraded` says how. Throws
+ * only for the run nothing could save (no ffmpeg, no browser, an unreachable
+ * site, a cancel), and writes the scorecard's run line for that ending too.
+ */
+export async function runDemoVideo(o: {
+  projectId: string
+  threadId: string
+  plan: z.infer<typeof scenePlanSchema>
+  modelId: string
+  signal?: AbortSignal
+  outputWriter?: (chunk: unknown) => Promise<void>
+  /** How the harness got here, for the run line: see `./stall-watchdog`. */
+  nudges?: number
+  salvaged?: boolean
+}): Promise<DemoVideoOutcome> {
+  const workspace = ensureWorkspace(o.threadId)
+  const voiceId = getProject(o.projectId)?.meta.voiceId ?? null
+  const run = await mastra.getWorkflow("demo-video").createRun()
+
+  // The caller's abort (a session cancel) never reaches the workflow run on
+  // its own — `Run` has its own internal AbortController. `.catch()` because a
+  // floating rejection here crashes the Electron main process, and the
+  // up-front check because an already-aborted signal never fires `"abort"`.
+  const onAbort = () => {
+    run
+      .cancel()
+      .catch((err: unknown) =>
+        log.error("[demo-video] run.cancel failed:", err)
+      )
+  }
+  if (o.signal?.aborted) onAbort()
+  else o.signal?.addEventListener("abort", onAbort)
+
+  const fail = async (message: string): Promise<never> => {
+    // Spec §12: the login profile is deleted on success, abort and thread
+    // deletion — NOT on a plain failure, whose natural next step is a retry,
+    // and `save_login` lives only on the rehearse mode with no way back to it.
+    if (o.signal?.aborted) void deleteProfile(workspace)
+    await recordRun({
+      workspace,
+      outcome: o.signal?.aborted ? "aborted" : "failed",
+      scenes: 0,
+      plannedScenes: o.plan.scenes.length,
+      nudges: o.nudges,
+      salvaged: o.salvaged,
+      error: message,
+    })
+    throw new Error(message)
+  }
+
+  let result: Awaited<ReturnType<typeof run.start>>
+  try {
+    // `elevenLabsKey` is intentionally NOT in the input — it would be
+    // persisted in plaintext into the workflow's LibSQL snapshot. The steps
+    // that need it re-read it at execution time.
+    result = await run.start({
+      inputData: {
+        plan: o.plan,
+        workspace,
+        modelId: o.modelId,
+        voiceId,
+        nudges: o.nudges ?? 0,
+        salvaged: o.salvaged ?? false,
+      },
+      outputWriter: o.outputWriter,
+    })
+  } catch (err) {
+    return fail(
+      `demo-video workflow threw: ${err instanceof Error ? err.message : String(err)}`
+    )
+  } finally {
+    o.signal?.removeEventListener("abort", onAbort)
+  }
+
+  if (result.status !== "success") {
+    // `canceled` and friends carry no `.error` — only `failed` does.
+    const detail = result.status === "failed" ? `: ${result.error.message}` : ""
+    return fail(`demo-video workflow ${result.status}${detail}`)
+  }
+
+  void deleteProfile(workspace)
+  return {
+    videoPath: result.result.videoPath,
+    scenes: result.result.scenes.length,
+    degraded: result.result.degraded,
+  }
+}
+
+/** What the model must pass on to the user about a degraded run — in the harness's words, not its own. */
+export function degradationNote(degraded: Degradation[]): string {
+  if (degraded.length === 0) return ""
+  const lines = degraded.map(
+    (d) => `- ${d.stage}${d.sceneId ? ` (${d.sceneId})` : ""}: ${d.reason}`
+  )
+  return (
+    "The video was delivered, but not everything in the plan made it in. " +
+    "Tell the user exactly this, and offer to re-record what was dropped:\n" +
+    lines.join("\n")
+  )
+}
+
 const generateDemoTool = createTool({
   id: "generate_demo",
   description:
-    "Run the approved demo plan through the demo-video pipeline: record every scene, verify, narrate, compose. Call exactly once with the approved plan.",
+    "Run the approved demo plan through the demo-video pipeline: record every scene, verify, narrate, compose. Call exactly once with the approved plan. It always returns a video; `note` says what, if anything, had to be left out.",
   inputSchema: z.object({ plan: scenePlanSchema }),
-  outputSchema: z.object({ videoPath: z.string() }),
-  suspendSchema: z.object({
-    runId: z.string(),
-    sceneId: z.string(),
-    failure: z.string(),
-    attempts: z.number(),
-  }),
-  resumeSchema: z.object({
-    action: z.enum(["retry", "skip", "abort"]),
-    guidance: z.string().optional(),
-    // Code review fix #5: carried back from the suspend payload so a
-    // resume can recover the run even if `activeDemoRuns` lost its entry
-    // (e.g. an app restart). Optional because Task 13's renderer may not
-    // echo it back yet — falls back to the in-memory map either way.
-    runId: z.string().optional(),
+  outputSchema: z.object({
+    videoPath: z.string(),
+    scenes: z.number(),
+    note: z.string(),
   }),
   execute: async (input, context) => {
     const ctx = readControllerCtx(context.requestContext)
@@ -343,45 +397,18 @@ const generateDemoTool = createTool({
         "generate_demo: no projectId (resourceId) in request context"
       )
     }
-
-    const workspace = ensureWorkspace(threadId)
-    const modelId = ctx?.session.modelId || DEFAULT_MODEL_ID
-    const workflow = mastra.getWorkflow("demo-video")
-
-    const resumeData = context.agent?.resumeData
     const toolCallId = context.agent?.toolCallId
 
-    // Code review fix #2 (round 2): the round-1 fix forwarded the RAW
-    // `ToolStream`-wrapped chunk, which is wrong two ways, both confirmed in
-    // compiled source:
-    //  (a) `ToolStream._write` (types-C59tsW89.js:21-36) wraps whatever
-    //      `sceneStep`'s `writer.write(data)` is given as
-    //      `{ type: "workflow-step-output", runId: <workflow runId>, from:
-    //      "USER", payload: { output: data, runId, stepName } }` — NOT the
-    //      `{type:"scene-progress",...}` object itself. Forwarding that
-    //      wrapper raw hits `AgentController.processStreamChunk`'s `default:
-    //      break` (agent-controller-ByW51eCC.js:872) — no case recognizes
-    //      `"workflow-step-output"` — so the chunk is silently dropped.
-    //  (b) Worse: `processStreamChunk`'s very first line, run for EVERY
-    //      chunk regardless of type (agent-controller-ByW51eCC.js:279):
-    //      `if ("runId" in chunk && chunk.runId) this.#session.run.setRunId({
-    //      runId: chunk.runId })`. The wrapped chunk's top-level `runId` is
-    //      the WORKFLOW run's id — forwarding it stomps the session's own
-    //      agent-run id on every single scene-progress write, corrupting
-    //      suspension registration / active-run bookkeeping until the next
-    //      real agent chunk overwrites it back.
-    // Fixed: unwrap `payload.output` to recover the real scene-progress
-    // object, and re-shape into the ONE chunk shape the controller actually
-    // recognizes for arbitrary tool progress —
-    // `case "data-mastracode-tool-progress"` (agent-controller-ByW51eCC.js:
-    // 831-846): `{ type: "data-mastracode-tool-progress", data: {
-    // toolCallId, progress } }`, converted there into a `tool_update` event
-    // (`partialResult: d.progress`) the renderer can read. This new chunk
-    // has no top-level `runId` key at all, so the stomp in (b) cannot
-    // happen. Filtered to `record-scene`'s own writes only (`stepName`
-    // check) — forwarding any OTHER raw engine-internal chunk here would
-    // reintroduce the same stomp risk for whatever `runId` IT happens to
-    // carry, so nothing else is passed through.
+    // `sceneStep`'s `writer.write(data)` arrives wrapped by `ToolStream._write`
+    // as `{ type: "workflow-step-output", runId: <WORKFLOW runId>, payload:
+    // { output: data, stepName } }`. Forwarded raw it is dropped
+    // (`processStreamChunk` has no case for it) — and worse, that function's
+    // first line copies any chunk's top-level `runId` onto the session,
+    // stomping the agent-run id with the workflow's on every progress write.
+    // So: unwrap `payload.output` and re-shape it into the one chunk the
+    // controller recognises for tool progress, which carries no `runId`.
+    // Filtered to `record-scene` only — any other engine chunk passed through
+    // would bring the same stomp with it.
     const outputWriter = async (chunk: unknown) => {
       const c = chunk as {
         type?: string
@@ -401,157 +428,20 @@ const generateDemoTool = createTool({
       })
     }
 
-    let run: Awaited<ReturnType<typeof workflow.createRun>>
-    let result: Awaited<ReturnType<typeof run.start>>
-
-    if (resumeData) {
-      // Code review fix #5: prefer the runId carried on resumeData; the
-      // in-memory map is the fallback for callers that don't send it yet.
-      const runId = resumeData.runId ?? activeDemoRuns.get(threadId)
-      if (!runId) {
-        throw new Error(
-          "generate_demo: no active demo-video run found to resume for this " +
-            "thread (the app may have restarted while a scene decision was pending)"
-        )
-      }
-      run = await workflow.createRun({ runId })
-      activeDemoRuns.set(threadId, runId)
-
-      // Code review fix #3: the tool's own abortSignal (session cancel)
-      // never reached the workflow run otherwise — `Run` gets its own
-      // internal AbortController, so cancelling the chat session did
-      // nothing to an in-flight `demo-video` run. Cancel the run explicitly
-      // (`Run.cancel()`, workflow.d.ts) when the session aborts. Round 2:
-      // `.catch()` the cancel call (a bare `void run.cancel()` is a floating
-      // promise — an unhandled rejection there crashes the Electron main
-      // process), and check `abortSignal.aborted` up front — an
-      // already-aborted signal never fires a fresh `"abort"` event, so
-      // `addEventListener` alone would silently never cancel a run started
-      // after the session was already cancelled.
-      const onAbort = () => {
-        run
-          .cancel()
-          .catch((err: unknown) =>
-            log.error("[generate_demo] run.cancel failed:", err)
-          )
-      }
-      if (context.abortSignal?.aborted) onAbort()
-      else context.abortSignal?.addEventListener("abort", onAbort)
-      try {
-        result = await run.resume({
-          step: "record-scene",
-          resumeData,
-          outputWriter,
-        })
-      } catch (err) {
-        // Code review fix #4: without this, a throw here left `activeDemoRuns`
-        // pointing at a runId whose run is now in an unknown/broken state —
-        // a later resume could reconnect to a dead run instead of failing
-        // clearly.
-        activeDemoRuns.delete(threadId)
-        // Spec §12 names three deletion sites — success, abort, thread
-        // deletion — not "any throw". A plain failure's natural next step is
-        // a retry, and there is no second capture path (`save_login` is
-        // registered only on the rehearse mode, with no transition back from
-        // execute), so deleting the profile here would strand the thread
-        // logged out with no way to re-authenticate.
-        if (context.abortSignal?.aborted) void deleteProfile(workspace)
-        throw err
-      } finally {
-        context.abortSignal?.removeEventListener("abort", onAbort)
-      }
-    } else {
-      const project = getProject(projectId)
-      const voiceId = project?.meta.voiceId ?? null
-
-      run = await workflow.createRun()
-      activeDemoRuns.set(threadId, run.runId)
-
-      const onAbort = () => {
-        run
-          .cancel()
-          .catch((err: unknown) =>
-            log.error("[generate_demo] run.cancel failed:", err)
-          )
-      }
-      if (context.abortSignal?.aborted) onAbort()
-      else context.abortSignal?.addEventListener("abort", onAbort)
-      try {
-        // `elevenLabsKey` is intentionally NOT included here (code review
-        // fix #4) — see the workflow's `inputSchema` comment: it would
-        // otherwise be persisted in plaintext into the workflow's LibSQL
-        // snapshot. `ttsStep`/`narrateStep` re-read it themselves at
-        // execution time.
-        result = await run.start({
-          inputData: { plan: input.plan, workspace, modelId, voiceId },
-          outputWriter,
-        })
-      } catch (err) {
-        activeDemoRuns.delete(threadId)
-        // See the matching comment in the resume branch's catch above: a
-        // plain failure keeps the profile so a retry can still log in.
-        if (context.abortSignal?.aborted) void deleteProfile(workspace)
-        throw err
-      } finally {
-        context.abortSignal?.removeEventListener("abort", onAbort)
-      }
+    const outcome = await runDemoVideo({
+      projectId,
+      threadId,
+      plan: input.plan,
+      modelId: ctx?.session.modelId || DEFAULT_MODEL_ID,
+      signal: context.abortSignal,
+      outputWriter,
+      nudges: stallNudges(`${projectId}:${threadId}`),
+    })
+    return {
+      videoPath: outcome.videoPath,
+      scenes: outcome.scenes,
+      note: degradationNote(outcome.degraded),
     }
-
-    if (result.status === "suspended") {
-      if (!context.agent?.suspend) {
-        throw new Error(
-          "generate_demo: workflow suspended but no tool-suspension context is available " +
-            "(generate_demo must run inside an Agent tool call)"
-        )
-      }
-      // Code review fix #1: `WorkflowResult.suspendPayload` is keyed by
-      // STEP ID (`{ "record-scene": { sceneId, failure, attempts } }`),
-      // confirmed in the compiled result formatter
-      // (agent-0y2cApTZ.js: `suspendPayload[stepId] = rest` inside the
-      // `status === "suspended"` branch) — not the flat `{sceneId,...}`
-      // shape a naive read assumes.
-      const payload = (
-        result.suspendPayload as Record<
-          string,
-          { sceneId: string; failure: string; attempts: number }
-        >
-      )["record-scene"]
-      return await context.agent.suspend({
-        runId: run.runId,
-        sceneId: payload.sceneId,
-        failure: payload.failure,
-        attempts: payload.attempts,
-      })
-    }
-
-    activeDemoRuns.delete(threadId)
-    // Spec §12 names three deletion sites — success, abort, thread deletion —
-    // not "any terminal state". A plain `failed` result deliberately keeps
-    // the profile: the natural next step after a failed run is a retry, and
-    // there is no second capture path (`save_login` lives only on the
-    // rehearse mode, with no transition back from execute) — deleting here
-    // would strand the thread logged out with no way back in.
-    // `deleteProfile` is idempotent and never throws (credentials.ts), so
-    // fire-and-forget is safe and keeps cleanup off the result path.
-    if (result.status === "success" || context.abortSignal?.aborted) {
-      void deleteProfile(workspace)
-    }
-
-    if (result.status !== "success") {
-      const detail =
-        result.status === "failed" ? `: ${result.error.message}` : ""
-      const message = `demo-video workflow ${result.status}${detail}`
-      await recordRun({
-        workspace,
-        outcome: context.abortSignal?.aborted ? "aborted" : "failed",
-        scenes: 0,
-        plannedScenes: input.plan.scenes.length,
-        error: message,
-      })
-      throw new Error(message)
-    }
-
-    return { videoPath: result.result.videoPath }
   },
 })
 
@@ -749,7 +639,9 @@ Do not record anything in this mode.`,
         instructions:
           "The plan is approved (activePlan in state; the plan file contains a fenced " +
           "json scene plan). Call generate_demo exactly once with that json plan, " +
-          "then present the resulting video with present_files.",
+          "then present the resulting video with present_files. generate_demo always " +
+          "returns a video; when its `note` is not empty, some of the plan was left " +
+          "out — relay the note to the user as written and offer to re-record.",
       },
     ],
   })

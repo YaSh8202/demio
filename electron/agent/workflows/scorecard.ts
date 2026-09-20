@@ -107,6 +107,7 @@ export function recordRun(o: {
   videoPath?: string
   degraded?: Degradation[]
   nudges?: number
+  salvaged?: boolean
   finalCheck?: {
     ok: boolean
     durationSec?: number

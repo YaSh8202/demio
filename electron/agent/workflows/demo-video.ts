@@ -1,9 +1,16 @@
 // ── demo-video workflow (ADR-001) ───────────────────────────────────────────
 //
-// plan (input) → foreach scene [record+verify+retry, suspend on exhaustion]
-// → collect → narrate (structured) → tts (synthesis only, skipped when no
-// voice) → sync (EDL-based retiming/mix, see `./sync`) → compose (pure
-// concat, ffmpeg).
+// plan (input) → foreach scene [record+verify+retry, DROP on exhaustion]
+// → collect (floor scene if nothing survived) → narrate (structured) → tts
+// (synthesis only, skipped when no voice) → sync (EDL-based retiming/mix, see
+// `./sync`) → compose (concat, ffmpeg).
+//
+// **Every run ends with a video (ADR-013).** No step here suspends or lets a
+// failure past recording end the run: a stage that cannot do its job falls
+// back one rung, says so in `degraded`, and the run carries on. The list
+// lands on the scorecard's run line and in the chat — degrading is allowed
+// because it is never silent. The numbered notes below predate that and still
+// explain why scenes are a `.foreach`.
 //
 // Reconciled against installed `@mastra/core@1.55.0` workflow/agent APIs
 // (Task 12) — see `task-12-report.md` for full evidence. The two load-bearing
@@ -45,12 +52,15 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
 import { scenePlanSchema, sceneResultSchema, sceneSchema } from "./schemas"
-import type { SceneResult } from "./schemas"
+import type { Scene } from "./schemas"
 import { recordSceneWithRetry } from "./record-scene"
 import { synthesizeNarrationAudio } from "../lib/voiceover"
-import { parseActionEntries, renderScene } from "./sync"
+import { parseActionEntries, renderScene, renderRawFallback } from "./sync"
 import { projectSteps } from "./transcript"
 import { recordRun } from "./scorecard"
+import type { Degradation } from "./scorecard"
+import { maybeFault } from "./fault"
+import { BUDGET_MS, withBudget } from "./budget"
 import { verifyFinalVideo } from "./verify"
 import {
   narrateScenes,
@@ -72,6 +82,24 @@ function elevenLabsApiKey(): string | null {
   return getDecryptedKey("elevenlabs") || getEnvKey("elevenlabs") || null
 }
 
+const reasonOf = (err: unknown) =>
+  (err instanceof Error ? err.message : String(err)).slice(0, 300)
+
+const degradationSchema = z.object({
+  stage: z.enum(["record-scene", "narrate", "tts", "sync", "compose", "floor"]),
+  reason: z.string(),
+  sceneId: z.string().optional(),
+})
+
+/**
+ * Scene ids dropped so far, per run (keyed by workspace — one run per thread).
+ * `.foreach` iterations share no data, and a `chained` scene has to know its
+ * predecessor never finished: its start state is that scene's end state.
+ * In-memory is enough now that no step suspends — a run lives in one process
+ * from start to compose.
+ */
+const droppedScenes = new Map<string, Set<string>>()
+
 // `elevenLabsKey` is deliberately NOT part of this schema (code review fix
 // #4): `createRun`/`start`/`resume` snapshot `inputData` into the workflow's
 // LibSQLStore row on every suspend, and a decrypted API key has no business
@@ -84,6 +112,10 @@ const inputSchema = z.object({
   workspace: z.string(),
   modelId: z.string(),
   voiceId: z.string().nullable(),
+  // How the harness got the run this far (./stall-watchdog) — carried only so
+  // the scorecard's run line can say so.
+  nudges: z.number().default(0),
+  salvaged: z.boolean().default(false),
 })
 
 /** Data every scene-level step needs but doesn't receive as its per-item
@@ -107,6 +139,14 @@ const toScenesStep = createStep({
   inputSchema,
   outputSchema: z.array(sceneSchema),
   execute: async ({ inputData }) => {
+    // Before a single frame: without ffmpeg there is no sync and no compose,
+    // and finding that out after recording every scene helps nobody.
+    if (!resolveFfmpeg()) {
+      throw new Error(
+        "ffmpeg binary not available — cannot produce a demo video."
+      )
+    }
+    droppedScenes.set(inputData.workspace, new Set())
     for (const scene of inputData.plan.scenes) {
       if (!SAFE_SCENE_ID.test(scene.id)) {
         throw new Error(
@@ -193,50 +233,57 @@ const preflightStep = createStep({
   },
 })
 
-const sceneResumeSchema = z.object({
-  action: z.enum(["retry", "skip", "abort"]),
-  guidance: z.string().optional(),
-})
-const sceneSuspendSchema = z.object({
-  sceneId: z.string(),
-  failure: z.string(),
-  attempts: z.number(),
+/** What one `.foreach` iteration hands on: a recorded scene, or why there is none. */
+const sceneOutcomeSchema = z.object({
+  result: sceneResultSchema.nullable(),
+  dropped: degradationSchema.nullable(),
 })
 
 /**
+ * Attempts for a `chained` scene. Its retry re-opens `startUrl`, which throws
+ * away the in-page state a state-dependent chained scene continues from (see
+ * `DEFAULT_MAX_ATTEMPTS` in ./record-scene) — so every retry past the first is
+ * a take that cannot succeed plus a recovery run that cannot help. Two, not
+ * one: a chained scene that only chains to avoid a reload retries fine, and
+ * one retry is what that costs.
+ */
+const CHAINED_MAX_ATTEMPTS = 2
+
+/**
  * Records (and mechanically verifies) exactly one scene, with the harness's
- * own internal retry loop (`recordSceneWithRetry`, up to its own
- * `maxAttempts`). Only suspends the WORKFLOW once that internal retry budget
- * is exhausted, asking the user to retry (optionally with guidance passed
- * through to the off-camera recovery agent as a hint), skip this scene, or
- * abort the whole run.
- *
- * Returns `null` for a skipped scene — filtered out by `collectResultsStep`.
+ * own internal retry loop (`recordSceneWithRetry`). When that budget is spent
+ * the scene is DROPPED and the run goes on (ADR-013, superseding ADR-003's
+ * suspend): the question it used to ask — retry, skip or abort — parked the
+ * run on a user who may have left, and for a chained scene "retry" could not
+ * succeed anyway. The user is told what was dropped, and offered a re-record,
+ * once they have a video in hand.
  */
 const sceneStep = createStep({
   id: "record-scene",
   inputSchema: sceneSchema,
-  outputSchema: sceneResultSchema.nullable(),
-  resumeSchema: sceneResumeSchema,
-  suspendSchema: sceneSuspendSchema,
-  execute: async ({
-    inputData: scene,
-    resumeData,
-    suspend,
-    getInitData,
-    writer,
-    abortSignal,
-  }) => {
+  outputSchema: sceneOutcomeSchema,
+  execute: async ({ inputData: scene, getInitData, writer, abortSignal }) => {
     const init = getInitData<DemoVideoInit>()
-
-    // Re-invoked from the top on resume (see file header) — resumeData is
-    // only populated on that replay pass, so a fresh first pass falls
-    // through to recording unconditionally.
-    if (resumeData?.action === "abort") {
-      throw new Error(`Demo generation aborted at scene ${scene.id} by user`)
+    const dropped = droppedScenes.get(init.workspace) ?? new Set<string>()
+    droppedScenes.set(init.workspace, dropped)
+    const drop = (reason: string) => {
+      dropped.add(scene.id)
+      log.warn(`[demo-workflow] scene ${scene.id} dropped: ${reason}`)
+      return {
+        result: null,
+        dropped: { stage: "record-scene" as const, sceneId: scene.id, reason },
+      }
     }
-    if (resumeData?.action === "skip") {
-      return null
+
+    // A chained scene starts where its predecessor ended. If that scene never
+    // finished, there is no such place — do not spend takes finding that out.
+    const chained = scene.script?.continuity === "chained"
+    const index = init.plan.scenes.findIndex((s) => s.id === scene.id)
+    const previous = index > 0 ? init.plan.scenes[index - 1] : undefined
+    if (chained && previous && dropped.has(previous.id)) {
+      return drop(
+        `continues from ${previous.id}, which was dropped — its start state does not exist`
+      )
     }
 
     const outcome = await recordSceneWithRetry({
@@ -250,16 +297,7 @@ const sceneStep = createStep({
       // `init.voiceId !== null` once a future phase moves TTS ahead of
       // recording.
       voiceExpected: false,
-      guidance:
-        resumeData?.action === "retry" ? resumeData.guidance : undefined,
-      // This step re-runs from the top on resume, so `recordSceneWithRetry`
-      // starts a fresh loop at attempt 1 and would otherwise open the take as
-      // if nothing had happened. It has: the previous invocation's last
-      // failed attempt left the browser mid-scene. Tell it so, or a chained
-      // scene's `record restart` continues from that wreckage instead of the
-      // previous scene's clean end state — silently, since replay then runs
-      // fine from the wrong page.
-      resumedRetry: resumeData?.action === "retry",
+      maxAttempts: chained ? CHAINED_MAX_ATTEMPTS : undefined,
       signal: abortSignal,
       onProgress: (u) => {
         void writer.write({
@@ -270,16 +308,19 @@ const sceneStep = createStep({
       },
     })
 
-    if (outcome.status === "done") return outcome.result
-
-    return await suspend({
-      sceneId: scene.id,
-      failure: outcome.lastReport.checks
-        .filter((c) => !c.ok)
-        .map((c) => c.detail)
-        .join("; "),
-      attempts: outcome.attempts,
-    })
+    if (outcome.status === "done")
+      return { result: outcome.result, dropped: null }
+    // A cancelled run is not a dropped scene — let the cancel end the run.
+    if (abortSignal?.aborted) {
+      throw new Error(`Demo generation stopped by user at scene ${scene.id}`)
+    }
+    return drop(
+      `failed ${outcome.attempts} take(s): ` +
+        (outcome.lastReport.checks
+          .filter((c) => !c.ok)
+          .map((c) => c.detail)
+          .join("; ") || "no detail")
+    )
   },
 })
 
@@ -292,16 +333,87 @@ const sceneStep = createStep({
 // `inputSchema` so the two stay structurally identical.
 const collectedSchema = inputSchema.extend({
   results: z.array(sceneResultSchema),
+  degraded: z.array(degradationSchema),
 })
+
+/**
+ * The floor: what gets recorded when no scene survived, whatever the cause.
+ * No model, no rehearsal — open the product and scroll it, through the same
+ * `recordSceneWithRetry` every other scene uses, so it is verified like one.
+ * It keeps the promise that a run ends with a video; it is reported as the
+ * fallback it is and never passed off as the demo that was asked for.
+ */
+export const FLOOR_SCENE_ID = "floor.01"
+
+export function floorScene(targetUrl: string): Scene {
+  const scroll = { cmd: "scroll down 600", settleMs: 1200 }
+  return {
+    id: FLOOR_SCENE_ID,
+    title: "Product overview",
+    goal: "Open the product and scroll through the page",
+    startUrl: targetUrl,
+    endUrl: targetUrl,
+    actions: ["Open the page", "Scroll down through it"],
+    expectedOutcome: "The page is open and has been scrolled",
+    narrationHint: "",
+    script: {
+      sceneId: FLOOR_SCENE_ID,
+      continuity: "independent",
+      oneShot: false,
+      startUrl: targetUrl,
+      endUrl: targetUrl,
+      params: {},
+      actions: [{ cmd: "wait 1500", settleMs: 600 }, scroll, scroll, scroll],
+    },
+  }
+}
 
 const collectResultsStep = createStep({
   id: "collect-scene-results",
-  inputSchema: z.array(sceneResultSchema.nullable()),
+  inputSchema: z.array(sceneOutcomeSchema),
   outputSchema: collectedSchema,
-  execute: async ({ inputData, getInitData }) => {
+  execute: async ({ inputData, getInitData, abortSignal }) => {
     const init = getInitData<DemoVideoInit>()
-    const results = inputData.filter((r): r is SceneResult => r !== null)
-    return { ...init, results }
+    droppedScenes.delete(init.workspace)
+    const results = inputData.flatMap((o) => (o.result ? [o.result] : []))
+    const degraded: Degradation[] = inputData.flatMap((o) =>
+      o.dropped ? [o.dropped] : []
+    )
+    if (results.length > 0) {
+      // The stall watchdog asks for the floor scene outright when nothing was
+      // rehearsed. It recorded fine — and it is still the fallback, so it is
+      // reported as one however it got here.
+      if (results.some((r) => r.sceneId === FLOOR_SCENE_ID)) {
+        degraded.push({
+          stage: "floor",
+          reason: `no scene was ever rehearsed — this video is a fallback tour of ${init.plan.targetUrl}`,
+        })
+      }
+      return { ...init, results, degraded }
+    }
+
+    const floor = await recordSceneWithRetry({
+      scene: floorScene(init.plan.targetUrl),
+      workspace: init.workspace,
+      modelId: init.modelId,
+      voiceExpected: false,
+      maxAttempts: 1,
+      noRecovery: true,
+      signal: abortSignal ?? new AbortController().signal,
+    })
+    if (floor.status !== "done") {
+      // The one run that ends with nothing: not even opening the page and
+      // scrolling it could be recorded, so the browser or the site is gone.
+      throw new Error(
+        `no scene could be recorded, and neither could the fallback tour of ${init.plan.targetUrl}: ` +
+          (floor.lastReport.checks.find((c) => !c.ok)?.detail ?? "no detail")
+      )
+    }
+    degraded.push({
+      stage: "floor",
+      reason: `none of the ${init.plan.scenes.length} planned scene(s) could be recorded — this video is a fallback tour of ${init.plan.targetUrl}`,
+    })
+    return { ...init, results: [floor.result], degraded }
   },
 })
 
@@ -340,23 +452,43 @@ const narrateStep = createStep({
         }
       })
     )
-    const narrationRun = await narrateScenes({
-      workspace: inputData.workspace,
-      modelId: inputData.modelId,
-      demoTitle: inputData.plan.demoTitle,
-      scenes: inputData.plan.scenes.map((s) => {
-        const log = actionLogs.find((l) => l.sceneId === s.id)
-        return {
-          sceneId: s.id,
-          goal: s.goal,
-          narrationHint: s.narrationHint,
-          durationSec: log?.durationSec ?? 0,
-          numberedActions: log?.numberedActions ?? [],
-          actionEntries: log?.entries,
-        }
-      }),
-      signal: abortSignal,
-    })
+    // A video with no voice is a video. Narration failing — the provider, a
+    // malformed object from a weak model, the budget — costs the run its
+    // voiceover, never the run.
+    let narrationRun: Awaited<ReturnType<typeof narrateScenes>>
+    try {
+      await maybeFault("narrate", abortSignal)
+      narrationRun = await narrateScenes({
+        workspace: inputData.workspace,
+        modelId: inputData.modelId,
+        demoTitle: inputData.plan.demoTitle,
+        scenes: inputData.plan.scenes.map((s) => {
+          const log = actionLogs.find((l) => l.sceneId === s.id)
+          return {
+            sceneId: s.id,
+            goal: s.goal,
+            narrationHint: s.narrationHint,
+            durationSec: log?.durationSec ?? 0,
+            numberedActions: log?.numberedActions ?? [],
+            actionEntries: log?.entries,
+          }
+        }),
+        signal: withBudget(BUDGET_MS.narrate, abortSignal),
+      })
+    } catch (err) {
+      if (abortSignal?.aborted) throw err
+      log.warn(
+        `[demo-workflow] narration failed, continuing silent: ${reasonOf(err)}`
+      )
+      return {
+        ...inputData,
+        narration: null,
+        degraded: [
+          ...inputData.degraded,
+          { stage: "narrate" as const, reason: reasonOf(err) },
+        ],
+      }
+    }
     // Same blind spot as the recorder (see `writeAgentTranscript` in
     // `./record-scene`): the narrator is a bare `generate()` with no memory,
     // so its conversation is otherwise unrecoverable after the run.
@@ -412,26 +544,46 @@ const ttsStep = createStep({
       string,
       z.infer<typeof sceneAudioSegmentSchema>[]
     > = {}
-    for (const sceneNarration of inputData.narration.scenes) {
-      if (sceneNarration.segments.length === 0) continue
-      if (!inputData.results.some((r) => r.sceneId === sceneNarration.sceneId))
-        continue
-      const audio = await synthesizeNarrationAudio({
-        cwd: inputData.workspace,
-        sceneId: sceneNarration.sceneId,
-        texts: sceneNarration.segments.map((s) => s.text),
-        voiceId: inputData.voiceId,
-        apiKey: elevenLabsKey,
-        signal: abortSignal,
-      })
-      sceneAudio[sceneNarration.sceneId] = sceneNarration.segments.map(
-        (seg, i) => ({
-          text: seg.text,
-          anchor: seg.anchor,
-          file: audio[i].file,
-          durationMs: audio[i].durationMs,
+    try {
+      await maybeFault("tts", abortSignal)
+      for (const sceneNarration of inputData.narration.scenes) {
+        if (sceneNarration.segments.length === 0) continue
+        if (
+          !inputData.results.some((r) => r.sceneId === sceneNarration.sceneId)
+        )
+          continue
+        const audio = await synthesizeNarrationAudio({
+          cwd: inputData.workspace,
+          sceneId: sceneNarration.sceneId,
+          texts: sceneNarration.segments.map((s) => s.text),
+          voiceId: inputData.voiceId,
+          apiKey: elevenLabsKey,
+          signal: withBudget(BUDGET_MS.ttsPerScene, abortSignal),
         })
+        sceneAudio[sceneNarration.sceneId] = sceneNarration.segments.map(
+          (seg, i) => ({
+            text: seg.text,
+            anchor: seg.anchor,
+            file: audio[i].file,
+            durationMs: audio[i].durationMs,
+          })
+        )
+      }
+    } catch (err) {
+      if (abortSignal?.aborted) throw err
+      // All or nothing: a demo whose voice cuts out after scene 2 reads as
+      // broken, a silent one reads as silent.
+      log.warn(
+        `[demo-workflow] speech synthesis failed, continuing silent: ${reasonOf(err)}`
       )
+      return {
+        ...inputData,
+        sceneAudio: null,
+        degraded: [
+          ...inputData.degraded,
+          { stage: "tts" as const, reason: reasonOf(err) },
+        ],
+      }
     }
     return { ...inputData, sceneAudio }
   },
@@ -448,20 +600,50 @@ const syncStep = createStep({
   outputSchema: syncedSchema,
   execute: async ({ inputData, abortSignal }) => {
     const retimedPaths: Record<string, string> = {}
+    const degraded = [...inputData.degraded]
     for (const r of inputData.results) {
       if (abortSignal?.aborted) {
         throw new Error("Demo generation stopped by user during sync/retiming")
       }
-      const rendered = await renderScene({
-        workspace: inputData.workspace,
-        sceneId: r.sceneId,
-        videoPath: r.videoPath,
-        actionsPath: r.actionsPath,
-        segments: inputData.sceneAudio?.[r.sceneId] ?? [],
-      })
-      retimedPaths[r.sceneId] = rendered.finalPath
+      try {
+        await maybeFault("sync", abortSignal)
+        const rendered = await renderScene({
+          workspace: inputData.workspace,
+          sceneId: r.sceneId,
+          videoPath: r.videoPath,
+          actionsPath: r.actionsPath,
+          segments: inputData.sceneAudio?.[r.sceneId] ?? [],
+        })
+        retimedPaths[r.sceneId] = rendered.finalPath
+      } catch (err) {
+        if (abortSignal?.aborted) throw err
+        // A sync failure is a code bug (see ./sync) — and the scene's take is
+        // still a good take. Ship the take, unretimed and unvoiced, and put
+        // the bug on the scorecard where it will be seen, rather than let it
+        // cost the user the whole video. If even that transcode fails the
+        // scene has no usable file: compose leaves it out.
+        const reason = reasonOf(err)
+        await persistStderr(inputData.workspace, "sync", err)
+        log.error(
+          `[demo-workflow] sync failed for ${r.sceneId}, using the raw take: ${reason}`
+        )
+        try {
+          retimedPaths[r.sceneId] = await renderRawFallback({
+            workspace: inputData.workspace,
+            sceneId: r.sceneId,
+            videoPath: r.videoPath,
+          })
+          degraded.push({ stage: "sync", sceneId: r.sceneId, reason })
+        } catch (fallbackErr) {
+          degraded.push({
+            stage: "sync",
+            sceneId: r.sceneId,
+            reason: `${reason}; the raw take could not be used either: ${reasonOf(fallbackErr)}`,
+          })
+        }
+      }
     }
-    return { ...inputData, retimedPaths }
+    return { ...inputData, retimedPaths, degraded }
   },
 })
 
@@ -471,8 +653,9 @@ const composeStep = createStep({
   outputSchema: z.object({
     videoPath: z.string(),
     scenes: z.array(sceneResultSchema),
+    degraded: z.array(degradationSchema),
   }),
-  execute: async ({ inputData }) => {
+  execute: async ({ inputData, abortSignal }) => {
     const ffmpeg = resolveFfmpeg()
     if (!ffmpeg) {
       throw new Error(
@@ -481,16 +664,19 @@ const composeStep = createStep({
     }
     const outDir = path.join(inputData.workspace, "output")
     await fs.mkdir(outDir, { recursive: true })
+    const degraded = [...inputData.degraded]
 
     // Every scene's final file was rendered by sync.ts with identical
-    // codec/stream parameters (h264 yuv420p 30fps + aac 44100 stereo) —
-    // the concat demuxer's uniformity requirement holds by construction
-    // and the concat is a pure stream copy.
-    const parts = inputData.results.map((r) => {
-      const p = inputData.retimedPaths[r.sceneId]
-      if (!p) throw new Error(`compose: no retimed output for ${r.sceneId}`)
-      return p
-    })
+    // codec/stream parameters (h264 yuv420p 30fps + aac 44100 stereo) — so
+    // the concat is a pure stream copy. A scene with no file (sync and its
+    // fallback both failed) is left out, already on `degraded`.
+    const kept = inputData.results.filter(
+      (r) => inputData.retimedPaths[r.sceneId]
+    )
+    const parts = kept.map((r) => inputData.retimedPaths[r.sceneId])
+    if (parts.length === 0) {
+      throw new Error("compose: no scene produced a usable file")
+    }
 
     const outputPath = path.join(outDir, "demo.mp4")
     const listPath = path.join(outDir, "concat.txt")
@@ -498,39 +684,85 @@ const composeStep = createStep({
       listPath,
       parts.map((p) => `file '${p.replaceAll("'", "'\\''")}'`).join("\n")
     )
-    await execFileAsync(ffmpeg, [
-      "-y",
-      "-f",
-      "concat",
-      "-safe",
-      "0",
-      "-i",
-      listPath,
-      "-c",
-      "copy",
-      "-movflags",
-      "+faststart",
-      outputPath,
-    ])
+    const concat = (codec: string[]) =>
+      execFileAsync(
+        ffmpeg,
+        [
+          "-y",
+          "-f",
+          "concat",
+          "-safe",
+          "0",
+          "-i",
+          listPath,
+          ...codec,
+          "-movflags",
+          "+faststart",
+          outputPath,
+        ],
+        { signal: withBudget(BUDGET_MS.compose, abortSignal) }
+      )
+    try {
+      await maybeFault("compose", abortSignal)
+      await concat(["-c", "copy"])
+    } catch (err) {
+      if (abortSignal?.aborted) throw err
+      // Stream copy needs byte-identical stream parameters across parts. If
+      // one part broke that promise, re-encoding still gives the user a video.
+      const reason = reasonOf(err)
+      log.error(
+        `[demo-workflow] stream-copy concat failed, re-encoding: ${reason}`
+      )
+      await persistStderr(inputData.workspace, "compose", err)
+      await concat([
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        "30",
+        "-c:a",
+        "aac",
+        "-ar",
+        "44100",
+        "-ac",
+        "2",
+      ])
+      degraded.push({ stage: "compose", reason })
+    }
+
     const finalCheck = await verifyFinalVideo({
       videoPath: outputPath,
-      scenesDurationSec: inputData.results.reduce(
-        (sum, r) => sum + r.durationSec,
-        0
-      ),
+      scenesDurationSec: kept.reduce((sum, r) => sum + r.durationSec, 0),
       voiced: inputData.sceneAudio !== null,
     })
     await recordRun({
       workspace: inputData.workspace,
       outcome: "video",
-      scenes: inputData.results.length,
+      scenes: kept.length,
       plannedScenes: inputData.plan.scenes.length,
       videoPath: outputPath,
+      degraded,
+      nudges: inputData.nudges,
+      salvaged: inputData.salvaged,
       finalCheck,
     })
-    return { videoPath: outputPath, scenes: inputData.results }
+    return { videoPath: outputPath, scenes: kept, degraded }
   },
 })
+
+/** ffmpeg's own words, kept: a thrown `execFile` error carries them and the log line above does not. */
+async function persistStderr(workspace: string, stage: string, err: unknown) {
+  const stderr = (err as { stderr?: unknown })?.stderr
+  if (typeof stderr !== "string" || !stderr) return
+  try {
+    const dir = path.join(workspace, "logs")
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(path.join(dir, `${stage}.stderr.txt`), stderr, "utf8")
+  } catch {
+    // diagnostics only
+  }
+}
 
 export const demoVideoWorkflow = createWorkflow({
   id: "demo-video",

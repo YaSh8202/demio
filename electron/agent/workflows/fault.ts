@@ -40,7 +40,9 @@ export async function maybeFault(
   if (active.includes(`${stage}:hang`)) {
     await new Promise<never>((_resolve, reject) => {
       signal?.addEventListener("abort", () =>
-        reject(new Error(`injected fault: ${stage}:hang — aborted by its budget`))
+        reject(
+          new Error(`injected fault: ${stage}:hang — aborted by its budget`)
+        )
       )
     })
   }
@@ -49,7 +51,8 @@ export async function maybeFault(
 /** True when `DEMIO_FAULT` says this scene must fail every take. */
 export function sceneFaulted(sceneId: string): boolean {
   const active = faults()
-  return (
-    active.includes("scene:*:fail") || active.includes(`scene:${sceneId}:fail`)
-  )
+  if (active.includes(`scene:${sceneId}:fail`)) return true
+  // `*` is every PLANNED scene. The floor scene is what is left when they all
+  // fail — a wildcard that took it down too could never show that rung working.
+  return active.includes("scene:*:fail") && !sceneId.startsWith("floor.")
 }

@@ -9,8 +9,11 @@
 //   scenes/<id>.edl.json            (persisted EDL — future re-render/edit)
 //
 // EDL math lives in edl-pure.cjs (unit-tested, no I/O). Failures here are
-// deterministic code bugs, not agent flakiness — this module hard-throws and
-// leaves artifacts in place; it never suspends or degrades to the raw video.
+// deterministic code bugs, not agent flakiness — `renderScene` hard-throws and
+// leaves artifacts in place. It does not degrade; its CALLER does (ADR-013):
+// `syncStep` catches, ships the raw take through `renderRawFallback`, and
+// records the failure on the scorecard, so the bug is loud and the user still
+// has a video.
 
 import { promises as fs } from "node:fs"
 import path from "node:path"
@@ -48,7 +51,12 @@ export interface Edl {
   videoDurationMs: number
   opts: Record<string, number>
   slots: EdlSlot[]
-  segments: Array<{ idx: number; anchor: SegmentAnchor; durationMs: number; outStartMs: number }>
+  segments: Array<{
+    idx: number
+    anchor: SegmentAnchor
+    durationMs: number
+    outStartMs: number
+  }>
   totalMs: number
 }
 
@@ -61,8 +69,15 @@ const pure = require("./edl-pure.cjs") as {
     segments: Array<{ anchor: SegmentAnchor; durationMs: number }>
     opts?: Record<string, number>
   }) => Edl
-  validateEdl: (edl: Edl, videoDurationMs: number) => { ok: boolean; errors: string[] }
-  buildSlotArgs: (sourcePath: string, slot: EdlSlot, outPath: string) => string[]
+  validateEdl: (
+    edl: Edl,
+    videoDurationMs: number
+  ) => { ok: boolean; errors: string[] }
+  buildSlotArgs: (
+    sourcePath: string,
+    slot: EdlSlot,
+    outPath: string
+  ) => string[]
   buildConcatListText: (paths: string[]) => string
   buildMixArgs: (
     retimedPath: string,
@@ -70,11 +85,16 @@ const pure = require("./edl-pure.cjs") as {
     outputPath: string
   ) => string[]
   buildSilentAudioArgs: (retimedPath: string, outputPath: string) => string[]
+  buildRawFallbackArgs: (sourcePath: string, outputPath: string) => string[]
 }
 
 export const parseActionEntries = pure.parseActionEntries
 
 const execFileAsync = promisify(execFile)
+
+// A wedged ffmpeg used to hang the run for good. Generous: a long scene's
+// slot encodes are real work, and expiry is a degradation, not a retry.
+const RENDER_TIMEOUT_MS = 180_000
 
 export interface RenderSceneOpts {
   workspace: string
@@ -84,7 +104,12 @@ export interface RenderSceneOpts {
   /** Absolute path to the scene's actions.jsonl. */
   actionsPath: string
   /** Playback-ordered synthesized segments; `file` is workspace-relative. */
-  segments: Array<{ text: string; anchor: SegmentAnchor; file: string; durationMs: number }>
+  segments: Array<{
+    text: string
+    anchor: SegmentAnchor
+    file: string
+    durationMs: number
+  }>
 }
 
 export async function renderScene(opts: RenderSceneOpts): Promise<{
@@ -93,16 +118,22 @@ export async function renderScene(opts: RenderSceneOpts): Promise<{
   totalMs: number
 }> {
   const ffmpeg = resolveFfmpeg()
-  if (!ffmpeg) throw new Error("ffmpeg binary not available — cannot retime scene")
+  if (!ffmpeg)
+    throw new Error("ffmpeg binary not available — cannot retime scene")
 
   const jsonl = await fs.readFile(opts.actionsPath, "utf8")
   const actionEntries = pure.parseActionEntries(jsonl)
-  const videoDurationMs = Math.round((await probeDurationSec(opts.videoPath)) * 1000)
+  const videoDurationMs = Math.round(
+    (await probeDurationSec(opts.videoPath)) * 1000
+  )
 
   const edl = pure.buildEdl({
     actionEntries,
     videoDurationMs,
-    segments: opts.segments.map((s) => ({ anchor: s.anchor, durationMs: s.durationMs })),
+    segments: opts.segments.map((s) => ({
+      anchor: s.anchor,
+      durationMs: s.durationMs,
+    })),
   })
   const validation = pure.validateEdl(edl, videoDurationMs)
   if (!validation.ok) {
@@ -113,7 +144,11 @@ export async function renderScene(opts: RenderSceneOpts): Promise<{
 
   // Persist the EDL (with text/file enrichment) BEFORE rendering so a
   // render failure still leaves the plan on disk for diagnosis.
-  const edlPath = path.join(opts.workspace, "scenes", `${opts.sceneId}.edl.json`)
+  const edlPath = path.join(
+    opts.workspace,
+    "scenes",
+    `${opts.sceneId}.edl.json`
+  )
   await fs.writeFile(
     edlPath,
     JSON.stringify(
@@ -136,33 +171,74 @@ export async function renderScene(opts: RenderSceneOpts): Promise<{
   await fs.mkdir(slotsDir, { recursive: true })
   const slotPaths: string[] = []
   for (let i = 0; i < edl.slots.length; i++) {
-    const slotPath = path.join(slotsDir, `slot-${String(i).padStart(2, "0")}.mp4`)
-    await execFileAsync(ffmpeg, pure.buildSlotArgs(opts.videoPath, edl.slots[i], slotPath))
+    const slotPath = path.join(
+      slotsDir,
+      `slot-${String(i).padStart(2, "0")}.mp4`
+    )
+    await execFileAsync(
+      ffmpeg,
+      pure.buildSlotArgs(opts.videoPath, edl.slots[i], slotPath),
+      {
+        timeout: RENDER_TIMEOUT_MS,
+      }
+    )
     slotPaths.push(slotPath)
   }
 
   // Stage 2: concat slots (identical encode params → stream copy).
   const listPath = path.join(slotsDir, "concat.txt")
   await fs.writeFile(listPath, pure.buildConcatListText(slotPaths))
-  const retimedPath = path.join(opts.workspace, "scenes", `${opts.sceneId}.retimed.mp4`)
-  await execFileAsync(ffmpeg, [
-    "-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", retimedPath,
-  ])
+  const retimedPath = path.join(
+    opts.workspace,
+    "scenes",
+    `${opts.sceneId}.retimed.mp4`
+  )
+  await execFileAsync(
+    ffmpeg,
+    [
+      "-y",
+      "-f",
+      "concat",
+      "-safe",
+      "0",
+      "-i",
+      listPath,
+      "-c",
+      "copy",
+      retimedPath,
+    ],
+    { timeout: RENDER_TIMEOUT_MS }
+  )
 
   // Stage 3: audio — voice mix at EDL offsets, or a silent track. Either
   // way the output has one video + one 44100/stereo aac stream so the
   // final demo concat can stream-copy.
-  const finalPath = path.join(opts.workspace, "scenes", `${opts.sceneId}.final.mp4`)
+  const finalPath = path.join(
+    opts.workspace,
+    "scenes",
+    `${opts.sceneId}.final.mp4`
+  )
   if (opts.segments.length > 0) {
     const mixSegments = edl.segments.map((s) => ({
       file: opts.segments[s.idx].file,
       outStartMs: s.outStartMs,
     }))
-    await execFileAsync(ffmpeg, pure.buildMixArgs(retimedPath, mixSegments, finalPath), {
-      cwd: opts.workspace,
-    })
+    await execFileAsync(
+      ffmpeg,
+      pure.buildMixArgs(retimedPath, mixSegments, finalPath),
+      {
+        cwd: opts.workspace,
+        timeout: RENDER_TIMEOUT_MS,
+      }
+    )
   } else {
-    await execFileAsync(ffmpeg, pure.buildSilentAudioArgs(retimedPath, finalPath))
+    await execFileAsync(
+      ffmpeg,
+      pure.buildSilentAudioArgs(retimedPath, finalPath),
+      {
+        timeout: RENDER_TIMEOUT_MS,
+      }
+    )
   }
 
   // Post-render check: rendered duration must match the EDL's arithmetic.
@@ -176,4 +252,31 @@ export async function renderScene(opts: RenderSceneOpts): Promise<{
   }
 
   return { finalPath, edlPath, totalMs: edl.totalMs }
+}
+
+/**
+ * The scene's raw take, unretimed and silent, in the same stream layout every
+ * retimed scene has — so it can sit in the `-c copy` concat next to them. A
+ * bare `.webm` cannot: the concat demuxer needs identical parameters.
+ */
+export async function renderRawFallback(opts: {
+  workspace: string
+  sceneId: string
+  videoPath: string
+}): Promise<string> {
+  const ffmpeg = resolveFfmpeg()
+  if (!ffmpeg) throw new Error("sync: ffmpeg binary not available")
+  const finalPath = path.join(
+    opts.workspace,
+    "scenes",
+    `${opts.sceneId}.final.mp4`
+  )
+  await execFileAsync(
+    ffmpeg,
+    pure.buildRawFallbackArgs(opts.videoPath, finalPath),
+    {
+      timeout: RENDER_TIMEOUT_MS,
+    }
+  )
+  return finalPath
 }

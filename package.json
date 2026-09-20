@@ -16,6 +16,7 @@
     "summarize-thread": "node scripts/summarize-thread.js",
     "test:scripts": "node --test scripts/*.test.js",
     "test:workflows": "node --test electron/agent/workflows/*.test.js",
+    "test:harness": "bun test electron/agent/harness.test.ts electron/agent/stall.test.ts",
     "eval": "axiom eval",
     "scorecard": "node scripts/scorecard.js",
     "smoke": "bun smoke/cli.ts",

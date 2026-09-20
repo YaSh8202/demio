@@ -35,6 +35,7 @@ import type { FindingKind } from "./rehearsal"
 import { projectSteps } from "./transcript"
 import { recordRehearsal } from "./scorecard"
 import log from "../../lib/logger"
+import { BUDGET_MS, withBudget } from "./budget"
 
 /** Shell only, from the factory's side — the two rehearsal tools come in via `extraTools`. */
 const REHEARSAL_TOOL_FILTER = [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]
@@ -303,7 +304,10 @@ export async function rehearseFlow(opts: {
     })
     const res = await agent.generate(
       `Rehearse the flow "${flow.label}" starting from ${flow.startUrl}.`,
-      { abortSignal: opts.signal, maxSteps: REHEARSAL_MAX_STEPS }
+      {
+        abortSignal: withBudget(BUDGET_MS.rehearsal, opts.signal),
+        maxSteps: REHEARSAL_MAX_STEPS,
+      }
     )
     text = (res.text ?? "").trim()
     steps = (res.steps ?? []) as unknown[]

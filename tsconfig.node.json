@@ -35,5 +35,6 @@
   ],
   // Eval files import the axiom SDK, which is not a dependency of the app.
   // They are checked by their own toolchain (`bunx axiom eval`), not here.
-  "exclude": ["**/*.eval.ts"]
+  // Same for `bun test` files: `bun:test` has no types in this project.
+  "exclude": ["**/*.eval.ts", "**/*.test.ts"]
 }
