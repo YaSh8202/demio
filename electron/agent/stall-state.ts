@@ -12,6 +12,8 @@ interface StallState {
   lastUserMessageAt: number
   cancelled: boolean
   salvageTried: boolean
+  /** Set while the watchdog is recording a salvaged video, so it can be stopped. */
+  salvage?: AbortController
 }
 
 /**
@@ -49,6 +51,9 @@ export function stallNudges(key: string): number {
 
 /** The user spoke: whatever the harness was doing about the last request is over. */
 export function noteUserMessage(key: string): void {
+  // A salvage still recording belongs to the request this message replaces —
+  // and the new turn may call generate_demo into the same workspace.
+  states.get(key)?.salvage?.abort()
   states.set(key, {
     nudges: 0,
     pipelineCalls: 0,
@@ -60,5 +65,7 @@ export function noteUserMessage(key: string): void {
 
 /** The user pressed stop: a turn that ends now ended because they said so. */
 export function noteCancel(key: string): void {
-  stallState(key).cancelled = true
+  const state = stallState(key)
+  state.cancelled = true
+  state.salvage?.abort()
 }

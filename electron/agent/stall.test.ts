@@ -260,6 +260,59 @@ describe("a stalled model still ends with a video", () => {
     expect(fs.readFileSync(video, "utf8")).toBe("the user's video")
   }, 30_000)
 
+  test("Stop during a salvage stops the salvage — no video appears behind the user's back", async () => {
+    const { project, thread } = store.createProject(
+      "cancel",
+      "mock:ends-early",
+      {
+        domain: "example.test",
+      }
+    )
+    const workspace = ensureWorkspace(thread.id)
+    const key = `${project.id}:${thread.id}`
+    const seen: string[] = []
+    const cancelled = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`events: ${seen.join(",")}`)),
+        40_000
+      )
+      driver.addSessionEventSink((k, event) => {
+        if (k !== key) return
+        const type = String(event["type"])
+        if (!type.startsWith("harness_")) return
+        seen.push(type)
+        if (type === "harness_salvage")
+          void driver.cancel(project.id, thread.id)
+        if (type === "harness_salvage_cancelled") {
+          clearTimeout(timer)
+          resolve()
+        }
+      })
+    })
+    await driver.sendMessage(project.id, thread.id, {
+      text: "Make a demo of the homepage.",
+      modelId: "mock:ends-early",
+    })
+    seedRehearsal(workspace, {
+      flows: [
+        {
+          id: "home",
+          label: "Homepage",
+          startUrl: "https://example.test/",
+          status: "done",
+          sceneIds: ["home.01"],
+          detail: "DONE",
+        },
+      ],
+      scripts: [script("home.01")],
+    })
+    await cancelled
+    expect(seen).not.toContain("harness_video_ready")
+    expect(fs.existsSync(path.join(workspace, "output", "demo.mp4"))).toBe(
+      false
+    )
+  }, 60_000)
+
   test("a question answered with a tool call is not a stalled demo", async () => {
     const r = await quietTurn({
       modelId: "mock:looks-around",

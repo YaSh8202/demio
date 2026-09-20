@@ -180,6 +180,22 @@ describe("demo-video always ends with a video", () => {
     expect(r.result.result.scenes[0].sceneId).toBe(wf.FLOOR_SCENE_ID)
   }, 60_000)
 
+  test("a stage that hangs is aborted by its budget, and degrades like any failure", async () => {
+    process.env.DEMIO_BUDGET_SYNCPERSCENE_MS = "700"
+    try {
+      const started = Date.now()
+      const r = await run([scene("a.01")], "sync:hang")
+      await expectVideo(r, ["sync"], 1)
+      expect(Date.now() - started).toBeLessThan(30_000)
+      if (r.result.status !== "success") return
+      expect(r.result.result.degraded[0].reason).toContain(
+        "aborted by its budget"
+      )
+    } finally {
+      delete process.env.DEMIO_BUDGET_SYNCPERSCENE_MS
+    }
+  }, 60_000)
+
   test("several rungs at once still end with a video", async () => {
     const r = await run(
       [scene("a.01"), scene("a.02")],

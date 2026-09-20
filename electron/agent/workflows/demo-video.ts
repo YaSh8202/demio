@@ -457,23 +457,32 @@ const narrateStep = createStep({
     // voiceover, never the run.
     let narrationRun: Awaited<ReturnType<typeof narrateScenes>>
     try {
-      await maybeFault("narrate", abortSignal)
+      const budget = withBudget(BUDGET_MS.narrate, abortSignal)
+      await maybeFault("narrate", budget)
       narrationRun = await narrateScenes({
         workspace: inputData.workspace,
         modelId: inputData.modelId,
         demoTitle: inputData.plan.demoTitle,
-        scenes: inputData.plan.scenes.map((s) => {
-          const log = actionLogs.find((l) => l.sceneId === s.id)
+        // The scenes that were RECORDED, not the ones that were planned. A
+        // dropped scene has no footage to talk over, and the floor scene is
+        // in no plan — narrating the plan paid for lines about scenes that are
+        // not in the video and left the fallback tour silent.
+        scenes: actionLogs.map((log) => {
+          const planned = inputData.plan.scenes.find(
+            (s) => s.id === log.sceneId
+          )
           return {
-            sceneId: s.id,
-            goal: s.goal,
-            narrationHint: s.narrationHint,
-            durationSec: log?.durationSec ?? 0,
-            numberedActions: log?.numberedActions ?? [],
-            actionEntries: log?.entries,
+            sceneId: log.sceneId,
+            goal:
+              planned?.goal ??
+              `A short tour of ${inputData.plan.targetUrl}, scrolling through the page`,
+            narrationHint: planned?.narrationHint ?? "",
+            durationSec: log.durationSec,
+            numberedActions: log.numberedActions,
+            actionEntries: log.entries,
           }
         }),
-        signal: withBudget(BUDGET_MS.narrate, abortSignal),
+        signal: budget,
       })
     } catch (err) {
       if (abortSignal?.aborted) throw err
@@ -545,7 +554,7 @@ const ttsStep = createStep({
       z.infer<typeof sceneAudioSegmentSchema>[]
     > = {}
     try {
-      await maybeFault("tts", abortSignal)
+      await maybeFault("tts", withBudget(BUDGET_MS.ttsPerScene, abortSignal))
       for (const sceneNarration of inputData.narration.scenes) {
         if (sceneNarration.segments.length === 0) continue
         if (
@@ -606,7 +615,10 @@ const syncStep = createStep({
         throw new Error("Demo generation stopped by user during sync/retiming")
       }
       try {
-        await maybeFault("sync", abortSignal)
+        await maybeFault(
+          "sync",
+          withBudget(BUDGET_MS.syncPerScene, abortSignal)
+        )
         const rendered = await renderScene({
           workspace: inputData.workspace,
           sceneId: r.sceneId,
@@ -703,7 +715,7 @@ const composeStep = createStep({
         { signal: withBudget(BUDGET_MS.compose, abortSignal) }
       )
     try {
-      await maybeFault("compose", abortSignal)
+      await maybeFault("compose", withBudget(BUDGET_MS.compose, abortSignal))
       await concat(["-c", "copy"])
     } catch (err) {
       if (abortSignal?.aborted) throw err

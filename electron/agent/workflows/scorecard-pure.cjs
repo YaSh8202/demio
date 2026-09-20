@@ -251,8 +251,6 @@ function scoreScene({
 const THRESHOLDS = {
   /** Share of a rehearsal's shell commands that must be `agent-browser`. */
   minOnTaskShare: 0.9,
-  /** A final video this much shorter than its scenes lost footage in compose. */
-  minFinalToScenesRatio: 0.5,
 }
 
 /** Why an entry fails — empty when it passes. Works on entries written before `pass` existed. */

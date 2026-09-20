@@ -335,15 +335,22 @@ async function main(run: RunOptions) {
       armSettle()
     } else if (type === "tool_start") {
       state.toolCalls += 1
-    } else if (type === "error") {
+    } else if (type === "harness_salvage_cancelled") {
       harnessBusy = false
-      const error = event["error"] as { message?: string } | undefined
+      armSettle()
+    } else if (type === "error") {
+      const error = event["error"] as
+        | { name?: string; message?: string }
+        | undefined
+      // Any OTHER error mid-salvage is not the salvage ending: settling on it
+      // would exit the process the salvage is recording in.
+      if (error?.name === "HarnessSalvageFailed") harnessBusy = false
       state.errors.push({
         at: new Date().toISOString(),
         message: error?.message ?? JSON.stringify(event["error"]),
       })
       save()
-      armSettle()
+      if (!harnessBusy) armSettle()
     } else if (type === "display_state_changed") {
       const display = (event["displayState"] ?? {}) as Record<string, unknown>
       running = display["isRunning"] === true

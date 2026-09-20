@@ -38,7 +38,7 @@ import {
 } from "./workflows/rehearsal"
 import { floorScene } from "./workflows/demo-video"
 import type { Scene } from "./workflows/schemas"
-import { PIPELINE_TOOLS, noteUserMessage, stallState } from "./stall-state"
+import { PIPELINE_TOOLS, stallState } from "./stall-state"
 
 export const MAX_NUDGES = 2
 /** `agent_end` is not the end of the turn's events — let the dust settle. */
@@ -117,20 +117,18 @@ async function check(
 
   // Is THIS request a demo being made? A pipeline tool ran since the user
   // spoke, or rehearsal wrote its checkpoint since then (the same fact, read
-  // off disk — it survives an app restart mid-request, which the counter does
-  // not). An approved plan with no video at all counts too: that request was
-  // never finished.
+  // off disk). Both are per-process: after an app restart the watchdog knows
+  // nothing about the request in flight and stays out of it — the cost of
+  // never mistaking an old thread's leftovers for a stalled demo.
+  // `activePlan` is deliberately not a signal: it persists for the life of the
+  // thread, long after the request that set it.
+  const started =
+    state.pipelineCalls > 0 ||
+    modifiedSince(rehearsalPaths(workspace).checkpoint, state.lastUserMessageAt)
+  if (!started) return
   const approved = Boolean(
     (session.state.get() as { activePlan?: unknown }).activePlan
   )
-  const started =
-    state.pipelineCalls > 0 ||
-    modifiedSince(
-      rehearsalPaths(workspace).checkpoint,
-      state.lastUserMessageAt
-    ) ||
-    (approved && !freshVideo(workspace, 0))
-  if (!started) return
 
   const checkpoint = await readCheckpoint(workspace)
 
@@ -160,6 +158,8 @@ async function check(
   if (state.salvageTried) return
   state.salvageTried = true
   busy.add(key)
+  const salvage = new AbortController()
+  state.salvage = salvage
   try {
     const project = getProject(projectId)
     const targetUrl = toUrl(
@@ -196,8 +196,12 @@ async function check(
         session.model.get() || project?.meta?.selectedModel || DEFAULT_MODEL_ID,
       nudges: state.nudges,
       salvaged: true,
+      signal: salvage.signal,
     })
     emit(key, { type: "harness_video_ready", ...outcome })
+    // The user moved on while it recorded: the video is there, but this is
+    // no longer the conversation to announce it in.
+    if (salvage.signal.aborted) return
     // Into the conversation, so the user sees it where they are looking. The
     // video exists either way — this is the announcement, not the delivery.
     await session.sendMessage({
@@ -211,6 +215,10 @@ async function check(
           : "."),
     })
   } catch (err) {
+    if (salvage.signal.aborted) {
+      emit(key, { type: "harness_salvage_cancelled" })
+      return
+    }
     log.error(`[stall-watchdog] ${key}: salvage failed:`, err)
     emit(key, {
       type: "error",
@@ -221,6 +229,7 @@ async function check(
     })
   } finally {
     busy.delete(key)
+    if (state.salvage === salvage) state.salvage = undefined
   }
 }
 
@@ -271,5 +280,3 @@ export function nudgeText(o: {
     blocked
   )
 }
-
-export { noteUserMessage }

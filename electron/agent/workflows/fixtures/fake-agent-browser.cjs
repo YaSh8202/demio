@@ -96,7 +96,7 @@ if (recordState && exit === 0) {
     take = null
   }
   const restart =
-    /^record (?:re)?start (\S+|'[^']+')(?: --log-actions (\S+|'[^']+'))?/.exec(
+    /^record (?:re)?start ('[^']+'|\S+)(?: --log-actions ('[^']+'|\S+))?/.exec(
       command
     )
   if (restart) {

@@ -12,7 +12,7 @@
 
 import { promises as fs } from "node:fs"
 import { createRequire } from "node:module"
-import { probeArtifact } from "./artifact"
+import { peakVolumeDb, probeArtifact } from "./artifact"
 import { expectedDurationMs } from "./replay"
 import type { SceneScript } from "./script-schema"
 import type { VerifyReport } from "./schemas"
@@ -122,6 +122,11 @@ export async function verifyScene(input: VerifyInput): Promise<VerifyReport> {
  * dropped footage, or a voiced run that lost its audio in the concat, read as
  * a clean run.
  */
+/** A final video this much shorter than its scenes lost footage in compose. */
+const MIN_FINAL_TO_SCENES_RATIO = 0.5
+/** Peak level at or below this is silence (digital silence is about -91 dB). */
+const SILENCE_PEAK_DB = -60
+
 export async function verifyFinalVideo(input: {
   videoPath: string
   /** Sum of the scenes' own durations — the final cut is retimed, so this is a floor, not a target. */
@@ -136,12 +141,21 @@ export async function verifyFinalVideo(input: {
   const checks: VerifyReport["checks"] = []
   let durationSec = 0
   try {
-    const stat = await fs.stat(input.videoPath)
-    if (stat.size === 0) throw new Error("empty file")
-    checks.push({ name: "video-exists", ok: true, detail: input.videoPath })
+    const size = await fs
+      .stat(input.videoPath)
+      .then((stat) => stat.size)
+      .catch(() => 0)
+    checks.push({
+      name: "video-exists",
+      ok: size > 0,
+      detail:
+        size > 0 ? input.videoPath : `missing or empty: ${input.videoPath}`,
+    })
+    if (size === 0) return { ok: false, durationSec, checks }
     const probe = await probeArtifact(input.videoPath)
     durationSec = probe.durationSec
-    const floorSec = input.scenesDurationSec * (input.minRatio ?? 0.5)
+    const floorSec =
+      input.scenesDurationSec * (input.minRatio ?? MIN_FINAL_TO_SCENES_RATIO)
     checks.push({
       name: "duration-range",
       ok: probe.durationSec >= Math.max(1, floorSec),
@@ -150,19 +164,24 @@ export async function verifyFinalVideo(input: {
     const black = pure.checkBlackFrames(probe.blackSpans, probe.durationSec)
     checks.push({ name: "black-frames", ok: black.ok, detail: black.detail })
     if (input.voiced) {
+      // Not `probe.hasAudio`: every part carries a silent track, so a stream
+      // is always there. What a voiced run can lose is the voice.
+      const peak = await peakVolumeDb(input.videoPath)
+      const audible = peak !== null && peak > SILENCE_PEAK_DB
       checks.push({
         name: "audio-track",
-        ok: probe.hasAudio,
-        detail: probe.hasAudio
-          ? "audio track present"
-          : "the run was voiced but the final video has no audio track",
+        ok: audible,
+        detail: audible
+          ? `voice present (peak ${peak.toFixed(1)} dB)`
+          : `the run was voiced but the final video is silent (peak ${peak === null ? "unmeasurable" : `${peak} dB`})`,
       })
     }
   } catch (err) {
+    // The file is there (checked above) — what failed is reading it.
     checks.push({
-      name: "video-exists",
+      name: "duration-range",
       ok: false,
-      detail: `missing, empty or unreadable: ${(err as Error).message}`,
+      detail: `could not probe: ${(err as Error).message}`,
     })
   }
   return { ok: checks.every((c) => c.ok), durationSec, checks }

@@ -165,11 +165,4 @@ export function newRunId(): string {
   return `sm_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`
 }
 
-export function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM"
-  }
-}
+export { pidAlive } from "../electron/lib/smoke-lock"

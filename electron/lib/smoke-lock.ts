@@ -18,7 +18,7 @@ export function smokeLockPath(): string {
   return path.join(os.homedir(), ".demio-smoke.lock")
 }
 
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
@@ -44,13 +44,25 @@ export function liveSmokeLock(): { pid: number; runId: string } | null {
 
 /** Take the lock. Returns false if another live run holds it. */
 export function acquireSmokeLock(runId: string): boolean {
-  const held = liveSmokeLock()
-  if (held && held.pid !== process.pid) return false
-  fs.writeFileSync(
-    smokeLockPath(),
-    JSON.stringify({ pid: process.pid, runId, at: new Date().toISOString() })
-  )
-  return true
+  const body = JSON.stringify({
+    pid: process.pid,
+    runId,
+    at: new Date().toISOString(),
+  })
+  // `wx` fails if the file exists, so of two runs started together exactly
+  // one creates it. A lock whose owner is gone is stale: clear it, try once
+  // more — and lose that race too if another run got there first.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(smokeLockPath(), body, { flag: "wx" })
+      return true
+    } catch {
+      const held = liveSmokeLock()
+      if (held) return held.pid === process.pid
+      fs.rmSync(smokeLockPath(), { force: true })
+    }
+  }
+  return false
 }
 
 export function releaseSmokeLock(): void {

@@ -38,12 +38,14 @@ export async function maybeFault(
     throw new Error(`injected fault: ${stage}:throw`)
   }
   if (active.includes(`${stage}:hang`)) {
+    // Hangs until `signal` — the stage's own budget — aborts it. Without one
+    // it could never end, so that is an error, not a hang.
+    if (!signal) throw new Error(`injected fault: ${stage}:hang needs a signal`)
+    const aborted = () =>
+      new Error(`injected fault: ${stage}:hang — aborted by its budget`)
+    if (signal.aborted) throw aborted()
     await new Promise<never>((_resolve, reject) => {
-      signal?.addEventListener("abort", () =>
-        reject(
-          new Error(`injected fault: ${stage}:hang — aborted by its budget`)
-        )
-      )
+      signal.addEventListener("abort", () => reject(aborted()), { once: true })
     })
   }
 }

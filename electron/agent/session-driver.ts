@@ -310,7 +310,12 @@ async function subscribeSession(
             | Record<string, unknown>
             | undefined
           const live = liveTurn.get(key)
-          if (message && live && isUserSignalEvent(message)) {
+          // Only the turn's OWN prompt: the stall watchdog also sends through
+          // `session.sendMessage`, and its stub must not be filled with — and
+          // shown as a repeat of — what the user typed.
+          const isThisPrompt =
+            !live?.userSignal || live.userSignal["id"] === message?.["id"]
+          if (message && live && isThisPrompt && isUserSignalEvent(message)) {
             const enriched = enrichUserSignal(message, live.text)
             live.userSignal = enriched
             serialized = { ...serialized, message: enriched }
