@@ -25,7 +25,7 @@ export interface Scenario {
   answers?: Array<{ match: string; answer: string | string[] }>
   /** "auto" approves `submit_plan` unattended. Default: the gate waits for `smoke answer`. */
   approvePlan?: "auto" | "ask"
-  expect?: { minScenes?: number; maxDegraded?: number }
+  expect?: { minScenes?: number; maxDegraded?: number; minDurationSec?: number }
 }
 
 export interface RunOptions {
@@ -33,6 +33,8 @@ export interface RunOptions {
   scenario: Scenario
   modelId: string
   timeoutSec: number
+  /** Nobody is at the gates (a sweep): approve plans, give unanticipated questions a fixed reply. */
+  unattended: boolean
   home: string
   startedAt: string
 }
@@ -79,7 +81,7 @@ export interface GateLogEntry {
   tool: string
   toolCallId: string
   question?: string
-  answeredBy: "scenario" | "auto-approve" | "cli"
+  answeredBy: "scenario" | "auto-approve" | "unattended" | "cli"
   answer: unknown
 }
 

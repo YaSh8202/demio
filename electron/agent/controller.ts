@@ -56,6 +56,7 @@ import { ensureWorkspace, getWorkspace } from "./workspace"
 import { scenePlanSchema } from "./workflows/schemas"
 import { rehearseFlow } from "./workflows/rehearse"
 import { saveCredentials, deleteProfile } from "./workflows/credentials"
+import { recordRun } from "./workflows/scorecard"
 import { mastra, mastraStore } from "./mastra"
 import { getProject } from "../store"
 import log from "../lib/logger"
@@ -338,7 +339,9 @@ const generateDemoTool = createTool({
     }
     const projectId = ctx?.resourceId
     if (!projectId) {
-      throw new Error("generate_demo: no projectId (resourceId) in request context")
+      throw new Error(
+        "generate_demo: no projectId (resourceId) in request context"
+      )
     }
 
     const workspace = ensureWorkspace(threadId)
@@ -384,7 +387,10 @@ const generateDemoTool = createTool({
         type?: string
         payload?: { output?: unknown; stepName?: string }
       }
-      if (c?.type !== "workflow-step-output" || c.payload?.stepName !== "record-scene") {
+      if (
+        c?.type !== "workflow-step-output" ||
+        c.payload?.stepName !== "record-scene"
+      ) {
         return
       }
       const progress = c.payload?.output
@@ -423,12 +429,20 @@ const generateDemoTool = createTool({
       // `addEventListener` alone would silently never cancel a run started
       // after the session was already cancelled.
       const onAbort = () => {
-        run.cancel().catch((err: unknown) => log.error("[generate_demo] run.cancel failed:", err))
+        run
+          .cancel()
+          .catch((err: unknown) =>
+            log.error("[generate_demo] run.cancel failed:", err)
+          )
       }
       if (context.abortSignal?.aborted) onAbort()
       else context.abortSignal?.addEventListener("abort", onAbort)
       try {
-        result = await run.resume({ step: "record-scene", resumeData, outputWriter })
+        result = await run.resume({
+          step: "record-scene",
+          resumeData,
+          outputWriter,
+        })
       } catch (err) {
         // Code review fix #4: without this, a throw here left `activeDemoRuns`
         // pointing at a runId whose run is now in an unknown/broken state —
@@ -454,7 +468,11 @@ const generateDemoTool = createTool({
       activeDemoRuns.set(threadId, run.runId)
 
       const onAbort = () => {
-        run.cancel().catch((err: unknown) => log.error("[generate_demo] run.cancel failed:", err))
+        run
+          .cancel()
+          .catch((err: unknown) =>
+            log.error("[generate_demo] run.cancel failed:", err)
+          )
       }
       if (context.abortSignal?.aborted) onAbort()
       else context.abortSignal?.addEventListener("abort", onAbort)
@@ -520,8 +538,17 @@ const generateDemoTool = createTool({
     }
 
     if (result.status !== "success") {
-      const detail = result.status === "failed" ? `: ${result.error.message}` : ""
-      throw new Error(`demo-video workflow ${result.status}${detail}`)
+      const detail =
+        result.status === "failed" ? `: ${result.error.message}` : ""
+      const message = `demo-video workflow ${result.status}${detail}`
+      await recordRun({
+        workspace,
+        outcome: context.abortSignal?.aborted ? "aborted" : "failed",
+        scenes: 0,
+        plannedScenes: input.plan.scenes.length,
+        error: message,
+      })
+      throw new Error(message)
     }
 
     return { videoPath: result.result.videoPath }

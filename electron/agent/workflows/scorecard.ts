@@ -21,6 +21,7 @@ const pure = require("./scorecard-pure.cjs") as {
   scoreRehearsal: (o: Record<string, unknown>) => Record<string, unknown>
   scoreRecovery: (o: Record<string, unknown>) => Record<string, unknown>
   scoreScene: (o: Record<string, unknown>) => Record<string, unknown>
+  scoreRun: (o: Record<string, unknown>) => Record<string, unknown>
 }
 
 export const SCORECARD_FILE = "scorecard.jsonl"
@@ -87,14 +88,32 @@ export function recordScene(o: {
   return append(o.workspace, pure.scoreScene(o))
 }
 
+/** One thing the run could not do and carried on without. Never silent: it is on the run line. */
+export interface Degradation {
+  stage: "record-scene" | "narrate" | "tts" | "sync" | "compose" | "floor"
+  reason: string
+  sceneId?: string
+}
+
+/**
+ * The run's last line. Written on EVERY ending — a run that failed used to
+ * leave a scorecard of scene lines with nothing saying the run was over.
+ */
 export function recordRun(o: {
   workspace: string
+  outcome?: "video" | "failed" | "aborted"
   scenes: number
-  videoPath: string
+  plannedScenes?: number
+  videoPath?: string
+  degraded?: Degradation[]
+  nudges?: number
+  finalCheck?: {
+    ok: boolean
+    durationSec?: number
+    checks: Array<{ name: string; ok: boolean; detail: string }>
+  }
+  error?: string
 }): Promise<void> {
-  return append(o.workspace, {
-    kind: "run",
-    scenes: o.scenes,
-    videoPath: o.videoPath,
-  })
+  const { workspace, ...run } = o
+  return append(workspace, pure.scoreRun(run))
 }

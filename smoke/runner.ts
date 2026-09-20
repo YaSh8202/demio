@@ -138,10 +138,13 @@ function toGate(entry: Record<string, unknown>): Gate {
 /** What the scenario already knows the answer to, or undefined to wait for `smoke answer`. */
 function scenarioAnswer(
   scenario: Scenario,
-  gate: Gate
-): { by: "scenario" | "auto-approve"; resumeData: unknown } | undefined {
+  gate: Gate,
+  unattended: boolean
+):
+  | { by: "scenario" | "auto-approve" | "unattended"; resumeData: unknown }
+  | undefined {
   if (gate.tool === "submit_plan") {
-    return scenario.approvePlan === "auto"
+    return scenario.approvePlan === "auto" || unattended
       ? { by: "auto-approve", resumeData: { action: "approved" } }
       : undefined
   }
@@ -158,6 +161,15 @@ function scenarioAnswer(
     return {
       by: "scenario",
       resumeData: `username: ${creds.username}, password: ${creds.password}${url}`,
+    }
+  }
+  if (unattended) {
+    const first = gate.options?.[0]?.label
+    return {
+      by: "unattended",
+      resumeData:
+        first ??
+        "No one is available to answer. Use your best judgement and continue.",
     }
   }
   return undefined
@@ -237,7 +249,7 @@ async function main(run: RunOptions) {
   const respond = (
     gate: Gate,
     resumeData: unknown,
-    answeredBy: "scenario" | "auto-approve" | "cli"
+    answeredBy: "scenario" | "auto-approve" | "unattended" | "cli"
   ) => {
     handled.add(gate.toolCallId)
     state.gateLog.push({
@@ -328,7 +340,7 @@ async function main(run: RunOptions) {
         .map(toGate)
         .filter((g) => !handled.has(g.toolCallId))
       for (const gate of open) {
-        const known = scenarioAnswer(scenario, gate)
+        const known = scenarioAnswer(scenario, gate, run.unattended)
         if (known) respond(gate, known.resumeData, known.by)
       }
       const gates = open.filter((g) => !handled.has(g.toolCallId))

@@ -115,3 +115,55 @@ export async function verifyScene(input: VerifyInput): Promise<VerifyReport> {
 
   return { ok: checks.every((c) => c.ok), checks }
 }
+
+/**
+ * The same file-level checks, on the composed `output/demo.mp4`. Every scene
+ * was verified on its way in; nothing looked at what came out — a compose that
+ * dropped footage, or a voiced run that lost its audio in the concat, read as
+ * a clean run.
+ */
+export async function verifyFinalVideo(input: {
+  videoPath: string
+  /** Sum of the scenes' own durations — the final cut is retimed, so this is a floor, not a target. */
+  scenesDurationSec: number
+  voiced: boolean
+  minRatio?: number
+}): Promise<{
+  ok: boolean
+  durationSec: number
+  checks: VerifyReport["checks"]
+}> {
+  const checks: VerifyReport["checks"] = []
+  let durationSec = 0
+  try {
+    const stat = await fs.stat(input.videoPath)
+    if (stat.size === 0) throw new Error("empty file")
+    checks.push({ name: "video-exists", ok: true, detail: input.videoPath })
+    const probe = await probeArtifact(input.videoPath)
+    durationSec = probe.durationSec
+    const floorSec = input.scenesDurationSec * (input.minRatio ?? 0.5)
+    checks.push({
+      name: "duration-range",
+      ok: probe.durationSec >= Math.max(1, floorSec),
+      detail: `duration ${probe.durationSec.toFixed(1)}s, scenes total ${input.scenesDurationSec.toFixed(1)}s`,
+    })
+    const black = pure.checkBlackFrames(probe.blackSpans, probe.durationSec)
+    checks.push({ name: "black-frames", ok: black.ok, detail: black.detail })
+    if (input.voiced) {
+      checks.push({
+        name: "audio-track",
+        ok: probe.hasAudio,
+        detail: probe.hasAudio
+          ? "audio track present"
+          : "the run was voiced but the final video has no audio track",
+      })
+    }
+  } catch (err) {
+    checks.push({
+      name: "video-exists",
+      ok: false,
+      detail: `missing, empty or unreadable: ${(err as Error).message}`,
+    })
+  }
+  return { ok: checks.every((c) => c.ok), durationSec, checks }
+}

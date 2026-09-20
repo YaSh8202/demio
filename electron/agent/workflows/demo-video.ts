@@ -51,6 +51,7 @@ import { synthesizeNarrationAudio } from "../lib/voiceover"
 import { parseActionEntries, renderScene } from "./sync"
 import { projectSteps } from "./transcript"
 import { recordRun } from "./scorecard"
+import { verifyFinalVideo } from "./verify"
 import {
   narrateScenes,
   narrationSegmentsSchema,
@@ -511,10 +512,21 @@ const composeStep = createStep({
       "+faststart",
       outputPath,
     ])
+    const finalCheck = await verifyFinalVideo({
+      videoPath: outputPath,
+      scenesDurationSec: inputData.results.reduce(
+        (sum, r) => sum + r.durationSec,
+        0
+      ),
+      voiced: inputData.sceneAudio !== null,
+    })
     await recordRun({
       workspace: inputData.workspace,
+      outcome: "video",
       scenes: inputData.results.length,
+      plannedScenes: inputData.plan.scenes.length,
       videoPath: outputPath,
+      finalCheck,
     })
     return { videoPath: outputPath, scenes: inputData.results }
   },
