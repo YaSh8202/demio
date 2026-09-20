@@ -22,6 +22,7 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), "demio-stall-"))
 process.env.DEMIO_HOME = home
 process.env.DEMIO_MOCK_MODEL = "1"
 process.env.DEMIO_STALL_SETTLE_MS = "300"
+process.env.DEMIO_TURN_TOOL_BUDGET = "5"
 process.env.DEMIO_AGENT_BROWSER_BIN = path.join(
   HERE,
   "workflows/fixtures/fake-agent-browser.cjs"
@@ -217,6 +218,42 @@ describe("a stalled model still ends with a video", () => {
       (r.runLine["degraded"] as Array<{ stage: string }>).map((d) => d.stage)
     ).toEqual(["floor"])
     expect(r.runLine["pass"]).toBe(false)
+  }, 60_000)
+
+  test("a model that never stops poking is stopped, and still ends with a video", async () => {
+    const { project, thread } = store.createProject("flail", "mock:flails", {
+      domain: "example.test",
+    })
+    const workspace = ensureWorkspace(thread.id)
+    const key = `${project.id}:${thread.id}`
+    const seen: string[] = []
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`events: ${seen.join(",")}`)),
+        50_000
+      )
+      driver.addSessionEventSink((k, event) => {
+        const type = String(event["type"])
+        if (k !== key || !type.startsWith("harness_")) return
+        seen.push(type)
+        if (type === "harness_video_ready") {
+          clearTimeout(timer)
+          resolve()
+        }
+      })
+    })
+    await driver.sendMessage(project.id, thread.id, {
+      text: "Make a demo of the homepage.",
+      modelId: "mock:flails",
+    })
+    await ready
+    // Ended three times — the request's turn and both nudged ones — then the
+    // harness stopped asking and recorded the video itself.
+    expect(seen.filter((t) => t === "harness_turn_ended")).toHaveLength(3)
+    expect(seen.filter((t) => t === "harness_nudge")).toHaveLength(2)
+    expect(
+      fs.statSync(path.join(workspace, "output/demo.mp4")).size
+    ).toBeGreaterThan(0)
   }, 60_000)
 
   // ── It never answers for the user ────────────────────────────────────────

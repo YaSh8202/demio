@@ -41,6 +41,17 @@ import type { Scene } from "./workflows/schemas"
 import { PIPELINE_TOOLS, stallState } from "./stall-state"
 
 export const MAX_NUDGES = 2
+
+/**
+ * Tool calls a turn may make between pipeline calls before the watchdog ends
+ * it. The controller's own per-turn limit is 1000 steps and is not
+ * configurable, so a model that cannot get past an obstacle — a login button
+ * that ignores clicks — pokes at it by hand indefinitely: one smoke run made
+ * 91 shell commands this way after its rehearsal had already spent 100 on the
+ * same button. That never ends the turn, so nothing else here ever runs.
+ * Ending it hands the run to the ladder, which does know what to do next.
+ */
+const TURN_TOOL_BUDGET = Number(process.env.DEMIO_TURN_TOOL_BUDGET) || 60
 /** `agent_end` is not the end of the turn's events — let the dust settle. */
 const SETTLE_MS = Number(process.env.DEMIO_STALL_SETTLE_MS) || 4_000
 
@@ -59,10 +70,28 @@ export function watchForStall(
 ): void {
   const type = event["type"]
   if (type === "tool_start") {
+    const state = stallState(key)
     if (PIPELINE_TOOLS.has(String(event["toolName"]))) {
-      stallState(key).pipelineCalls += 1
+      state.pipelineCalls += 1
+      state.looseCalls = 0
+    } else if (++state.looseCalls > TURN_TOOL_BUDGET && !state.overBudget) {
+      state.overBudget = true
+      log.warn(
+        `[stall-watchdog] ${key}: ${state.looseCalls} tool calls with no pipeline progress — ending the turn`
+      )
+      emit(key, { type: "harness_turn_ended", toolCalls: state.looseCalls })
+      // `session.abort()`, not the driver's `cancel`: this is not the user
+      // stopping the run, and the ladder must still act on what follows.
+      void getOrCreateSession(projectId, threadId)
+        .then((session) => session.abort())
+        .catch((err: unknown) =>
+          log.error("[stall-watchdog] could not end the turn:", err)
+        )
     }
   } else if (type === "agent_start") {
+    // A new turn (the user's, or a nudge's) gets a fresh allowance.
+    stallState(key).looseCalls = 0
+    stallState(key).overBudget = false
     const t = timers.get(key)
     if (t) clearTimeout(t)
   } else if (type === "agent_end") {
@@ -123,6 +152,8 @@ async function check(
   // `activePlan` is deliberately not a signal: it persists for the life of the
   // thread, long after the request that set it.
   const started =
+    // Sixty tool calls is not a conversation, whatever they were.
+    state.overBudget ||
     state.pipelineCalls > 0 ||
     modifiedSince(rehearsalPaths(workspace).checkpoint, state.lastUserMessageAt)
   if (!started) return

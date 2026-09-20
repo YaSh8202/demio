@@ -6,6 +6,8 @@
 //
 //   mock:ends-early   every turn is one line of plain text, then stop — the
 //                     weak model that asks "shall I proceed?" and waits
+//   mock:flails       never stops calling a workspace tool — the model that
+//                     cannot get past an obstacle and pokes at it forever
 //   mock:looks-around its first call lists the workspace, then it answers in
 //                     plain text — a model answering a QUESTION, which used a
 //                     tool and is not a stalled demo
@@ -80,6 +82,31 @@ export function mockModel(behaviour: string) {
                   },
                 ]
               : text("The site has a homepage and a pricing page."),
+        }),
+      }),
+    })
+  }
+  if (behaviour === "flails") {
+    let n = 0
+    return new MockLanguageModelV4({
+      provider: "mock",
+      modelId: behaviour,
+      doStream: async () => ({
+        stream: simulateReadableStream<LanguageModelV4StreamPart>({
+          chunks: [
+            { type: "stream-start", warnings: [] },
+            {
+              type: "tool-call",
+              toolCallId: `call_flail_${Date.now()}_${n++}`,
+              toolName: "mastra_workspace_list_files",
+              input: JSON.stringify({ path: "." }),
+            },
+            {
+              type: "finish",
+              finishReason: { unified: "tool-calls", raw: "tool_calls" },
+              usage,
+            },
+          ],
         }),
       }),
     })

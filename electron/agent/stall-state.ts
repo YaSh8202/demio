@@ -9,6 +9,10 @@ interface StallState {
   nudges: number
   /** Pipeline tool calls since the user last spoke — see `PIPELINE_TOOLS`. */
   pipelineCalls: number
+  /** Tool calls since the last pipeline call (or the turn's start): work with nothing to show for it. */
+  looseCalls: number
+  /** The watchdog ended a turn that ran past `TURN_TOOL_BUDGET`. */
+  overBudget: boolean
   lastUserMessageAt: number
   cancelled: boolean
   salvageTried: boolean
@@ -36,6 +40,8 @@ export function stallState(key: string): StallState {
     s = {
       nudges: 0,
       pipelineCalls: 0,
+      looseCalls: 0,
+      overBudget: false,
       lastUserMessageAt: Date.now(),
       cancelled: false,
       salvageTried: false,
@@ -57,6 +63,8 @@ export function noteUserMessage(key: string): void {
   states.set(key, {
     nudges: 0,
     pipelineCalls: 0,
+    looseCalls: 0,
+    overBudget: false,
     lastUserMessageAt: Date.now(),
     cancelled: false,
     salvageTried: false,
