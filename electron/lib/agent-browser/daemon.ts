@@ -8,6 +8,7 @@
 
 import log from "../logger"
 import { execAgentBrowser } from "./exec"
+import { liveSmokeLock } from "../smoke-lock"
 
 /** Track whether we've already cleaned up stale sessions on this launch. */
 let daemonInitialized = false
@@ -24,6 +25,16 @@ let daemonInitialized = false
 export async function ensureDaemon(): Promise<void> {
   if (daemonInitialized) return
   daemonInitialized = true
+
+  // `close --all` closes every session on the machine's one daemon — a
+  // headless smoke run's included. Its sessions are not ours to clean up.
+  const smoke = liveSmokeLock()
+  if (smoke) {
+    log.log(
+      `[agent-browser] Smoke run ${smoke.runId} is live — skipping stale-session cleanup`
+    )
+    return
+  }
 
   try {
     // Kill any stale sessions from a previous crash
@@ -49,6 +60,7 @@ export async function ensureDaemon(): Promise<void> {
  * processes are left behind.
  */
 export async function stopDaemon(): Promise<void> {
+  if (liveSmokeLock()) return
   try {
     await execAgentBrowser(["close --all"], { timeout: 10_000 })
     log.log("[agent-browser] Daemon stopped, all sessions closed")

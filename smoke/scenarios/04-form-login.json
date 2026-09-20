@@ -1,0 +1,12 @@
+{
+  "id": "form-login",
+  "source": "test-prompts.md 3.1",
+  "domain": "the-internet.herokuapp.com",
+  "prompt": "Demo the login at /login. The test username and password are printed on the login page itself — read them from there. Sign in, show the secure area, then sign out.",
+  "credentials": {
+    "username": "tomsmith",
+    "password": "SuperSecretPassword!",
+    "loginUrl": "https://the-internet.herokuapp.com/login"
+  },
+  "expect": { "minScenes": 1, "maxDegraded": 0 }
+}

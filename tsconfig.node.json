@@ -30,7 +30,8 @@
     "forge.config.ts",
     "forge.env.d.ts",
     "axiom.config.ts",
-    "electron/**/*.ts"
+    "electron/**/*.ts",
+    "smoke/**/*.ts"
   ],
   // Eval files import the axiom SDK, which is not a dependency of the app.
   // They are checked by their own toolchain (`bunx axiom eval`), not here.

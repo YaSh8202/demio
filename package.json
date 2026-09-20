@@ -18,6 +18,7 @@
     "test:workflows": "node --test electron/agent/workflows/*.test.js",
     "eval": "axiom eval",
     "scorecard": "node scripts/scorecard.js",
+    "smoke": "bun smoke/cli.ts",
     "mastra:dev": "mastra dev",
     "mastra:build": "mastra build"
   },

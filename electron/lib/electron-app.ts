@@ -36,6 +36,11 @@ export function userDataDir(): string {
   const app = electronApp()
   if (app) return app.getPath("userData")
   // Evals set this to a temp dir so the sandbox shim they build never lands
-  // in the real user's directories.
-  return process.env.DEMIO_USER_DATA_DIR ?? path.join(os.homedir(), ".demio")
+  // in the real user's directories. `DEMIO_HOME` (see store/paths.ts) covers
+  // it too, so one variable isolates a headless run completely.
+  return (
+    process.env.DEMIO_USER_DATA_DIR ||
+    process.env.DEMIO_HOME ||
+    path.join(os.homedir(), ".demio")
+  )
 }

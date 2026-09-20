@@ -19,9 +19,15 @@ import os from "node:os"
 import path from "node:path"
 import fs from "node:fs"
 
-/** Root store directory: ~/.demio */
+/**
+ * Root store directory: ~/.demio
+ *
+ * `DEMIO_HOME` moves the whole tree — projects, workspaces, mastra.db — so a
+ * headless smoke run never touches the live app's data. It must be set before
+ * this module's importers load: `mastraStore` opens its db at module load.
+ */
 export function storeRoot(): string {
-  return path.join(os.homedir(), ".demio")
+  return process.env.DEMIO_HOME || path.join(os.homedir(), ".demio")
 }
 
 /** Global project index: ~/.demio/projects.json */

@@ -135,8 +135,10 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
 /**
  * Get the env var fallback for a provider.
  */
-function getEnvKey(provider: string): string | undefined {
+export function getEnvKey(provider: string): string | undefined {
   switch (provider) {
+    case "elevenlabs":
+      return process.env.ELEVENLABS_API_KEY
     case "anthropic":
       return process.env.ANTHROPIC_API_KEY
     case "openai":

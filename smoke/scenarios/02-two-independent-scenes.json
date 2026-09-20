@@ -1,0 +1,7 @@
+{
+  "id": "two-independent-scenes",
+  "source": "test-prompts.md 0.2",
+  "domain": "developer.mozilla.org",
+  "prompt": "Two short scenes. Scene 1: open the homepage and hover the main navigation. Scene 2: open /en-US/docs/Web/JavaScript and scroll through the first section. Both scenes start from a fresh page load.",
+  "expect": { "minScenes": 2, "maxDegraded": 0 }
+}

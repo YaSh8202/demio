@@ -58,11 +58,18 @@ import {
 } from "./narrate"
 import { resolveFfmpeg } from "../../lib/ffmpeg"
 import { getDecryptedKey } from "../../store/provider-keys"
+import { getEnvKey } from "../providers"
 import { hasProfile, loginProfile } from "./credentials"
 import { readScripts } from "./rehearsal"
 import log from "../../lib/logger"
 
 const execFileAsync = promisify(execFile)
+
+// Stored key first, env second — same order as `getModel`. The env half is
+// what lets a headless run (no safeStorage, so no stored keys) be voiced.
+function elevenLabsApiKey(): string | null {
+  return getDecryptedKey("elevenlabs") || getEnvKey("elevenlabs") || null
+}
 
 // `elevenLabsKey` is deliberately NOT part of this schema (code review fix
 // #4): `createRun`/`start`/`resume` snapshot `inputData` into the workflow's
@@ -313,7 +320,7 @@ const narrateStep = createStep({
     // every scene and only THEN hard-fail in `ttsStep` — degrading to an
     // unvoiced video (the pre-fix-round-1 behavior) here instead skips the
     // wasted narration call and matches what `ttsStep` now also degrades to.
-    if (!inputData.voiceId || !getDecryptedKey("elevenlabs")) {
+    if (!inputData.voiceId || !elevenLabsApiKey()) {
       return { ...inputData, narration: null }
     }
     const actionLogs = await Promise.all(
@@ -395,7 +402,7 @@ const ttsStep = createStep({
     }
     // Key re-read at execution time — never in workflow state (see
     // inputSchema comment).
-    const elevenLabsKey = getDecryptedKey("elevenlabs")
+    const elevenLabsKey = elevenLabsApiKey()
     if (!elevenLabsKey) {
       return { ...inputData, sceneAudio: null }
     }
