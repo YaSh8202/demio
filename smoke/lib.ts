@@ -35,6 +35,8 @@ export interface RunOptions {
   timeoutSec: number
   /** Nobody is at the gates (a sweep): approve plans, give unanticipated questions a fixed reply. */
   unattended: boolean
+  /** `smoke salvage`: record what this earlier run's thread already rehearsed, instead of starting over. */
+  salvage?: { projectId: string; threadId: string; fromRunId: string }
   home: string
   startedAt: string
 }

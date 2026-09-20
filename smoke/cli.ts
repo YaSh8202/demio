@@ -5,6 +5,7 @@
 //   bun run smoke sweep [dir] [--model <id>] [--timeout <sec>]   every scenario, serially, unattended
 //   bun run smoke watch  [runId] [--max-wait <sec>]   block until the run needs attention
 //   bun run smoke answer <runId> <toolCallId> '<json|text>'
+//   bun run smoke salvage [runId]                     a run ended with no video: record what it DID rehearse
 //   bun run smoke report [runId]                      findings + where the evidence is
 //   bun run smoke status [runId]
 //   bun run smoke list
@@ -166,8 +167,14 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const { positional, flags } = parseArgs(process.argv.slice(2))
 const [command, ...rest] = positional
 
-async function startRun(scenarioPath: string) {
-  const scenario = readJson<Scenario>(path.resolve(scenarioPath))
+async function startRun(
+  scenarioPath: string | Scenario,
+  salvage?: RunOptions["salvage"]
+) {
+  const scenario =
+    typeof scenarioPath === "string"
+      ? readJson<Scenario>(path.resolve(scenarioPath))
+      : scenarioPath
   if (!scenario?.id || !scenario.domain || !scenario.prompt) {
     fail(`${scenarioPath}: a scenario needs id, domain and prompt`)
   }
@@ -183,6 +190,7 @@ async function startRun(scenarioPath: string) {
       (flags["model"] as string) || scenario.modelId || SMOKE_DEFAULT_MODEL_ID,
     timeoutSec: Number(flags["timeout"]) || SMOKE_DEFAULT_TIMEOUT_SEC,
     unattended: flags["unattended"] === true,
+    salvage,
     home: smokeHome(),
     startedAt: new Date().toISOString(),
   }
@@ -403,6 +411,29 @@ switch (command) {
     break
   }
 
+  case "salvage": {
+    const fromRunId = resolveRunId(rest[0])
+    const from = readState(fromRunId)
+    const options = readJson<RunOptions>(runFiles(runDir(fromRunId)).options)
+    if (!from?.projectId || !from.threadId || !options) {
+      fail(`run ${fromRunId} never got as far as a thread — nothing to salvage`)
+    }
+    if (!TERMINAL_PHASES.has(withLiveness(from).phase)) {
+      fail(`run ${fromRunId} is still going — \`smoke stop\` it first`)
+    }
+    const started = await startRun(options.scenario, {
+      projectId: from.projectId,
+      threadId: from.threadId,
+      fromRunId,
+    })
+    out({
+      ...started,
+      salvaging: fromRunId,
+      next: `bun run smoke watch ${started.runId}`,
+    })
+    break
+  }
+
   case "report": {
     const report = reportFor(resolveRunId(rest[0]))
     out(report, findingsPure.exitCode(report.findings))
@@ -450,6 +481,6 @@ switch (command) {
 
   default:
     fail(
-      "usage: smoke <start|sweep|watch|answer|report|status|list|stop> … — see the header of smoke/cli.ts"
+      "usage: smoke <start|sweep|salvage|watch|answer|report|status|list|stop> … — see the header of smoke/cli.ts"
     )
 }

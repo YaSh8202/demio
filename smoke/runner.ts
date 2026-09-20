@@ -233,16 +233,22 @@ async function main(run: RunOptions) {
 
   initStore()
   const scenario = run.scenario
-  const { project, thread } = createProject(
-    `smoke: ${scenario.id}`,
-    run.modelId,
-    { domain: scenario.domain }
-  )
-  if (scenario.voiceId) {
-    updateProjectMeta(project.id, { voiceId: scenario.voiceId })
+  // `smoke salvage`: pick up the thread an earlier run left behind instead of
+  // starting one — its rehearsed scenes are the whole point.
+  let projectId = run.salvage?.projectId
+  let threadId = run.salvage?.threadId
+  if (!projectId || !threadId) {
+    const { project, thread } = createProject(
+      `smoke: ${scenario.id}`,
+      run.modelId,
+      { domain: scenario.domain }
+    )
+    projectId = project.id
+    threadId = thread.id
   }
-  const projectId = project.id
-  const threadId = thread.id
+  if (scenario.voiceId) {
+    updateProjectMeta(projectId, { voiceId: scenario.voiceId })
+  }
   save({ projectId, threadId, workspace: ensureWorkspace(threadId) })
 
   process.on("SIGTERM", () => {
@@ -414,29 +420,48 @@ async function main(run: RunOptions) {
     }
   }, INBOX_POLL_MS)
 
-  // The hard stop. Nothing in the agent stack has a wall-clock limit of its
-  // own (not `agent.generate`, not the workflow, not the compose ffmpeg), so
-  // without this a stalled provider connection hangs `smoke watch` forever.
-  setTimeout(() => {
-    // Cancelling can itself hang — it is asking a wedged run to stop. The
-    // budget is the budget: give it ten seconds, then end regardless.
-    const cancelled = driver.cancel(projectId, threadId).catch(() => {})
-    const grace = new Promise((resolve) => setTimeout(resolve, 10_000))
-    void Promise.race([cancelled, grace]).then(() => {
-      finish(
-        "timeout",
-        `exceeded the ${run.timeoutSec}s wall-clock budget` +
-          (state.activeTools.length > 0
-            ? ` while running ${state.activeTools.join(", ")}`
-            : ""),
-        1
-      )
+  // Out of time. Not a cancel: a run that is slow but working has usually
+  // proven something by now, and "always a video" does not stop applying
+  // because a clock ran out — so ask the harness to wrap up with what
+  // rehearsal proved (or the floor scene). Only if THAT cannot finish either
+  // does the run end with nothing.
+  const WRAP_UP_GRACE_MS = 15 * 60_000
+  const wrapUp = (why: string) => {
+    harnessBusy = true
+    if (settleTimer) clearTimeout(settleTimer)
+    save({ detail: `${why} — wrapping up with what was rehearsed` })
+    void driver.wrapUp(projectId, threadId).catch((error: unknown) => {
+      state.errors.push({
+        at: new Date().toISOString(),
+        message: `wrap-up failed: ${String(error)}`,
+      })
+      harnessBusy = false
+      armSettle()
     })
-  }, run.timeoutSec * 1000)
+    setTimeout(
+      () =>
+        finish(
+          "timeout",
+          `${why}, and the wrap-up did not finish in ${WRAP_UP_GRACE_MS / 60_000} min either`,
+          1
+        ),
+      WRAP_UP_GRACE_MS
+    )
+  }
+  setTimeout(
+    () => wrapUp(`exceeded the ${run.timeoutSec}s wall-clock budget`),
+    run.timeoutSec * 1000
+  )
 
   // Keeps elapsedSec honest for `status` while a long tool call emits nothing.
   setInterval(() => !finished && save(), 15_000)
 
+  if (run.salvage) {
+    await driver.ensureSubscribed(projectId, threadId)
+    save({ phase: "running" })
+    wrapUp("salvaging an earlier run")
+    return
+  }
   await driver.sendMessage(projectId, threadId, {
     text: scenario.prompt,
     modelId: run.modelId,

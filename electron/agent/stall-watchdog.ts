@@ -127,22 +127,47 @@ function freshVideo(workspace: string, since: number): string | null {
   }
 }
 
-async function check(
+/**
+ * Out of time: stop asking the model and deliver what rehearsal has proven —
+ * or the floor scene if it proved nothing. For a caller with a deadline (the
+ * smoke runner's wall clock) and for a run that died with proven scenes on
+ * disk (`smoke salvage`). A run that is slow but working should end with the
+ * video it earned, not with nothing because a clock ran out.
+ */
+export async function wrapUp(
   key: string,
   projectId: string,
   threadId: string,
   emit: Emit
 ): Promise<void> {
+  const t = timers.get(key)
+  if (t) clearTimeout(t)
+  const session = await getOrCreateSession(projectId, threadId)
+  // Not the driver's `cancel`: that marks the run as stopped by the user.
+  if (session.displayState.get().isRunning) session.abort()
+  await check(key, projectId, threadId, emit, true)
+}
+
+async function check(
+  key: string,
+  projectId: string,
+  threadId: string,
+  emit: Emit,
+  /** `wrapUp`: skip every "is this a stall?" test and the nudges — go straight to recording. */
+  force = false
+): Promise<void> {
   if (busy.has(key)) return
   const state = stallState(key)
-  if (state.cancelled) return
+  if (state.cancelled && !force) return
 
   const session = await getOrCreateSession(projectId, threadId)
   const display = session.displayState.get()
-  if (display.isRunning || display.pendingSuspensions.size > 0) return
+  if (!force && (display.isRunning || display.pendingSuspensions.size > 0)) {
+    return
+  }
 
   const workspace = ensureWorkspace(threadId)
-  if (freshVideo(workspace, state.lastUserMessageAt)) return
+  if (!force && freshVideo(workspace, state.lastUserMessageAt)) return
 
   // Is THIS request a demo being made? A pipeline tool ran since the user
   // spoke, or rehearsal wrote its checkpoint since then (the same fact, read
@@ -156,7 +181,7 @@ async function check(
     state.overBudget ||
     state.pipelineCalls > 0 ||
     modifiedSince(rehearsalPaths(workspace).checkpoint, state.lastUserMessageAt)
-  if (!started) return
+  if (!started && !force) return
   const approved = Boolean(
     (session.state.get() as { activePlan?: unknown }).activePlan
   )
@@ -171,7 +196,7 @@ async function check(
   )
   const proven = scripts.filter((s) => doneFlows.has(s.sceneId))
 
-  if (state.nudges < MAX_NUDGES) {
+  if (state.nudges < MAX_NUDGES && !force) {
     state.nudges += 1
     const nudge = nudgeText({
       approved,
@@ -186,7 +211,7 @@ async function check(
     return
   }
 
-  if (state.salvageTried) return
+  if (state.salvageTried && !force) return
   state.salvageTried = true
   busy.add(key)
   const salvage = new AbortController()

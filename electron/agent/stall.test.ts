@@ -256,6 +256,51 @@ describe("a stalled model still ends with a video", () => {
     ).toBeGreaterThan(0)
   }, 60_000)
 
+  test("out of time → wrap up: what rehearsal proved becomes the video, no model involved", async () => {
+    const { project, thread } = store.createProject(
+      "wrapup",
+      "mock:ends-early",
+      {
+        domain: "example.test",
+      }
+    )
+    const workspace = ensureWorkspace(thread.id)
+    seedRehearsal(workspace, {
+      flows: [
+        {
+          id: "home",
+          label: "Homepage",
+          startUrl: "https://example.test/",
+          status: "done",
+          sceneIds: ["home.01"],
+          detail: "DONE",
+        },
+        {
+          id: "cart",
+          label: "Cart",
+          startUrl: "https://example.test/cart",
+          status: "in-progress",
+          sceneIds: [],
+          detail: "",
+        },
+      ],
+      scripts: [script("home.01")],
+    })
+    await driver.wrapUp(project.id, thread.id)
+    expect(
+      fs.statSync(path.join(workspace, "output/demo.mp4")).size
+    ).toBeGreaterThan(0)
+    const runLine = fs
+      .readFileSync(path.join(workspace, "scorecard.jsonl"), "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+      .filter((e) => e["kind"] === "run")
+      .at(-1)!
+    expect(runLine["salvaged"]).toBe(true)
+    expect(runLine["scenes"]).toBe(1)
+  }, 60_000)
+
   // ── It never answers for the user ────────────────────────────────────────
   // The watchdog acts on a demo request that stalled. Everything else that
   // ends a turn without a fresh video is a conversation, and nudging it —

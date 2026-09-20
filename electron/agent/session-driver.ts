@@ -15,7 +15,7 @@ import { getOrCreateSession } from "./controller"
 import { DEFAULT_MODEL_ID } from "./types"
 import { ensureWorkspace } from "./workspace"
 import type { SubmitPlanSuspendPayload } from "@mastra/core/tools"
-import { watchForStall } from "./stall-watchdog"
+import { watchForStall, wrapUp as wrapUpRun } from "./stall-watchdog"
 import { noteCancel, noteUserMessage } from "./stall-state"
 
 export type SessionEventSink = (
@@ -554,4 +554,11 @@ export async function listMessages(
     serialized.push(live)
   }
   return serialized
+}
+
+/** Out of time: deliver what rehearsal has proven (see `wrapUp` in ./stall-watchdog). */
+export async function wrapUp(projectId: string, threadId: string) {
+  await ensureSubscribed(projectId, threadId)
+  await wrapUpRun(`${projectId}:${threadId}`, projectId, threadId, emit)
+  return { ok: true }
 }
