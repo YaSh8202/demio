@@ -102,3 +102,38 @@ export async function probeArtifact(videoPath: string): Promise<ArtifactProbe> {
     hasAudio: pure.hasAudioStream(blackStderr),
   }
 }
+
+/**
+ * Peak level of the audio, in dB — null when it cannot be measured.
+ *
+ * "Has an audio stream" cannot tell a voiced video from a silent one here:
+ * every scene file is muxed with a silent AAC track so the final concat can
+ * stream-copy. Digital silence peaks at about -91 dB; speech is nowhere near.
+ */
+export async function peakVolumeDb(videoPath: string): Promise<number | null> {
+  const ffmpeg = resolveFfmpeg()
+  if (!ffmpeg) return null
+  let stderr = ""
+  try {
+    ;({ stderr } = await execFileAsync(
+      ffmpeg,
+      [
+        "-hide_banner",
+        "-i",
+        videoPath,
+        "-vn",
+        "-af",
+        "volumedetect",
+        "-f",
+        "null",
+        "-",
+      ],
+      { timeout: 120_000 }
+    ))
+  } catch (err) {
+    stderr = (err as { stderr?: string }).stderr ?? ""
+  }
+  const m = /max_volume:\s*(-?[\d.]+|-inf) dB/.exec(stderr)
+  if (!m) return null
+  return m[1] === "-inf" ? -Infinity : Number(m[1])
+}

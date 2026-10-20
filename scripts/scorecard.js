@@ -15,7 +15,10 @@ const { summarize } = require("../electron/agent/workflows/scorecard-pure.cjs")
 const args = process.argv.slice(2)
 const flags = new Set(args.filter((a) => a.startsWith("--")))
 const want = args.find((a) => !a.startsWith("--"))
-const root = path.join(os.homedir(), ".demio", "workspaces")
+const root = path.join(
+  process.env.DEMIO_HOME || path.join(os.homedir(), ".demio"),
+  "workspaces"
+)
 
 const cards = (fs.existsSync(root) ? fs.readdirSync(root) : [])
   .map((id) => ({ id, file: path.join(root, id, "scorecard.jsonl") }))
@@ -30,7 +33,11 @@ const picked = flags.has("--all")
     : cards.slice(0, 1)
 
 if (picked.length === 0) {
-  console.error(want ? `no scorecard for a thread starting "${want}"` : "no scorecards yet — they are written by runs made after this was added")
+  console.error(
+    want
+      ? `no scorecard for a thread starting "${want}"`
+      : "no scorecards yet — they are written by runs made after this was added"
+  )
   process.exit(1)
 }
 
@@ -41,5 +48,7 @@ for (const c of picked) {
     .filter(Boolean)
     .map((l) => JSON.parse(l))
   console.log(`\n── ${c.id}  (${new Date(c.mtime).toLocaleString()})`)
-  console.log(flags.has("--json") ? JSON.stringify(entries, null, 2) : summarize(entries))
+  console.log(
+    flags.has("--json") ? JSON.stringify(entries, null, 2) : summarize(entries)
+  )
 }

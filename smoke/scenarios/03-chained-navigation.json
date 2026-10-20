@@ -1,0 +1,7 @@
+{
+  "id": "chained-navigation",
+  "source": "test-prompts.md 1.2",
+  "domain": "en.wikipedia.org",
+  "prompt": "One flow, three chained scenes with no reloads between them. Scene 1: open the \"Electron (software framework)\" article. Scene 2: click the \"Chromium\" link in the infobox. Scene 3: click \"Talk\" at the top of the Chromium article. Each scene must start where the previous one ended.",
+  "expect": { "minScenes": 3, "maxDegraded": 0 }
+}

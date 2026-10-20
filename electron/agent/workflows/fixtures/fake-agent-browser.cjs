@@ -13,6 +13,14 @@
 // back exactly which commands the agent ran — including the ones the replay
 // engine ran to validate an amendment.
 //
+// With FAKE_AB_RECORD set (to a state-file path) it also plays the camera, for
+// the harness tests that run the whole demo-video workflow offline:
+// `record restart <video> --log-actions <log>` starts a take, every command
+// after it is appended to the action log the way the real CLI's
+// `--log-actions` does, and `record stop` renders a real test-pattern clip as
+// long as the take ran — so verify, the EDL and the compose concat all work on
+// a genuine file. Unset, none of this runs and the fake is what it always was.
+//
 // Reached two ways, matching production: `execAgentBrowser` spawns it
 // directly (DEMIO_AGENT_BROWSER_BIN), and the agent's shell finds it on PATH
 // through the sandbox shim, which links whatever `resolveBinaryPath` returns.
@@ -76,6 +84,70 @@ if (rule && rule.activates && statePath && !state.includes(rule.activates)) {
 const exit = rule && typeof rule.exit === "number" ? rule.exit : 0
 const stdout = rule && rule.stdout !== undefined ? rule.stdout : "ok"
 const stderr = rule && rule.stderr ? rule.stderr : ""
+
+// ── Camera (opt-in) ─────────────────────────────────────────────────────────
+const recordState = process.env.FAKE_AB_RECORD
+if (recordState && exit === 0) {
+  const unquote = (v) => (v || "").replace(/^'(.*)'$/, "$1")
+  let take = null
+  try {
+    take = JSON.parse(fs.readFileSync(recordState, "utf8"))
+  } catch {
+    take = null
+  }
+  const restart =
+    /^record (?:re)?start ('[^']+'|\S+)(?: --log-actions ('[^']+'|\S+))?/.exec(
+      command
+    )
+  if (restart) {
+    const next = {
+      video: unquote(restart[1]),
+      actions: unquote(restart[2]),
+      startedAt: Date.now(),
+    }
+    fs.mkdirSync(path.dirname(next.video), { recursive: true })
+    if (next.actions) fs.writeFileSync(next.actions, "")
+    fs.writeFileSync(recordState, JSON.stringify(next))
+  } else if (command === "record stop") {
+    if (take) {
+      const sec = Math.max(1, (Date.now() - take.startedAt) / 1000).toFixed(2)
+      // testsrc, not a solid colour: the black-frame check must see a picture.
+      require("node:child_process").execFileSync(
+        process.env.FAKE_AB_FFMPEG || "ffmpeg",
+        [
+          "-y",
+          "-loglevel",
+          "error",
+          "-f",
+          "lavfi",
+          "-i",
+          `testsrc=duration=${sec}:size=320x200:rate=30`,
+          "-c:v",
+          "libvpx",
+          "-b:v",
+          "200k",
+          take.video,
+        ]
+      )
+      fs.rmSync(recordState, { force: true })
+    }
+  } else if (
+    take &&
+    take.actions &&
+    !/^(wait|get|snapshot|is|eval)\b/.test(command)
+  ) {
+    fs.appendFileSync(
+      take.actions,
+      JSON.stringify({
+        action: argv[0],
+        args: { selector: argv[1] || null },
+        durationMs: 0,
+        ok: true,
+        tsMs: Date.now() - take.startedAt,
+      }) + "\n"
+    )
+  }
+}
 
 setTimeout(
   () => {

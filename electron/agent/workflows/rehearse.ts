@@ -35,6 +35,7 @@ import type { FindingKind } from "./rehearsal"
 import { projectSteps } from "./transcript"
 import { recordRehearsal } from "./scorecard"
 import log from "../../lib/logger"
+import { BUDGET_MS, idleBudget } from "./budget"
 
 /** Shell only, from the factory's side — the two rehearsal tools come in via `extraTools`. */
 const REHEARSAL_TOOL_FILTER = [WORKSPACE_TOOLS.SANDBOX.EXECUTE_COMMAND]
@@ -250,6 +251,11 @@ export async function rehearseFlow(opts: {
   let text = ""
   let steps: unknown[] = []
   let vaultProfile: string | null = null
+  const budget = idleBudget(
+    BUDGET_MS.rehearsalIdle,
+    BUDGET_MS.rehearsal,
+    opts.signal
+  )
   try {
     // A login-gated product cannot be rehearsed logged out, and the sub-agent
     // must not authenticate itself: credentials typed into a command end up
@@ -303,16 +309,33 @@ export async function rehearseFlow(opts: {
     })
     const res = await agent.generate(
       `Rehearse the flow "${flow.label}" starting from ${flow.startUrl}.`,
-      { abortSignal: opts.signal, maxSteps: REHEARSAL_MAX_STEPS }
+      {
+        abortSignal: budget.signal,
+        maxSteps: REHEARSAL_MAX_STEPS,
+        onStepFinish: () => budget.touch(),
+      }
     )
     text = (res.text ?? "").trim()
     steps = (res.steps ?? []) as unknown[]
+    // An aborted `generate` does not throw — it RETURNS, with the steps so far
+    // and no text. Unlabelled, that read as "rehearsal agent returned nothing"
+    // and sent the planner digging through the transcript for a reason that
+    // was never in it.
+    const expired = budget.expired()
+    if (expired && !opts.signal?.aborted) {
+      text =
+        `BLOCKED: rehearsal ran out of time (${expired}) after ${steps.length} step(s), ` +
+        `before it proved a scene. Rehearse a smaller flow, or give guidance that gets it there faster.`
+      log.warn(`[rehearsal] flow ${flow.id}: ${text}`)
+    }
   } catch (err) {
     text = `BLOCKED: rehearsal agent error: ${
       err instanceof Error ? err.message : String(err)
     }`
     log.warn(`[rehearsal] flow ${flow.id} failed: ${text}`)
   }
+
+  budget.done()
 
   // Write-only transcript, same role as `narration.agent.json` — the only
   // record of what the sub-agent actually did, since its conversation lives

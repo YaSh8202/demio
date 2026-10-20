@@ -88,6 +88,27 @@ function toolErrors(steps) {
     .filter((r) => r && r.isError === true).length
 }
 
+/**
+ * Which script-lint rules rejected a write. A rejection reaches the agent as
+ * an error tool result carrying `[rule @index] detail` lines (see
+ * `formatFindings`); a bare error count said a write failed, never why.
+ */
+function toolErrorRules(steps) {
+  const rules = new Set()
+  for (const s of Array.isArray(steps) ? steps : []) {
+    for (const r of s && Array.isArray(s.toolResults) ? s.toolResults : []) {
+      if (!r || r.isError !== true) continue
+      const text = typeof r.result === "string" ? r.result : JSON.stringify(r)
+      for (const m of String(text).matchAll(
+        /\[([a-z][a-z0-9-]+)(?: @\d+)?(?: \(advisory\))?\]/g
+      )) {
+        rules.add(m[1])
+      }
+    }
+  }
+  return [...rules]
+}
+
 function replyKind(text) {
   const t = String(text || "").trim()
   if (!t) return "empty"
@@ -128,7 +149,7 @@ function scoreRehearsal({
   workspace,
 }) {
   const used = Array.isArray(steps) ? steps.length : 0
-  return {
+  return stamp({
     kind: "rehearsal",
     flowId,
     status,
@@ -136,10 +157,11 @@ function scoreRehearsal({
     steps: { used, max: maxSteps, exhausted: used >= maxSteps },
     shell: shellStats(steps, workspace),
     toolErrors: toolErrors(steps),
+    toolErrorRules: toolErrorRules(steps),
     script: scriptStats(scripts),
     dress: dress || { ran: false },
     detail: String(detail || "").slice(0, 300),
-  }
+  })
 }
 
 /**
@@ -175,7 +197,7 @@ function scoreRecovery({
 }) {
   const used = Array.isArray(steps) ? steps.length : 0
   const commands = shellCommands(steps)
-  return {
+  return stamp({
     kind: "recovery",
     sceneId,
     deviation: {
@@ -196,7 +218,7 @@ function scoreRecovery({
     ranScriptedCommand: ranScriptedCommand(commands, script),
     toolErrors: toolErrors(steps),
     detail: String(outcome.detail || "").slice(0, 300),
-  }
+  })
 }
 
 function scoreScene({
@@ -208,7 +230,7 @@ function scoreScene({
   expectedSec,
 }) {
   const list = Array.isArray(checks) ? checks : []
-  return {
+  return stamp({
     kind: "scene",
     sceneId,
     status,
@@ -218,7 +240,83 @@ function scoreScene({
     durationSec: typeof durationSec === "number" ? durationSec : undefined,
     expectedSec:
       typeof expectedSec === "number" ? +expectedSec.toFixed(2) : undefined,
+  })
+}
+
+/**
+ * The pass/fail lines. They used to live inside `summarize`, so only a person
+ * reading the text report ever saw a verdict; stamped onto each entry at write
+ * time instead, a program reading the JSONL sees the same one.
+ */
+const THRESHOLDS = {
+  /** Share of a rehearsal's shell commands that must be `agent-browser`. */
+  minOnTaskShare: 0.9,
+}
+
+/** Why an entry fails — empty when it passes. Works on entries written before `pass` existed. */
+function failReasons(e) {
+  const why = []
+  if (!e || typeof e !== "object") return why
+  if (e.kind === "rehearsal") {
+    if (e.status !== "done") why.push(`status ${e.status}`)
+    if (e.steps && e.steps.exhausted) why.push("step budget exhausted")
+    if (e.shell && e.shell.onTaskShare < THRESHOLDS.minOnTaskShare) {
+      why.push(`shell ${Math.round(e.shell.onTaskShare * 100)}% on-task`)
+    }
+    if (e.shell && e.shell.forbidden > 0) why.push("forbidden shell command")
+    if (e.reply === "empty") why.push("empty reply")
+    if (e.dress && e.dress.ran && e.dress.ok === false)
+      why.push("dress rehearsal failed")
+  } else if (e.kind === "recovery") {
+    if (!e.recovered) why.push("not recovered")
+    if (e.ranScriptedCommand > 0) why.push("ran a scripted command")
+    if (e.shell && e.shell.forbidden > 0) why.push("forbidden shell command")
+    if (e.steps && e.steps.exhausted) why.push("step budget exhausted")
+  } else if (e.kind === "scene") {
+    if (e.status !== "done") why.push(`status ${e.status}`)
+  } else if (e.kind === "run") {
+    // A line written before `outcome` existed was only ever written on success.
+    const outcome = e.outcome || "video"
+    if (outcome !== "video") why.push(`outcome ${outcome}`)
+    if (Array.isArray(e.degraded) && e.degraded.length > 0) {
+      why.push(`degraded: ${e.degraded.map((d) => d.stage).join(", ")}`)
+    }
+    if (e.finalCheck && e.finalCheck.ok === false)
+      why.push("final video failed its checks")
   }
+  return why
+}
+
+function stamp(entry) {
+  const reasons = failReasons(entry)
+  return { ...entry, pass: reasons.length === 0, failReasons: reasons }
+}
+
+/** The run's own last line — written on EVERY ending, not only a composed video. */
+function scoreRun({
+  outcome,
+  scenes,
+  videoPath,
+  degraded,
+  nudges,
+  salvaged,
+  error,
+  finalCheck,
+  plannedScenes,
+}) {
+  return stamp({
+    kind: "run",
+    outcome: outcome || "video",
+    scenes: typeof scenes === "number" ? scenes : 0,
+    plannedScenes:
+      typeof plannedScenes === "number" ? plannedScenes : undefined,
+    videoPath: videoPath || undefined,
+    degraded: Array.isArray(degraded) ? degraded : [],
+    nudges: typeof nudges === "number" ? nudges : 0,
+    salvaged: salvaged === true ? true : undefined,
+    finalCheck: finalCheck || undefined,
+    error: error ? String(error).slice(0, 500) : undefined,
+  })
 }
 
 /** One screen of text from a scorecard's entries — what a person reads. */
@@ -228,12 +326,7 @@ function summarize(entries) {
   const flag = (bad) => (bad ? "✗" : "✓")
   for (const e of list) {
     if (e.kind === "rehearsal") {
-      const bad =
-        e.status !== "done" ||
-        e.steps.exhausted ||
-        e.shell.onTaskShare < 0.9 ||
-        e.shell.forbidden > 0 ||
-        e.reply === "empty"
+      const bad = failReasons(e).length > 0
       lines.push(
         `${flag(bad)} rehearsal ${e.flowId}: ${e.status}, reply ${e.reply}, ` +
           `${e.steps.used}/${e.steps.max} steps${e.steps.exhausted ? " (EXHAUSTED)" : ""}, ` +
@@ -246,11 +339,7 @@ function summarize(entries) {
       )
       for (const s of e.shell.samples || []) lines.push(`      $ ${s}`)
     } else if (e.kind === "recovery") {
-      const bad =
-        !e.recovered ||
-        e.ranScriptedCommand > 0 ||
-        e.shell.forbidden > 0 ||
-        e.steps.exhausted
+      const bad = failReasons(e).length > 0
       lines.push(
         `${flag(bad)} recovery ${e.sceneId} step ${e.deviation.index} (${e.deviation.kind}): ` +
           `${e.recovered ? "recovered" : "NOT recovered"}${e.amended ? `, amended in ${e.amendAttempts} attempt(s)` : ""}, ` +
@@ -265,8 +354,12 @@ function summarize(entries) {
           `${e.failedChecks.length ? `, failed: ${e.failedChecks.join(", ")}` : ""}`
       )
     } else if (e.kind === "run") {
+      const why = failReasons(e)
       lines.push(
-        `${flag(false)} run: ${e.scenes} scene(s) composed → ${e.videoPath}`
+        `${flag(why.length > 0)} run: ${e.outcome || "video"}, ${e.scenes} scene(s)` +
+          `${e.videoPath ? ` → ${e.videoPath}` : ""}` +
+          `${why.length ? ` — ${why.join("; ")}` : ""}` +
+          `${e.error ? ` — ${e.error}` : ""}`
       )
     }
   }
@@ -284,5 +377,9 @@ module.exports = {
   scoreRehearsal,
   scoreRecovery,
   scoreScene,
+  scoreRun,
+  toolErrorRules,
+  failReasons,
+  THRESHOLDS,
   summarize,
 }

@@ -27,6 +27,7 @@ import { recoverFromDeviation } from "./recovery"
 import { verifyScene } from "./verify"
 import { projectSteps } from "./transcript"
 import { recordScene } from "./scorecard"
+import { sceneFaulted } from "./fault"
 import type { Scene, SceneResult, VerifyReport } from "./schemas"
 import type { SceneScript } from "./script-schema"
 import log from "../../lib/logger"
@@ -150,6 +151,11 @@ type RecordSceneOpts = {
   resumedRetry?: boolean
   signal: AbortSignal
   maxAttempts?: number
+  /**
+   * Skip the off-camera recovery agent. For the floor scene: it exists for
+   * the run where the model already failed, so it must not need one.
+   */
+  noRecovery?: boolean
   onProgress?: (u: {
     sceneId: string
     attempt: number
@@ -209,6 +215,24 @@ async function recordSceneInner(
   // arrives already proven by a cold replay (see `recoverFromDeviation`), so
   // there is nothing to re-validate here.
   let activeScript = scene.script
+
+  const recover: typeof recoverFromDeviation = opts.noRecovery
+    ? async () => ({
+        recovered: false,
+        detail: "recovery is disabled for this scene",
+        steps: [],
+      })
+    : recoverFromDeviation
+
+  // Test seam (./fault): the scene fails its whole budget without touching
+  // the browser or a model, so the drop rung can be proven offline.
+  if (sceneFaulted(scene.id)) {
+    return {
+      status: "failed",
+      lastReport: infraFailureReport(`injected fault: scene:${scene.id}:fail`),
+      attempts: maxAttempts,
+    }
+  }
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     if (signal.aborted) break
@@ -324,7 +348,7 @@ async function recordSceneInner(
           phase: "verifying",
           detail: `recovering: ${deviation.detail}`,
         })
-        const recovery = await recoverFromDeviation({
+        const recovery = await recover({
           workspace,
           modelId,
           script,
@@ -439,7 +463,7 @@ async function recordSceneInner(
         phase: "verifying",
         detail: `recovering: ${outcome.deviation.detail}`,
       })
-      const recovery = await recoverFromDeviation({
+      const recovery = await recover({
         workspace,
         modelId,
         script,
@@ -561,7 +585,7 @@ async function recordSceneInner(
       phase: "verifying",
       detail: `recovering: ${deviation.detail}`,
     })
-    const recovery = await recoverFromDeviation({
+    const recovery = await recover({
       workspace,
       modelId,
       script,

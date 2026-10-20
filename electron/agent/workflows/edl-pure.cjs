@@ -415,6 +415,39 @@ function buildSilentAudioArgs(retimedPath, outputPath) {
   ]
 }
 
+/** A raw take re-encoded to the exact stream layout `buildSlotArgs` +
+ * `buildSilentAudioArgs` produce — for a scene whose retiming failed, so it
+ * can still be stream-copied into the final concat beside the others. */
+function buildRawFallbackArgs(sourcePath, outputPath) {
+  return [
+    "-y",
+    "-i",
+    sourcePath,
+    "-f",
+    "lavfi",
+    "-i",
+    "anullsrc=channel_layout=stereo:sample_rate=44100",
+    "-shortest",
+    "-map",
+    "0:v:0",
+    "-map",
+    "1:a:0",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-r",
+    "30",
+    "-c:a",
+    "aac",
+    "-ar",
+    "44100",
+    "-ac",
+    "2",
+    outputPath,
+  ]
+}
+
 module.exports = {
   EDL_DEFAULTS,
   parseActionEntries,
@@ -426,4 +459,5 @@ module.exports = {
   buildConcatListText,
   buildMixArgs,
   buildSilentAudioArgs,
+  buildRawFallbackArgs,
 }

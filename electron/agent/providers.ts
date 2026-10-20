@@ -11,8 +11,11 @@ import { createOpenAI } from "@ai-sdk/openai"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createAmazonBedrock } from "@ai-sdk/amazon-bedrock"
 import { getDecryptedKey, getProviderKeyMetadata } from "../store/provider-keys"
+import { createRequire } from "node:module"
 import { parseModelId } from "./types"
 import log from "../lib/logger"
+
+const lazyRequire = createRequire(import.meta.url)
 
 // ── Instrumented fetch ──────────────────────────────────────────────────────
 //
@@ -27,6 +30,26 @@ import log from "../lib/logger"
 // aborts; keep them.
 
 let fetchSeq = 0
+
+// A provider connection can stall without closing: no headers, or a body that
+// stops mid-stream. Nothing above this layer notices — the agent loop awaits
+// the request, the turn never ends, no `agent_end` fires, and every guard
+// keyed on a turn ending (the stall watchdog included) waits with it. A smoke
+// run sat 19 minutes on one such request. Failing it here turns a hang into an
+// error the SDK's own retries (`maxRetries`) already know what to do with.
+// Generous on purpose: a thinking model can be quiet for a long time before
+// its first byte.
+const FIRST_BYTE_TIMEOUT_MS =
+  Number(process.env.DEMIO_LLM_FIRST_BYTE_TIMEOUT_MS) || 180_000
+const STREAM_IDLE_TIMEOUT_MS =
+  Number(process.env.DEMIO_LLM_STREAM_IDLE_TIMEOUT_MS) || 120_000
+
+class ModelRequestStalled extends Error {
+  constructor(provider: string, phase: string, ms: number) {
+    super(`${provider} model request stalled: ${phase} for ${ms / 1000}s`)
+    this.name = "ModelRequestStalled"
+  }
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`
@@ -50,7 +73,7 @@ function requestBodyBytes(body: FetchBody): number | null {
   return null
 }
 
-function instrumentedFetch(provider: string): typeof globalThis.fetch {
+export function instrumentedFetch(provider: string): typeof globalThis.fetch {
   return async (input, init) => {
     const id = ++fetchSeq
     const url =
@@ -68,10 +91,26 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
       }`
     )
 
+    // Our own abort, chained to the caller's — so a stall can end the request.
+    const stall = new AbortController()
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, stall.signal])
+      : stall.signal
+    let stalled: ModelRequestStalled | null = null
+    const arm = (phase: string, ms: number) =>
+      setTimeout(() => {
+        stalled = new ModelRequestStalled(provider, phase, ms)
+        log.error(`[llm-fetch] #${id} ${stalled.message} — aborting`)
+        stall.abort(stalled)
+      }, ms)
+
+    let timer = arm("no response", FIRST_BYTE_TIMEOUT_MS)
     let response: Response
     try {
-      response = await fetch(input, init)
+      response = await fetch(input, { ...init, signal })
     } catch (err) {
+      clearTimeout(timer)
+      if (stalled) throw stalled
       log.error(
         `[llm-fetch] #${id} ${provider} connect failed after ${
           Date.now() - startedAt
@@ -86,7 +125,12 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
       `[llm-fetch] #${id} ${provider} ← ${response.status} ttfb=${ttfb}ms`
     )
 
-    if (!response.body) return response
+    if (!response.body) {
+      clearTimeout(timer)
+      return response
+    }
+    clearTimeout(timer)
+    timer = arm("no data on an open stream", STREAM_IDLE_TIMEOUT_MS)
 
     // Re-emit the body through a counting wrapper so we learn how far a stream
     // got before it died. A mid-flight reset shows up here as a rejected
@@ -98,6 +142,7 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
       async pull(controller) {
         try {
           const { value, done } = await upstream.read()
+          clearTimeout(timer)
           if (done) {
             log.info(
               `[llm-fetch] #${id} ${provider} body complete: ${formatBytes(
@@ -108,18 +153,21 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
             return
           }
           bodyBytes += value.byteLength
+          timer = arm("no data on an open stream", STREAM_IDLE_TIMEOUT_MS)
           controller.enqueue(value)
         } catch (err) {
+          clearTimeout(timer)
           log.error(
             `[llm-fetch] #${id} ${provider} body ABORTED after ${formatBytes(
               bodyBytes
             )} / ${Date.now() - startedAt}ms:`,
             err
           )
-          controller.error(err)
+          controller.error(stalled ?? err)
         }
       },
       cancel(reason) {
+        clearTimeout(timer)
         return upstream.cancel(reason)
       },
     })
@@ -135,8 +183,10 @@ function instrumentedFetch(provider: string): typeof globalThis.fetch {
 /**
  * Get the env var fallback for a provider.
  */
-function getEnvKey(provider: string): string | undefined {
+export function getEnvKey(provider: string): string | undefined {
   switch (provider) {
+    case "elevenlabs":
+      return process.env.ELEVENLABS_API_KEY
     case "anthropic":
       return process.env.ANTHROPIC_API_KEY
     case "openai":
@@ -157,6 +207,16 @@ function getEnvKey(provider: string): string | undefined {
  */
 export function getModel(fullModelId: string) {
   const { provider, modelId } = parseModelId(fullModelId)
+
+  // Harness tests only (electron/agent/mock-model.ts): a scripted model, so a
+  // stall can be produced on demand. Loaded lazily and behind an env var — it
+  // pulls in `ai/test`, which has no business in the app.
+  if (provider === "mock" && process.env.DEMIO_MOCK_MODEL) {
+    const { mockModel } = lazyRequire(
+      "./mock-model"
+    ) as typeof import("./mock-model")
+    return mockModel(modelId)
+  }
 
   const storedKey = getDecryptedKey(provider)
   const envKey = getEnvKey(provider)

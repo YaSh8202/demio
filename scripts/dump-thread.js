@@ -26,7 +26,9 @@ const os = require("node:os")
 const path = require("node:path")
 const { createClient } = require("@libsql/client")
 
-const ROOT = path.join(os.homedir(), ".demio")
+// DEMIO_HOME: the same override the app honours (store/paths.ts) — a smoke
+// run's threads live under ~/.demio-smoke, not here.
+const ROOT = process.env.DEMIO_HOME || path.join(os.homedir(), ".demio")
 const args = process.argv.slice(2)
 const full = args.includes("--full")
 const asJson = args.includes("--json")

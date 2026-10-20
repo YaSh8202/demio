@@ -1,0 +1,7 @@
+{
+  "id": "static-one-scene",
+  "source": "test-prompts.md 0.1",
+  "domain": "example.com",
+  "prompt": "A 10-second demo: open the homepage and scroll to the bottom. One scene, no narration.",
+  "expect": { "minScenes": 1, "maxDegraded": 0, "minDurationSec": 8 }
+}
