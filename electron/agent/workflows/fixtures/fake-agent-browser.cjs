@@ -108,7 +108,7 @@ if (recordState && exit === 0) {
     fs.mkdirSync(path.dirname(next.video), { recursive: true })
     if (next.actions) fs.writeFileSync(next.actions, "")
     fs.writeFileSync(recordState, JSON.stringify(next))
-  } else if (command === "record stop") {
+  } else if (/^record stop\b/.test(command)) {
     if (take) {
       const sec = Math.max(1, (Date.now() - take.startedAt) / 1000).toFixed(2)
       // testsrc, not a solid colour: the black-frame check must see a picture.

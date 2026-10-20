@@ -167,8 +167,9 @@ fail() { echo "ERROR: $*" >&2; exit 1; }
 
 # Trap EXIT so a mid-scene failure still tears down the recording task in the
 # daemon. Without this, set -e leaves the daemon in 'recording active' state
-# and re-running the scene errors with "Recording already active".
-trap 'agent-browser record stop 2>/dev/null || true' EXIT
+# and re-running the scene errors with "Recording already active". It also
+# drops the human input mode that record start turned on.
+trap 'agent-browser record stop --input-mode instant 2>/dev/null || true' EXIT
 
 agent-browser set viewport 1920 1080
 
@@ -181,6 +182,7 @@ agent-browser wait --stable 800 --timeout 5000 || fail "start page never settled
 
 agent-browser record start "$WORKSPACE/scenes/scene-<NN>.webm" \
   --log-actions "$WORKSPACE/scenes/scene-<NN>.actions.jsonl" \
+  --cursor --input-mode human \
   || fail "record start failed"
 
 # 2. Snapshot AFTER record start so the @eN refs you reference below are
@@ -192,7 +194,7 @@ agent-browser snapshot -i > "$WORKSPACE/scenes/scene-<NN>.snapshot.txt" \
 #    click that drives the visible navigation from Start URL to End URL.
 #    Skip this block ONLY for scene 01's cold-open or stay-and-explore scenes.
 echo "Step: transition — click '<descriptive nav target>'"
-agent-browser find role link --name "<Components>" --exact click \
+agent-browser find role link click --name "<Components>" --exact \
   || fail "transition click failed"
 
 # 4. Verify the transition landed where the script promised. Same
@@ -222,14 +224,14 @@ Key rules for the script:
 - **Always verify the transition with \`wait --url '<glob>'\`** immediately after the transition click. If the click hit the wrong link, the recording is now on the wrong page — fail loudly so you fix the locator instead of producing a misleading video.
 - **Re-opening a URL the viewer already saw earlier is a smell** — usually it means the earlier scene was missing the transition. Re-read \`script.md\` before writing such a scene; the right fix is almost always to add the transition to the earlier scene, not to re-open here.
 - \`set -euo pipefail\` — any failing command aborts the script immediately
-- \`trap 'agent-browser record stop 2>/dev/null || true' EXIT\` — required so failures don't leak the recording task. Always include this on the line below \`fail()\`.
+- \`trap 'agent-browser record stop --input-mode instant 2>/dev/null || true' EXIT\` — required so failures don't leak the recording task, and so later commands stop moving at human pace. Always include this on the line below \`fail()\`.
 - **Locator priority (highest reliability first):**
   1. **Snapshot refs**: take \`agent-browser snapshot -i\` immediately after \`record start\`, then \`click @eN\` against the ref shown in the tree. Most precise selector — never misfires on responsive duplicates or hydration ghosts.
   2. **Form submits**: for any button inside a \`<form>\` (login, sign-up, search), prefer \`agent-browser click 'form button[type="submit"]'\`. Dodges OAuth buttons (Google, GitHub), hydration-duplicate buttons, and shadcn responsive spans.
-  3. **Other clickable controls** → \`find role button --name "Save" --exact click\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
+  3. **Other clickable controls** → \`find role button click --name "Save" --exact\` (also for \`link\`, \`menuitem\`, \`tab\`, \`checkbox\`, \`radio\`).
   4. **Form inputs** → \`find label "Email" fill "..."\` or \`find placeholder "Search..."\`.
   5. **Non-interactive text waits** → \`find text "Loaded" --exact\`.
-- **NEVER** write \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button --name "Login" --exact click\` or a snapshot ref instead.
+- **NEVER** write \`agent-browser find text "Login" click\` for a clickable control. Substring text matches frequently hit the wrong leaf (e.g. an outer \`<a>Login</a>\` containing a \`<button>Login</button>\`, or a heading "Login to your account"). Use \`find role button click --name "Login" --exact\` or a snapshot ref instead.
 - **OAuth detection**: after every click that should keep you on the same origin, follow with \`agent-browser wait --url '<expected-pattern>' --timeout 5000 || fail "unexpected redirect"\`. If the URL becomes \`accounts.google.com\` / \`github.com/login\` / similar, the click hit an OAuth button — re-open the original URL and switch to \`click 'form button[type="submit"]'\`.
 - **Before drafting each scene script**, run \`agent-browser snapshot -i\` against the scene URL and read it. Pick selectors (and \`@eN\` refs for ambiguous targets) based on the roles you see. Never invent a \`find role …\` selector from memory.
 - **DO NOT retry blindly with another role or \`find nth N\`** when a locator fails. If \`find role <X>\` returns "Ambiguous" or "Element not found", re-snapshot and use \`click @eN\` from the snapshot. \`find nth\` with a positional guess is the leading cause of clicking the wrong button (most often the OAuth button next to the form submit).
@@ -276,7 +278,8 @@ Never regenerate the entire video for a single-scene change.
 - Keep chat messages short. Tool calls show your work — don't duplicate output in prose.
 - If a step fails, report the error clearly and propose the next action. Don't silently retry.
 - The \`--log-actions\` JSONL written next to each scene captures action timestamps, target coordinates, and frame indices — that's what voiceover timing aligns to.${voiceRulesLine}
-- **Recording defaults are natural-looking** — \`record start\` automatically draws a visible cursor that animates to each click/hover/fill target, types text one character at a time with jitter, and captures at 30 FPS. Don't pass \`--auto-cursor\`, \`--type-delay\`, \`--mouse-duration\`, etc. unless you specifically need to override; just \`record start <path> --log-actions <path>\` is enough.
+- **Natural-looking recordings need two flags on \`record start\`**: \`--cursor\` draws the pointer into the video, and \`--input-mode human\` makes every later command in the session glide the pointer to its click/hover/fill target, type one key at a time, and pause briefly after clicks. Capture is 30 FPS. Always use \`record start <path> --log-actions <path> --cursor --input-mode human\`; there are no other pacing flags.
+- **\`find\` argument order**: the action comes right after the role or text, then the flags — \`find role button click --name "Save" --exact\`. Flags before the action (\`find role button --name "Save" click\`) fail with "Unknown action".
 - NEVER invent agent-browser flags. Consult the skill reference below.
 - Budget: up to 50 steps per turn. Script approval and \`present_files\` end a turn.
 - **Snapshot before scripting**: every scene script in phase 4 must be preceded by a fresh \`agent-browser snapshot -i\` of the scene URL so you can pick selectors based on actual roles. Never invent a \`find role …\` selector from memory.
@@ -559,7 +562,7 @@ Files live in \`${workspace}\`; \`$WORKSPACE\` is set in the shell environment.
 
 # Locators
 
-Prefer a fresh \`agent-browser snapshot -i\` then \`click @eN\`, or \`find role button --name "..." --exact\`. Never \`find text\` for a clickable control, and never \`find nth\` with a positional guess.
+Prefer a fresh \`agent-browser snapshot -i\` then \`click @eN\`, or \`find role button click --name "..." --exact\`. Never \`find text\` for a clickable control, and never \`find nth\` with a positional guess.
 
 # Reply
 
@@ -655,8 +658,8 @@ Scenes from this flow are named \`${flow.id}.01\`, \`${flow.id}.02\`, … in ord
 The durable form of a resolved element is:
 
 \`\`\`
-find role button --name "Create board" --exact click
-find role textbox --name "Board title" fill "..."
+find role button click --name "Create board" --exact
+find role textbox fill "..." --name "Board title"
 \`\`\`
 
 Never \`find text\` for a clickable control. Never \`find nth\` with a positional guess. If two elements genuinely share a role and name, record a \`selector\` finding saying so and what you used instead.
@@ -696,7 +699,7 @@ You will actually click Create. That means this flow runs **twice** — once now
 Any value you type that names something the product will create goes in as a placeholder:
 
 \`\`\`json
-{ "cmd": "find role textbox --name \\"Board title\\" fill \\"{{boardName}}\\"",
+{ "cmd": "find role textbox fill \\"{{boardName}}\\" --name \\"Board title\\"",
   "assert": "--text \\"{{boardName}}\\"" }
 \`\`\`
 

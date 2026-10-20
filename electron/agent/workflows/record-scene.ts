@@ -14,9 +14,8 @@
 // - `record restart <path> [flags]` accepts `--log-actions <path>`
 //   (confirmed via `agent-browser record --help`). `recordingBracket` in
 //   `replay-pure.cjs` builds the exact `open` / `wait` / `record restart`
-//   commands issued below, and its header documents why `record start` is
-//   never used: it re-navigates inside a fresh context, putting the app's
-//   cold boot on camera.
+//   commands issued below, and its header documents why every take opens
+//   with `record restart` rather than `record start`.
 
 import path from "node:path"
 import { promises as fs } from "node:fs"
@@ -67,6 +66,13 @@ const pure = require("./replay-pure.cjs") as {
  * short-circuiting the budget would deny a working retry to those.
  */
 const DEFAULT_MAX_ATTEMPTS = 3
+
+/**
+ * The bracket's `--input-mode human` is a session default, so stopping the
+ * take puts it back: off-camera recovery and the next scene's positioning
+ * should not glide, type key by key, or pause after clicks.
+ */
+const RECORD_STOP = "record stop --input-mode instant"
 
 /**
  * A scene id becomes a path segment (`scenes/<id>.webm`, `.actions.jsonl`,
@@ -314,7 +320,7 @@ async function recordSceneInner(
       const r = await execAgentBrowser([cmd], { timeout: 60_000 })
       if (!r.ok) {
         // A stale recording session is the known failure mode — clear it.
-        await execAgentBrowser(["record stop"], { timeout: 15_000 })
+        await execAgentBrowser([RECORD_STOP], { timeout: 15_000 })
         failedIndex = i
         failedError = r.error ?? "unknown error"
         previousFailure = `failed before recording — \`${cmd}\` failed: ${failedError}`
@@ -417,7 +423,7 @@ async function recordSceneInner(
       // Guarded so a throw from the stop itself cannot mask the original
       // error on the way out of the `finally`.
       try {
-        const stop = await execAgentBrowser(["record stop"], {
+        const stop = await execAgentBrowser([RECORD_STOP], {
           timeout: 30_000,
         })
         if (!stop.ok) {

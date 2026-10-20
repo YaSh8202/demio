@@ -19,7 +19,7 @@ const PROMPTS = fs.readFileSync(
 test("B1: scene script template includes EXIT trap for record stop", () => {
   assert.match(
     PROMPTS,
-    /trap 'agent-browser record stop 2>\/dev\/null \|\| true' EXIT/,
+    /trap 'agent-browser record stop --input-mode instant 2>\/dev\/null \|\| true' EXIT/,
   )
 })
 
