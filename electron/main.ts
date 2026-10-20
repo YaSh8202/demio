@@ -86,7 +86,16 @@ function createWindow() {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: DEMIO_FILE_SCHEME,
-    privileges: { stream: true, supportFetchAPI: true, secure: true },
+    // `standard` gives the scheme a real origin (demio-file://media). Without
+    // it every response gets a fresh opaque origin, so Chromium's media loader
+    // rejects the second ranged response for a <video> (seek, or resuming
+    // after preload) as PIPELINE_ERROR_READ "data source error".
+    privileges: {
+      standard: true,
+      stream: true,
+      supportFetchAPI: true,
+      secure: true,
+    },
   },
 ])
 
