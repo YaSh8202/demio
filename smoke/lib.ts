@@ -99,8 +99,6 @@ export interface RunState {
   startedAt: string
   updatedAt: string
   elapsedSec: number
-  /** Bumped on every write, so `watch` can tell a fresh "waiting" from the one it already returned. */
-  seq: number
   /** Open gates, oldest first. Non-empty exactly when phase is "waiting". */
   gates: Gate[]
   gateLog: GateLogEntry[]

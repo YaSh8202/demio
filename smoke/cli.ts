@@ -338,19 +338,24 @@ switch (command) {
     const runId = resolveRunId(rest[0])
     const maxWaitMs = (Number(flags["max-wait"]) || 540) * 1000
     const deadline = Date.now() + maxWaitMs
-    // A "waiting" state this caller has already been shown is not news: only
-    // return on it again once the runner has moved (seq) past it.
-    const seenFile = path.join(runDir(runId), "watch.seen")
-    const seen = Number(readJson<number>(seenFile) ?? -1)
+    // An answered gate is not news, though the runner may not have taken the
+    // answer yet (`answer` drops <id>.json; the runner renames it .taken).
+    const inbox = runFiles(runDir(runId)).inbox
+    const answered = (toolCallId: string) =>
+      fs.existsSync(path.join(inbox, `${toolCallId}.json`)) ||
+      fs.existsSync(path.join(inbox, `${toolCallId}.json.taken`))
     for (;;) {
       const raw = readState(runId)
       if (!raw) fail(`no such run: ${runId}`)
-      const state = withLiveness(raw)
+      const live = withLiveness(raw)
+      const state = {
+        ...live,
+        gates: live.gates.filter((g) => !answered(g.toolCallId)),
+      }
       const isNews =
         TERMINAL_PHASES.has(state.phase) ||
-        (ATTENTION_PHASES.has(state.phase) && state.seq > seen)
+        (ATTENTION_PHASES.has(state.phase) && state.gates.length > 0)
       if (isNews) {
-        writeJsonAtomic(seenFile, state.seq)
         out(
           view(state),
           state.phase === "done" || state.phase === "waiting" ? 0 : 1

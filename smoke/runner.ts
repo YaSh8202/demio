@@ -78,7 +78,6 @@ const state: RunState = {
   startedAt: options.startedAt,
   updatedAt: options.startedAt,
   elapsedSec: 0,
-  seq: 0,
   gates: [],
   gateLog: [],
   activeTools: [],
@@ -90,7 +89,6 @@ const state: RunState = {
 
 function save(patch: Partial<RunState> = {}) {
   Object.assign(state, patch)
-  state.seq += 1
   state.updatedAt = new Date().toISOString()
   state.elapsedSec = Math.round(
     (Date.now() - Date.parse(state.startedAt)) / 1000
