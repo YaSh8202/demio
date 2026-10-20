@@ -239,23 +239,19 @@ function quoteArg(value) {
  * Shape: `[open <startUrl>]?` → `[wait <first precondition>]?` → `record
  * restart`.
  *
- * **`record start` is deliberately not used, for any scene.** It looks like
- * the right primitive and is not: `handle_recording_start`
- * (agent-browser `native/actions.rs:4528`) reads the current URL, creates a
- * *fresh browser context*, opens `about:blank`, copies cookies across,
- * `Page.navigate`s to that URL, sleeps 1000ms, and only then attaches frame
- * capture. So the preceding `open` is thrown away and the app's entire cold
- * boot — navigation, bundle, hydration, first paint — lands on camera. That
- * is exactly the dead air this architecture exists to remove: on the workik
- * take it was 4.00s of black in a 7.10s scene, which is both an unwatchable
- * demo and a `black-frames` verification failure.
+ * **Every take opens with `record restart`, not `record start`.** Both now
+ * attach capture to the active page as-is, with no new context and no
+ * navigation. `restart` also stops a take a failed attempt left running
+ * (where `start` errors "Recording already active"), and with no take running
+ * it simply starts one, so it is safe as the FIRST bracket of a run. Before
+ * agent-browser v0.37, `record start` created a fresh browser context and
+ * re-navigated, putting the app's cold boot on camera: 4.00s of black in a
+ * 7.10s scene on the workik take.
  *
- * `handle_recording_restart` (`native/actions.rs:4719`) creates no context
- * and never navigates — it re-attaches capture to
- * `browser.active_session_id()`. When no recording is active it falls
- * straight through to `recording_start_with_config`
- * (`native/recording.rs:157`), so it is safe to use as the FIRST bracket of a
- * run, not only as a continuation.
+ * `--cursor --input-mode human` makes the take look like a person drove it:
+ * the pointer is drawn into the video, and the input mode (a session default
+ * from here on) glides the pointer to each target, types key by key and
+ * pauses after clicks.
  *
  * This reverses the design spec's "independent = fresh browser context"
  * (decision 2). What that reset actually bought is already delivered by the
@@ -285,9 +281,8 @@ function quoteArg(value) {
  * bracket and fails identically — three attempts, no artifacts, no path to
  * success.
  *
- * NOTE: `record restart <path> <url>` parses the URL and then ignores it —
- * the handler never reads it. Never use restart to navigate; that is what the
- * `open` is for.
+ * NOTE: never pass `record restart` a URL. It would navigate the camera-on
+ * page itself; navigation is what the `open` above it is for.
  */
 /**
  * Everything a take needs BEFORE the camera starts: navigate to the start URL
@@ -320,7 +315,7 @@ function recordingBracket({ script, videoPath, actionsPath, isRetry }) {
     isRetry,
   })
   commands.push(
-    `record restart ${quoteArg(videoPath)} --log-actions ${quoteArg(actionsPath)}`
+    `record restart ${quoteArg(videoPath)} --log-actions ${quoteArg(actionsPath)} --cursor --input-mode human`
   )
   return { commands, resetsPage: reopens, preRollIndex }
 }

@@ -128,8 +128,9 @@ export function VideoPlayer({
           src={source.url}
           preload="auto"
           playsInline
-          // Deliberately no crossOrigin: on this opaque-origin custom scheme
-          // it forces a CORS check the protocol handler cannot satisfy.
+          // Deliberately no crossOrigin: demio-file://media is cross-origin to
+          // the renderer, and it would force a CORS check the protocol
+          // handler cannot satisfy.
           onClick={togglePlay}
           className="absolute inset-0 size-full object-contain"
         />

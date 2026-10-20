@@ -284,7 +284,7 @@ test("recordingBracket: the first waitBefore is pre-rolled for a chained scene t
   assert.equal(b.resetsPage, false)
   assert.deepEqual(b.commands, [
     'wait --text "Session"',
-    "record restart '/w/s.webm' --log-actions '/w/s.jsonl'",
+    "record restart '/w/s.webm' --log-actions '/w/s.jsonl' --cursor --input-mode human",
   ])
 })
 

@@ -36,24 +36,32 @@ installed version.
 
 ## Recording demo videos
 
-Recording is **natural-looking by default**. `agent-browser record start <path>` automatically:
-- Injects a visible cursor that animates to each click/hover/fill target.
-- Types text one character at a time with realistic jitter.
-- Captures at 30 FPS via CDP screenshots piped to ffmpeg.
+Recording looks natural when `record start` gets two flags:
+`agent-browser record start <path> --cursor --input-mode human`
+- `--cursor` draws an animated pointer into the video.
+- `--input-mode human` is a global flag that sticks for the rest of the
+  session: every later command glides the pointer to its click/hover/fill
+  target, types text one key at a time, and pauses briefly after clicks.
+  End the take with `record stop --input-mode instant` to turn it back off.
+- Capture is 30 FPS from Chrome's screencast, paced to wall-clock time.
+- `record start` records the page you are already on; it does not reload it.
 
 Useful flags on `record start` / `record restart`:
 - `--log-actions <path>` — append a JSONL line per user action with shape
-  `{action, args, target:{x,y}, tsMs, frameIdx, durationMs, ok}`. Use this for
-  voiceover/annotation alignment, and so the demio agent surfaces failed
-  actions back to chat.
-- `--robotic` — opt out of natural mode (instant cursor, no typing jitter).
-- `--auto-cursor` / `--no-auto-cursor` — toggle the cursor independently.
+  `{action, args, tsMs, durationMs, frameIdx, ok, target?:{x,y}}` (`target`
+  appears when the pointer moved; a failed action has `ok:false` and `error`).
+  Use this for voiceover/annotation alignment, and so the demio agent surfaces
+  failed actions back to chat.
+- `--fps <n>` — capture rate, 1-60 (default 30).
 
 Disambiguating element lookups:
-- `find text` now refuses to silently pick when multiple leaves match. Use
-  `find role button --name "Save" --exact click` for buttons, `find role link
-  --name "Login" --exact click` for links. Pass `--allow-ambiguous` only when
+- `find role` and `find text` refuse to silently pick when several elements
+  match; the error starts with "Ambiguous" and lists the candidates. Use
+  `find role button click --name "Save" --exact` for buttons, `find role link
+  click --name "Login" --exact` for links. Pass `--allow-ambiguous` only when
   you genuinely want first-match-wins behaviour.
+- The action (`click`, `fill`, ...) comes right after the role or text, before
+  any flags.
 
 There is **no `AGENT_BROWSER_DEMO_MODE` env var** and **no `--demo-mode` flag** —
 earlier docs described one; ignore. Locator selection guidance lives in the
